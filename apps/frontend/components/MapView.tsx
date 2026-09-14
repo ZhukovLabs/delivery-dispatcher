@@ -22,6 +22,19 @@ const pin = (text: string, color: string) =>
     html: `<span class="${text.length > 2 ? "wide" : ""}" style="background:${color}"><i>${text}</i></span>`,
   });
 
+const courierPin = (color: string) =>
+  L.divIcon({
+    className: "pin courier-pin",
+    iconSize: [26, 26],
+    iconAnchor: [13, 26],
+    html: `<span style="background:${color};border:2px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.45)"><i>🛵</i></span>`,
+  });
+
+const posAge = (ts: number) => {
+  const m = Math.max(0, Math.round((Date.now() - ts * 1000) / 60000));
+  return m === 0 ? "только что" : `${m} мин назад`;
+};
+
 function fitNow(map: L.Map, s: AppState) {
   const d = s.depot;
   if (!s.orders.length && !d) return;
@@ -145,6 +158,20 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
           </Marker>
         );
       })}
+      {state.couriers.filter(c => c.pos).map(c => (
+        <Marker
+          key={`cr-${c.id}`}
+          position={[c.pos!.lat, c.pos!.lng]}
+          icon={courierPin(c.color || "#e8482b")}
+          zIndexOffset={900}
+        >
+          <Popup autoPan={false}>
+            <b>{c.name}</b><br />
+            📍 {posAge(c.pos!.ts)}{c.pos!.live ? " · live" : ""}
+            {c.pos!.acc ? ` · ±${Math.round(c.pos!.acc)} м` : ""}
+          </Popup>
+        </Marker>
+      ))}
       {plan && d && plan.routes.flatMap((r, ri) =>
         (r.trips || []).map((tr, ti) => {
           const depotPt: [number, number] = [d.lat, d.lng];

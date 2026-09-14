@@ -85,6 +85,11 @@ STATE = {
     "plan": None,
     "advice_mode": None,  # ручной выбор «ждать/не ждать» (now|split) до смены обстановки
     "color_seq": 0,      # монотонный счётчик: цвета не перемешиваются при удалениях
+    # Telegram: кто писал боту (для привязки), последние локации курьеров, курсор getUpdates
+    "tg_seen": {},       # chat_id -> {"chat_id", "login", "ts"}
+    "tg_pos": {},        # chat_id -> {"lat", "lng", "ts", "live"}
+    "tg_offset": 0,
+    "tg_bot": "",        # @username бота (для подсказок в интерфейсе)
 }
 
 ROAD_FACTOR = 1.4  # запасной расчёт (если OSRM недоступен): прямая -> дорога
@@ -137,6 +142,7 @@ _DB_MIGRATIONS = [
     ("orders", "deadline", "ALTER TABLE orders ADD COLUMN deadline TEXT DEFAULT ''"),
     ("history", "deadline", "ALTER TABLE history ADD COLUMN deadline TEXT DEFAULT ''"),
     ("couriers", "tg_chat_id", "ALTER TABLE couriers ADD COLUMN tg_chat_id TEXT DEFAULT ''"),
+    ("couriers", "tg_login", "ALTER TABLE couriers ADD COLUMN tg_login TEXT DEFAULT ''"),
     ("orders", "status", "ALTER TABLE orders ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'"),
     ("orders", "assigned", "ALTER TABLE orders ADD COLUMN assigned TEXT NOT NULL DEFAULT ''"),
     ("orders", "out_at", "ALTER TABLE orders ADD COLUMN out_at TEXT NOT NULL DEFAULT ''"),
@@ -168,10 +174,11 @@ def _persist_couriers():
     with _db_lock, _db() as c:
         c.execute("DELETE FROM couriers")
         c.executemany(
-            "INSERT INTO couriers(id, name, status, color, back_min, tg_chat_id) "
-            "VALUES(?, ?, ?, ?, ?, ?)",
+            "INSERT INTO couriers(id, name, status, color, back_min, tg_chat_id, tg_login) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
             [(x["id"], x["name"], x["status"], x.get("color") or "",
-              int(x.get("back_min", 15)), x.get("tg_chat_id") or "")
+              int(x.get("back_min", 15)), x.get("tg_chat_id") or "",
+              x.get("tg_login") or "")
              for x in STATE["couriers"]])
 
 
@@ -239,7 +246,8 @@ def load_state():
         c.executescript(_DB_SCHEMA)
         meta = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM meta")}
         couriers = [dict(r) for r in c.execute(
-            "SELECT id, name, status, color, back_min, tg_chat_id FROM couriers ORDER BY rowid")]
+            "SELECT id, name, status, color, back_min, tg_chat_id, tg_login "
+            "FROM couriers ORDER BY rowid")]
         orders = [dict(r) for r in c.execute(
             "SELECT id, address, lat, lng, created_at, prio, deadline, "
             "status, assigned, out_at FROM orders ORDER BY rowid")]
@@ -262,7 +270,8 @@ def load_state():
     STATE["couriers"] = [{"id": r["id"], "name": r["name"], "status": r["status"],
                           "color": r["color"] or None,
                           "back_min": int(r["back_min"] if r["back_min"] is not None else 15),
-                          "tg_chat_id": r["tg_chat_id"] or ""}
+                          "tg_chat_id": r["tg_chat_id"] or "",
+                          "tg_login": r.get("tg_login") or ""}
                          for r in couriers]
     STATE["orders"] = [{**r, "prio": int(r.get("prio") or 0),
                         "deadline": r.get("deadline") or "",
@@ -997,10 +1006,107 @@ def _json():
     return request.get_json(silent=True) or {}
 
 
+# --- Telegram: бот принимает геолокации курьеров ---------------------------------
+TG_POS_TTL = 30 * 60  # локация старше 30 минут считается устаревшей
+
+
+def _tg_api(method):
+    return f"https://api.telegram.org/bot{CFG['tg_bot_token']}/{method}"
+
+
+def _tg_send(chat_id, text):
+    """Исходящее сообщение курьеру (ошибки не критичны — молча в лог)."""
+    try:
+        requests.post(_tg_api("sendMessage"),
+                      json={"chat_id": chat_id, "text": text}, timeout=10)
+    except requests.RequestException as e:
+        log.warning("tg sendMessage: %s", e)
+
+
+def _tg_handle_update(u):
+    """Один апдейт от Telegram: текст (/start) или геолокация (в т.ч. live)."""
+    msg = u.get("message") or u.get("edited_message") or {}
+    chat_id = str((msg.get("chat") or {}).get("id") or "")
+    if not chat_id:
+        return
+    frm = msg.get("from") or {}
+    login = frm.get("username") or " ".join(
+        filter(None, [frm.get("first_name"), frm.get("last_name")])).strip() or chat_id
+    STATE["tg_seen"][chat_id] = {"chat_id": chat_id, "login": login[:64],
+                                 "ts": time.time()}
+    if len(STATE["tg_seen"]) > 50:  # храним только недавних
+        for k in sorted(STATE["tg_seen"], key=lambda x: STATE["tg_seen"][x]["ts"])[:-50]:
+            STATE["tg_seen"].pop(k, None)
+
+    courier = next((c for c in STATE["couriers"]
+                    if (c.get("tg_chat_id") or "") == chat_id), None)
+    loc = msg.get("location")
+    if loc:
+        if courier:
+            STATE["tg_pos"][chat_id] = {
+                "lat": loc["latitude"], "lng": loc["longitude"],
+                "ts": time.time(), "live": bool(loc.get("live_period")),
+                "acc": loc.get("horizontal_accuracy") or 0}
+        else:
+            _tg_send(chat_id,
+                     f"Вас ещё не привязали к курьеру. Сообщите администратору "
+                     f"ваш ID: {chat_id}")
+    elif (msg.get("text") or "").strip().startswith("/start"):
+        _tg_send(chat_id,
+                 "Привет! Отправьте геолокацию (скрепка → «Геолокация») или "
+                 "запустите трансляцию live-локации — диспетчер увидит вас "
+                 f"на карте.\nВаш ID для привязки: {chat_id}")
+
+
+def _tg_poll_loop():
+    while True:
+        try:
+            r = requests.get(
+                _tg_api("getUpdates"),
+                params={"offset": STATE["tg_offset"], "timeout": 25,
+                        "allowed_updates": json.dumps(["message", "edited_message"])},
+                timeout=30)
+            for u in r.json().get("result", []):
+                STATE["tg_offset"] = max(STATE["tg_offset"], u.get("update_id", 0) + 1)
+                _tg_handle_update(u)
+        except requests.RequestException as e:
+            log.warning("tg poll: %s", e)
+            time.sleep(5)
+        except Exception as e:  # неожиданный формат — не роняем поллер
+            log.warning("tg update parse: %s", e)
+            time.sleep(2)
+
+
+def _tg_start_polling():
+    """Запуск поллера при старте, если задан токен бота."""
+    if not CFG["tg_bot_token"]:
+        return
+    try:
+        me = requests.get(_tg_api("getMe"), timeout=10).json().get("result") or {}
+        STATE["tg_bot"] = "@" + me.get("username", "")
+        log.info("tg bot: %s — слушаю геолокации", STATE["tg_bot"])
+    except requests.RequestException as e:
+        log.warning("tg getMe failed: %s", e)
+    threading.Thread(target=_tg_poll_loop, daemon=True).start()
+
+
 def _payload():
     """Ответ после мутации: состояние + квота ORS + счётчики дня + текущий пользователь."""
     me = _me()
-    return jsonify({**STATE, "ors": ors_status(), "today": _history_today(),
+    now = time.time()
+    couriers = []
+    for c in STATE["couriers"]:
+        cc = dict(c)
+        pos = STATE["tg_pos"].get(c.get("tg_chat_id") or "")
+        if pos and now - pos["ts"] < TG_POS_TTL:
+            cc["pos"] = pos
+        couriers.append(cc)
+    st = {k: v for k, v in STATE.items()
+          if k not in ("tg_seen", "tg_pos", "tg_offset")}
+    seen = sorted(STATE["tg_seen"].values(), key=lambda x: -x["ts"])[:20]
+    return jsonify({**st, "couriers": couriers,
+                    "tg": {"bot": STATE["tg_bot"], "seen": seen},
+                    "ors": ors_status(), "today": _history_today(),
                     "cfg": {"tg": bool(CFG["tg_bot_token"])},
                     "me": me,
                     "users": _admin_users() if me and me["is_admin"] else []})
@@ -1064,6 +1170,40 @@ def upd_courier(cid):
                 c["tg_chat_id"] = str(data["tg_chat_id"]).strip()[:64]
             _persist_couriers()
             _invalidate_plan(drop_plan=True)
+            return _payload()
+    return jsonify({"error": "Курьер не найден"}), 404
+
+
+@app.post("/api/couriers/<cid>/bind")
+def bind_courier(cid):
+    """Привязка курьера к Telegram-пользователю (по chat_id из бота)."""
+    data = _json()
+    chat_id = str(data.get("chat_id") or "").strip()
+    if not chat_id.isdigit():
+        return jsonify({"error": "ID Telegram должен быть числом"}), 400
+    for c in STATE["couriers"]:
+        if c["id"] == cid:
+            c["tg_chat_id"] = chat_id
+            c["tg_login"] = (data.get("login")
+                             or STATE["tg_seen"].get(chat_id, {}).get("login")
+                             or "").strip()[:64]
+            _persist_couriers()
+            _tg_send(chat_id,
+                     f"Привязано к курьеру «{c['name']}». Отправьте геолокацию "
+                     "(скрепка → «Геолокация» или live-трансляция) — вы появитесь "
+                     "на карте диспетчера.")
+            return _payload()
+    return jsonify({"error": "Курьер не найден"}), 404
+
+
+@app.post("/api/couriers/<cid>/unbind")
+def unbind_courier(cid):
+    for c in STATE["couriers"]:
+        if c["id"] == cid:
+            STATE["tg_pos"].pop(c.get("tg_chat_id") or "", None)
+            c["tg_chat_id"] = ""
+            c["tg_login"] = ""
+            _persist_couriers()
             return _payload()
     return jsonify({"error": "Курьер не найден"}), 404
 
@@ -2299,6 +2439,7 @@ if __name__ == "__main__":
     ensure_default_admin()
     _houses_disk_load()
     threading.Thread(target=_warm_street_index, daemon=True).start()  # прогрев индекса улиц
+    _tg_start_polling()  # бот: геолокации курьеров
     log.info("starting on %s:%s (auth=email, db=%s)", CFG["host"], CFG["port"], _db_path)
     try:
         from waitress import serve

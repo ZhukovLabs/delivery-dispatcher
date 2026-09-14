@@ -1,7 +1,9 @@
 export interface Depot { address: string; lat: number; lng: number; }
+export interface CourierPos { lat: number; lng: number; ts: number; live?: boolean; acc?: number; }
 export interface Courier {
   id: string; name: string; status: "base" | "away" | "off";
-  color?: string; back_min?: number; tg_chat_id?: string;
+  color?: string; back_min?: number; tg_chat_id?: string; tg_login?: string;
+  pos?: CourierPos;
 }
 export interface Order {
   id: string; address: string; lat: number; lng: number;
@@ -45,6 +47,7 @@ export interface AppState {
   today?: { delivered?: number; cancelled?: number; avg_cycle_min?: number };
   ors?: { used?: number; soft_limit?: number; paused?: boolean };
   cfg?: { tg?: boolean };
+  tg?: { bot?: string; seen?: { chat_id: string; login: string; ts: number }[] };
 }
 
 export async function api<T = AppState>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {

@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, fmtCoords, type AppState, type Order, type Route, type Advice } from "@/lib/api";
+import { api, fmtCoords, type AppState, type Courier, type Order, type Route, type Advice } from "@/lib/api";
 import GeoInput, { type GeoItem } from "./GeoInput";
 
 const MapView = dynamic(() => import("./MapView"), {
@@ -27,6 +27,7 @@ function declName(n: string) {
   if (n.endsWith("а")) return n.slice(0, -1) + "ы";
   return n + "а";
 }
+const posAgeMin = (ts: number) => Math.max(0, Math.round((Date.now() - ts * 1000) / 60000));
 const shortAddr = (s: string) =>
   s.replace(/,?\s*Гомель$/i, "").replace(/\s*сельский Совет$/i, "").replace(/(^|\s)улица\s/i, "$1").trim();
 
@@ -55,6 +56,12 @@ export default function Console() {
     staleTime: 10000,
     retry: 1,
     refetchOnWindowFocus: "always",
+    // пока кто-то из курьеров привязан к боту — подтягиваем геолокации
+    refetchInterval: q => {
+      const d = q.state.data;
+      if (d?.couriers?.some(c => c.tg_chat_id)) return 20000;
+      return false;
+    },
   });
   const st = stData ?? null;
   const setSt = useCallback((s: AppState) => { qc.setQueryData(["state"], s); }, [qc]);
@@ -91,6 +98,7 @@ export default function Console() {
   const [hist, setHist] = useState<{ rows?: unknown[]; summary?: Record<string, number | null> } | null>(null);
   const [week, setWeek] = useState<string>("");
   const [courierName, setCourierName] = useState("");
+  const [bindFor, setBindFor] = useState<Courier | null>(null); // привязка Telegram
   const [pwOld, setPwOld] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [userEmail, setUserEmail] = useState("");
@@ -642,6 +650,19 @@ export default function Console() {
                             мин
                           </div>
                         )}
+                        {st.cfg?.tg && (
+                          <div className="c-row2 tg-row">
+                            {c.tg_chat_id
+                              ? <span className="tg-bound" title={`Telegram привязан: ${c.tg_login || c.tg_chat_id}`}
+                                onClick={() => setBindFor(c)}>🔗 {c.tg_login || ("ID " + c.tg_chat_id)}</span>
+                              : <button className="tg-btn" title="Привязать Telegram-аккаунт курьера" onClick={() => setBindFor(c)}>🔗 Telegram</button>}
+                            {c.pos && (
+                              <span className="tg-pos" title={`Геолокация обновлена${c.pos.live ? " (live-трансляция)" : ""}`}>
+                                📍 {posAgeMin(c.pos.ts)} назад{c.pos.live ? " · live" : ""}
+                              </span>
+                            )}
+                          </div>
+                        )}
                         {n > 0 && (
                           <button className="ret"
                             title={`${c.name} вернулся на базу: ${n} заказ(ов) закроются как доставленные`}
@@ -768,6 +789,17 @@ export default function Console() {
         </div>
       )}
 
+      {/* привязка Telegram */}
+      {bindFor && st && (
+        <BindModal
+          courier={bindFor}
+          bot={st.tg?.bot || ""}
+          seen={st.tg?.seen || []}
+          onDone={s => { setSt(s); setBindFor(null); }}
+          onClose={() => setBindFor(null)}
+        />
+      )}
+
       {/* подтверждение */}
       {ask && (
         <div className="help-overlay" role="dialog" aria-modal="true"
@@ -791,6 +823,73 @@ export default function Console() {
         )}
       </div>
     </>
+  );
+}
+
+/* ---------- привязка Telegram ---------- */
+function BindModal({ courier, bot, seen, onDone, onClose }: {
+  courier: Courier; bot: string;
+  seen: { chat_id: string; login: string; ts: number }[];
+  onDone: (s: AppState) => void; onClose: () => void;
+}) {
+  const [manual, setManual] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const bind = async (chat_id: string, login?: string) => {
+    if (!/^\d+$/.test(chat_id)) { setErr("ID должен быть числом"); return; }
+    setBusy(true); setErr("");
+    try {
+      const s = await api<AppState>(`/api/couriers/${courier.id}/bind`, "POST", { chat_id, login });
+      onDone(s);
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally { setBusy(false); }
+  };
+  const unbind = async () => {
+    setBusy(true);
+    try { onDone(await api<AppState>(`/api/couriers/${courier.id}/unbind`, "POST")); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="help-overlay" role="dialog" aria-modal="true"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="help-card bind-card">
+        <button className="close" style={{ float: "right", border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#6d7688" }}
+          aria-label="Закрыть" onClick={onClose}>✕</button>
+        <h3>🔗 Telegram · {courier.name}</h3>
+        {courier.tg_chat_id && (
+          <p className="note">Привязан: <b>{courier.tg_login || "ID " + courier.tg_chat_id}</b></p>
+        )}
+        <p className="note">
+          Курьер пишет боту {bot || "(бот не отвечает, проверьте токен)"} команду{" "}
+          <b>/start</b> и нажимает «Геолокация» (или включает live-трансляцию).
+          Его ID появится в списке ниже — привяжите его к курьеру.
+        </p>
+        {seen.length > 0 && (
+          <div className="bind-list">
+            {seen.map(u => (
+              <button key={u.chat_id} disabled={busy} className="bind-user"
+                title={u.chat_id}
+                onClick={() => void bind(u.chat_id, u.login)}>
+                <span>@{u.login}</span>
+                <small>ID {u.chat_id} · {posAgeMin(u.ts) < 1 ? "только что" : posAgeMin(u.ts) + " мин назад"}</small>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="bind-manual">
+          <input placeholder="ID вручную (число)" value={manual} inputMode="numeric"
+            onChange={e => setManual(e.target.value.replace(/\D/g, ""))} />
+          <button className="btn btn-primary" disabled={busy || !manual} onClick={() => void bind(manual)}>Привязать</button>
+        </div>
+        {err && <p className="note" style={{ color: "#b3261e" }}>{err}</p>}
+        {courier.tg_chat_id && (
+          <button className="btn danger" disabled={busy} onClick={() => void unbind()}>Отвязать</button>
+        )}
+      </div>
+    </div>
   );
 }
 
