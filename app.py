@@ -1902,8 +1902,9 @@ STREET_IDX_TTL = 24 * 3600
 STREET_IDX_LOCK = threading.Lock()
 
 
-def _fill_street_index():
-    """Тело загрузки индекса улиц; вызывать только под STREET_IDX_LOCK."""
+def _fill_street_index(network=True):
+    """Тело загрузки индекса улиц; вызывать только под STREET_IDX_LOCK.
+    network=False — только дисковый кэш (для запросов геокода, без задержек на сеть)."""
     if STREET_IDX["names"] and time.time() - STREET_IDX["ts"] < STREET_IDX_TTL:
         return STREET_IDX["names"]
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "streets_cache.json")
@@ -1923,7 +1924,7 @@ def _fill_street_index():
          f'way["highway"~"^(residential|tertiary|secondary|primary|unclassified|living_street|pedestrian)$"]["name"]'
          f'({s},{w},{n},{e});out tags center 8000;')
     acc = {}  # lower -> [shown, sum_lat, sum_lng, cnt]
-    for url in OVERPASS_URLS:
+    for url in (OVERPASS_URLS if network else []):
         try:
             r = requests.post(url, data={"data": q}, headers=UA, timeout=60)
             r.raise_for_status()
@@ -1976,7 +1977,7 @@ def _search_local_streets(token, limit=6):
         if not STREET_IDX_LOCK.acquire(blocking=False):
             return []
         try:
-            _fill_street_index()
+            _fill_street_index(network=False)  # диск-кэш мгновенно; сеть — только фоновый поток
         finally:
             STREET_IDX_LOCK.release()
     hits = []
