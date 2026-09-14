@@ -13,13 +13,15 @@ interface GeoInputProps {
   inputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
-/** Поле адреса с подсказками геокодера (debounce 400 мс, стрелки/Enter/Esc). */
+/** Поле адреса с подсказками геокодера (debounce 300 мс, кэш повторных запросов, стрелки/Enter/Esc). */
+const GEO_CACHE = new Map<string, GeoItem[]>();   // повторный ввод того же адреса — мгновенно, без сети
 export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpty, inputRef }: GeoInputProps) {
   const [val, setVal] = useState("");
   const [items, setItems] = useState<GeoItem[]>([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seq = useRef(0);
   const itemsRef = useRef<GeoItem[]>([]);
   const activeRef = useRef(-1);
   itemsRef.current = items;
@@ -39,19 +41,28 @@ export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpt
     if (timer.current) clearTimeout(timer.current);
     q = q.trim();
     if (q.length < 3) { close(); return; }
+    const key = q.toLowerCase();
+    const cached = GEO_CACHE.get(key);
+    if (cached) { setItems(cached); setActive(-1); setOpen(true); return; }
+    const mySeq = ++seq.current;
     timer.current = setTimeout(async () => {
       try {
         const res = await fetch("/api/geocode?q=" + encodeURIComponent(q), { headers: { Accept: "application/json" } });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "ошибка геокодера");
-        setItems((Array.isArray(data) ? data : []).slice(0, 5));
+        const list = (Array.isArray(data) ? data : []).slice(0, 5);
+        if (mySeq !== seq.current) return;          // пришёл ответ на устаревший запрос
+        if (GEO_CACHE.size > 40) GEO_CACHE.clear();
+        GEO_CACHE.set(key, list);
+        setItems(list);
         setActive(-1);
         setOpen(true);
       } catch {
+        if (mySeq !== seq.current) return;
         setItems([]);
         setOpen(true);
       }
-    }, 400);
+    }, 300);
   };
 
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {

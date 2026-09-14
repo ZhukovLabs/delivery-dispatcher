@@ -138,7 +138,11 @@ export default function Console() {
       void doUndo();
     };
     document.addEventListener("keydown", onKey);
-    return () => { clearInterval(iv); document.removeEventListener("keydown", onKey); };
+    /* free-тариф облака засыпает через 15 мин тишины: пока вкладка открыта — лёгкий пинг, чтобы не ждать холодный старт */
+    const hb = /^(localhost|127\.)/.test(location.hostname)
+      ? null
+      : setInterval(() => { if (!document.hidden) void fetch("/health", { cache: "no-store" }).catch(() => {}); }, 10 * 60 * 1000);
+    return () => { clearInterval(iv); if (hb) clearInterval(hb); document.removeEventListener("keydown", onKey); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -177,14 +181,54 @@ export default function Console() {
   };
 
   /* ---------- действия ---------- */
-  const mutate = async (fn: () => Promise<AppState>) => {
-    try { setSt(await fn()); } catch (e) { showToast((e as Error).message, true); }
+  /* оптимистичный патч: мгновенный отклик, серверная правда при ответе, откат при ошибке */
+  const optimisticFor = (method: string, path: string, body: Record<string, any> | undefined): ((s: AppState) => AppState) | undefined => {
+    const patch = (fn: (s: AppState) => void): ((s: AppState) => AppState) =>
+      (s: AppState) => { const c = { ...s, orders: [...s.orders], couriers: [...s.couriers] }; fn(c); return c; };
+    if (method === "POST" && path === "/api/orders" && body?.lat !== undefined)
+      return patch(s => { s.orders.push({ id: "tmp-" + Date.now(), address: String(body.address || "Точка"), lat: body.lat, lng: body.lng, created_at: new Date().toISOString(), status: "ready" }); });
+    if (method === "POST" && path === "/api/orders/assign" && Array.isArray(body?.order_ids))
+      return patch(s => { const name = s.couriers.find(c => c.id === body.courier_id)?.name || ""; s.orders = s.orders.map(o => body.order_ids.includes(o.id) ? { ...o, status: "out" as const, assigned: name } : o); });
+    if (method === "POST" && /^\/api\/orders\/[^/]+\/return$/.test(path))
+      return patch(s => { s.orders = s.orders.map(o => o.id === path.split("/")[3] ? { ...o, status: "ready" as const, assigned: "" } : o); });
+    if (method === "DELETE" && path.startsWith("/api/orders/"))
+      return patch(s => { s.orders = s.orders.filter(o => o.id !== path.split("/")[3]); });
+    if (method === "PATCH" && path.startsWith("/api/orders/")) {
+      const oid = path.split("/")[3];
+      if (body?.prio !== undefined) return patch(s => { s.orders = s.orders.map(o => o.id === oid ? { ...o, prio: !!body.prio } : o); });
+      if (body?.deadline !== undefined) return patch(s => { s.orders = s.orders.map(o => o.id === oid ? { ...o, deadline: String(body.deadline) } : o); });
+      return undefined;
+    }
+    if (method === "POST" && path === "/api/depot" && body?.lat !== undefined)
+      return patch(s => { s.depot = { address: String(body.address || "…"), lat: body.lat, lng: body.lng }; });
+    if (method === "POST" && path === "/api/couriers" && body?.name)
+      return patch(s => { s.couriers.push({ id: "tmp-" + Date.now(), name: String(body.name), status: "base" }); });
+    if (method === "DELETE" && path.startsWith("/api/couriers/"))
+      return patch(s => { const cid = path.split("/")[3]; const name = s.couriers.find(c => c.id === cid)?.name; s.couriers = s.couriers.filter(c => c.id !== cid); if (name) s.orders = s.orders.map(o => o.assigned === name ? { ...o, status: "ready" as const, assigned: "" } : o); });
+    if (method === "POST" && /^\/api\/couriers\/[^/]+\/returned$/.test(path))
+      return patch(s => { const cid = path.split("/")[3]; const name = s.couriers.find(c => c.id === cid)?.name; s.couriers = s.couriers.map(c => c.id === cid ? { ...c, status: "base" as const, back_min: 0 } : c); if (name) s.orders = s.orders.filter(o => o.assigned !== name); });
+    if (method === "PATCH" && path.startsWith("/api/couriers/")) {
+      const cid = path.split("/")[3];
+      if (body?.status !== undefined) return patch(s => { s.couriers = s.couriers.map(c => c.id === cid ? { ...c, status: body.status } : c); });
+      if (body?.back_min !== undefined) return patch(s => { s.couriers = s.couriers.map(c => c.id === cid ? { ...c, back_min: +body.back_min || 0 } : c); });
+      return undefined;
+    }
+    if (method === "POST" && path === "/api/settings" && body)
+      return patch(s => { s.settings = { ...s.settings, ...body as Record<string, number> }; });
+    return undefined;
+  };
+  const mutate = async (method: string, path: string, body?: Record<string, unknown>) => {
+    const cur = st;
+    const opt = cur ? optimisticFor(method, path, body as Record<string, any> | undefined) : undefined;
+    if (opt && cur) setSt(opt(cur));
+    try { setSt(await api<AppState>(path, method, body)); }
+    catch (e) { showToast((e as Error).message, true); if (opt) void refresh(); }
   };
 
   const addOrder = async () => {
     const p = pendingOrder.current;
     if (!p) { showToast("Укажите точку: подсказкой в поле или кнопкой 📍 по карте", true); return; }
-    await mutate(() => api("/api/orders", "POST", { address: orderLabel.current || p.label, lat: p.lat, lng: p.lng }));
+    await mutate("POST", "/api/orders", { address: orderLabel.current || p.label, lat: p.lat, lng: p.lng });
     pendingOrder.current = null;
     orderLabel.current = "";
     setOrderNote("");
@@ -244,7 +288,7 @@ export default function Console() {
       return o && (o.status || "ready") === "ready";
     });
     if (!ids.length) { showToast("Все заказы маршрута уже выданы", true); return; }
-    await mutate(() => api("/api/orders/assign", "POST", { order_ids: ids, courier_id: r.courier_id }));
+    await mutate("POST", "/api/orders/assign", { order_ids: ids, courier_id: r.courier_id });
     undoToast(`✓ Выдано ${r.courier_name}: ${ids.length} зак.`, `выдача маршрута ${r.courier_name}`, "assign", { order_ids: ids });
   };
 
@@ -385,7 +429,7 @@ export default function Console() {
                 <button className="btn btn-primary" onClick={async () => {
                   const p = pendingDepot.current;
                   if (!p) { showToast("Сначала выберите точку: подсказкой или 📍 по карте", true); return; }
-                  await mutate(() => api("/api/depot", "POST", { address: orderLabelDepot(p), lat: p.lat, lng: p.lng }));
+                  await mutate("POST", "/api/depot", { address: orderLabelDepot(p), lat: p.lat, lng: p.lng });
                   setDepotEdit(false);
                   pendingDepot.current = null;
                   setDepotNote("");
@@ -475,7 +519,7 @@ export default function Console() {
                               initial={o.deadline || dlRound(new Date(Date.now() + 30 * 60000))}
                               hasDeadline={!!o.deadline}
                               onSave={async val => {
-                                await mutate(() => api("/api/orders/" + o.id, "PATCH", { deadline: val }));
+                                  await mutate("PATCH", "/api/orders/" + o.id, { deadline: val });
                                 setDlEdit(null);
                               }}
                               onClose={() => setDlEdit(null)}
@@ -488,17 +532,17 @@ export default function Console() {
                           <button className={"prio-btn" + (o.prio ? " on" : "")}
                             title={o.prio ? "Снять приоритет" : "Приоритет: доставить как можно раньше"}
                             aria-label="Приоритет заказа"
-                            onClick={() => void mutate(() => api("/api/orders/" + o.id, "PATCH", { prio: !o.prio }))}>⚡</button>
+                            onClick={() => void mutate("PATCH", "/api/orders/" + o.id, { prio: !o.prio })}>⚡</button>
                           <button className="ok" title="Выдать курьеру (из текущего плана)" aria-label="Выдать заказ"
                             onClick={async () => {
                               const r = (st.plan?.routes || []).find(r => (r.stops || []).some(s => s.order_id === o.id));
                               if (!r) { showToast("Заказа нет в текущем плане: рассчитайте план или выдайте с маршрута", true); return; }
-                              await mutate(() => api("/api/orders/assign", "POST", { order_ids: [o.id], courier_id: r.courier_id }));
+                              await mutate("POST", "/api/orders/assign", { order_ids: [o.id], courier_id: r.courier_id });
                               undoToast(`✓ Выдан: ${r.courier_name}`, `выдача ${o.address || ""}`.slice(0, 60), "assign", { order_ids: [o.id] });
                             }}>✓</button>
                           <button className="no" title="Отменить (в историю)" aria-label="Отменить заказ"
                             onClick={async () => {
-                              await mutate(() => api("/api/orders/" + o.id, "DELETE", { outcome: "cancelled" }));
+                              await mutate("DELETE", "/api/orders/" + o.id, { outcome: "cancelled" });
                               pushUndo(`удаление ${o.address || ""}`.slice(0, 60), "delOrder",
                                 { address: o.address, lat: o.lat, lng: o.lng, prio: o.prio, deadline: o.deadline });
                               showToast("Заказ отменён", false, { label: "Отменить", fn: () => void doUndo() });
@@ -517,13 +561,13 @@ export default function Console() {
                         <button className="ok" title="Вернуть в очередь готовых (не доехал, передумали)" aria-label="Вернуть в очередь"
                           onClick={async () => {
                             const was = o.assigned;
-                            await mutate(() => api(`/api/orders/${o.id}/return`, "POST"));
+                            await mutate("POST", `/api/orders/${o.id}/return`);
                             undoToast("↩ Заказ снова в очереди", `возврат ${o.address || ""}`.slice(0, 60), "return",
                               { order_ids: [o.id], courier_id: was });
                           }}>↩</button>
                         <button className="no" title="Отменить (в историю)" aria-label="Отменить заказ"
                           onClick={async () => {
-                            await mutate(() => api("/api/orders/" + o.id, "DELETE", { outcome: "cancelled" }));
+                            await mutate("DELETE", "/api/orders/" + o.id, { outcome: "cancelled" });
                             pushUndo(`удаление ${o.address || ""}`.slice(0, 60), "delOrder",
                               { address: o.address, lat: o.lat, lng: o.lng, prio: o.prio, deadline: o.deadline });
                             showToast("Заказ отменён", false, { label: "Отменить", fn: () => void doUndo() });
@@ -549,14 +593,14 @@ export default function Console() {
                       const name = courierName.trim();
                       if (!name) { showToast("Введите имя курьера", true); return; }
                       setCourierName("");
-                      await mutate(() => api("/api/couriers", "POST", { name }));
+                      await mutate("POST", "/api/couriers", { name });
                     }} />
                   <button className="plus" title="Добавить курьера"
                     onClick={async () => {
                       const name = courierName.trim();
                       if (!name) { showToast("Введите имя курьера", true); return; }
                       setCourierName("");
-                      await mutate(() => api("/api/couriers", "POST", { name }));
+                      await mutate("POST", "/api/couriers", { name });
                     }}>+</button>
                 </div>
                 <div id="courierList" className="ents">
@@ -577,7 +621,7 @@ export default function Console() {
                           const o = st.orders.find(x => x.id === oid);
                           if (!o || o.status === "out") return;
                           if (c.status === "off") { showToast(`${c.name} недоступен: включите его статусом`, true); return; }
-                          await mutate(() => api("/api/orders/assign", "POST", { order_ids: [oid], courier_id: c.id }));
+                          await mutate("POST", "/api/orders/assign", { order_ids: [oid], courier_id: c.id });
                           undoToast(`✓ Выдан: ${c.name}`, `выдача ${o.address || ""}`.slice(0, 60), "assign", { order_ids: [oid] });
                         }}
                       >
@@ -588,7 +632,7 @@ export default function Console() {
                             {(["base", "away", "off"] as const).map(s => (
                               <button key={s} className={c.status === s ? "on-" + s : ""}
                                 title={SEG_TITLES[s]} aria-label={"Статус: " + SEG_TITLES[s]}
-                                onClick={() => { if (c.status !== s) void mutate(() => api("/api/couriers/" + c.id, "PATCH", { status: s })); }}>
+                                onClick={() => { if (c.status !== s) void mutate("PATCH", "/api/couriers/" + c.id, { status: s }); }}>
                                 {SEG_ICONS[s]}
                               </button>
                             ))}
@@ -597,7 +641,7 @@ export default function Console() {
                             <button className="no" title="Удалить курьера" aria-label="Удалить курьера"
                               onClick={async () => {
                                 if (!(await askConfirm(`Удалить курьера «${c.name}»?`, { ok: "Удалить", danger: true }))) return;
-                                await mutate(() => api("/api/couriers/" + c.id, "DELETE"));
+                                await mutate("DELETE", "/api/couriers/" + c.id);
                                 pushUndo(`курьер ${c.name}`, "delCourier", { name: c.name });
                               }}>✕</button>
                           </span>
@@ -606,7 +650,7 @@ export default function Console() {
                           <div className="c-row2">⏱ вернётся через
                             <input className="backMin" type="number" min={0} max={480} defaultValue={c.back_min ?? 15}
                               title="Через сколько минут вернётся на базу" aria-label="Возврат на базу, минут"
-                              onChange={e => void mutate(() => api("/api/couriers/" + c.id, "PATCH", { back_min: +e.target.value || 0 }))} />
+                              onChange={e => void mutate("PATCH", "/api/couriers/" + c.id, { back_min: +e.target.value || 0 })} />
                             мин
                           </div>
                         )}
@@ -615,7 +659,7 @@ export default function Console() {
                             title={`${c.name} вернулся на базу: ${n} заказ(ов) закроются как доставленные`}
                             onClick={async () => {
                               if (!(await askConfirm(`${c.name} вернулся на базу? ${n} заказ(ов) закроются как доставленные.`, { ok: "Вернулся" }))) return;
-                              await mutate(() => api(`/api/couriers/${c.id}/returned`, "POST"));
+                              await mutate("POST", `/api/couriers/${c.id}/returned`);
                             }}>🏁 Вернулся · {n} зак.</button>
                         )}
                       </div>
