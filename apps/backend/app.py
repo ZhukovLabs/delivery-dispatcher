@@ -1673,6 +1673,35 @@ OVERPASS_URLS = ("https://overpass-api.de/api/interpreter",
                  "https://overpass.kumi.systems/api/interpreter")
 HOUSES_CACHE = {}  # street_lower -> (ts, houses[(num, lat, lng)])
 HOUSES_CACHE_MAX = 200
+HOUSES_DISK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "houses_cache.json")
+HOUSES_DISK_LOCK = threading.Lock()
+
+
+def _houses_disk_load():
+    """дома с Overpass качаются дорого — переживаем рестарты через диск"""
+    try:
+        with open(HOUSES_DISK, encoding="utf-8") as f:
+            raw = json.load(f)
+        for k, v in raw.items():
+            try:
+                HOUSES_CACHE[k] = (float(v["ts"]), [tuple(h) for h in v["houses"]])
+            except Exception:  # noqa: BLE001
+                continue
+        log.info("houses cache: %d улиц с диска", len(HOUSES_CACHE))
+    except FileNotFoundError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        log.warning("houses cache не читается: %s", exc)
+
+
+def _houses_disk_save():
+    with HOUSES_DISK_LOCK:
+        try:
+            with open(HOUSES_DISK, "w", encoding="utf-8") as f:
+                json.dump({k: {"ts": ts, "houses": hs} for k, (ts, hs) in HOUSES_CACHE.items()},
+                          f, ensure_ascii=False)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("houses cache не записан: %s", exc)
 HOUSES_TTL_FULL, HOUSES_TTL_EMPTY = 24 * 3600, 600
 
 
@@ -1754,6 +1783,7 @@ def overpass_street_houses(base, clat, clng, alt=None):
     if len(HOUSES_CACHE) >= HOUSES_CACHE_MAX:
         HOUSES_CACHE.clear()  # улиц немного: проще сбросить, чем вести LRU
     HOUSES_CACHE[key] = (now, houses)
+    _houses_disk_save()
     return houses
 
 
@@ -1897,7 +1927,17 @@ def reverse_geocode(lat, lng):
 
 
 GOMEL_BBOX = (52.325, 30.78, 52.61, 31.14)  # S, W, N, E — город с Новобелицей
-STREET_IDX = {"ts": 0.0, "names": {}, "ways": {}}  # names: lower(name)->(shown,lat,lng); ways: osm_id -> (local, ru)
+STREET_IDX = {"ts": 0.0, "names": {}, "ways": {}, "alt": {}}  # names: lower(name)->(shown,lat,lng); ways: osm_id -> (local, ru); alt: lower -> другое написание
+
+
+def _rebuild_alt():
+    """Пары написаний (рус <-> бел) из ways: для интерполяции домов по опечаткам."""
+    alt = {}
+    for loc, ru in STREET_IDX["ways"].values():
+        if loc and ru:
+            alt[ru.lower()] = loc
+            alt[loc.lower()] = ru
+    STREET_IDX["alt"] = alt
 STREET_IDX_TTL = 24 * 3600
 STREET_IDX_LOCK = threading.Lock()
 
@@ -1915,6 +1955,7 @@ def _fill_street_index(network=True):
             if data.get("v") == 2:
                 STREET_IDX["names"] = {k: tuple(v) for k, v in data["names"].items()}
                 STREET_IDX["ways"] = {int(k): tuple(v) for k, v in data["ways"].items()}
+                _rebuild_alt()
                 STREET_IDX["ts"] = os.path.getmtime(path)
                 return STREET_IDX["names"]
     except Exception:  # noqa: BLE001
@@ -1950,6 +1991,7 @@ def _fill_street_index(network=True):
     if acc:  # пустой ответ не затирает то, что уже есть
         STREET_IDX["names"] = {k: (v[0], v[1] / v[3], v[2] / v[3]) for k, v in acc.items()}
         STREET_IDX["ts"] = time.time()
+        _rebuild_alt()
         app.logger.info("street index: %d улиц", len(STREET_IDX["names"]))
         try:
             with open(path, "w", encoding="utf-8") as fh:
@@ -1967,8 +2009,42 @@ def _load_street_index():
         return _fill_street_index()
 
 
+def _lev(a, b, maxd=2):
+    """Левенштейн с отсечкой: >maxd — сразу maxd+1 (без полной матрицы)."""
+    la, lb = len(a), len(b)
+    if abs(la - lb) > maxd:
+        return maxd + 1
+    prev = list(range(lb + 1))
+    for i in range(1, la + 1):
+        cur = [i] + [0] * lb
+        best = cur[0]
+        for j in range(1, lb + 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1,
+                         prev[j - 1] + (a[i - 1] != b[j - 1]))
+            if cur[j] < best:
+                best = cur[j]
+        if best > maxd:
+            return maxd + 1
+        prev = cur
+    return prev[lb]
+
+
+def _typo_max(word):
+    """Допуск опечаток: 1 для слов >=6 букв, 2 для >=9; короткие — строго."""
+    n = len(word)
+    return 2 if n >= 9 else (1 if n >= 6 else 0)
+
+
+def _word_like(t, h):
+    """Слово запроса t против слова адреса h: точное/префикс или опечатка."""
+    if t == h or h.startswith(t) or t.startswith(h):
+        return True
+    m = _typo_max(t)
+    return m > 0 and _lev(t, h, m) <= m
+
+
 def _search_local_streets(token, limit=6):
-    """Улицы города, начинающиеся на token (или содержащие его).
+    """Улицы города по token: точное/префикс/подстрока, затем опечатки (левенштейн).
     Индекс грузится в фоне? Не ждём — просто без локальных подсказок."""
     t = (token or "").lower().strip()
     if len(t) < 3:
@@ -1981,16 +2057,21 @@ def _search_local_streets(token, limit=6):
         finally:
             STREET_IDX_LOCK.release()
     hits = []
+    fuzzy = []
+    tm = _typo_max(t)
     for k, (shown, lat, lng) in STREET_IDX["names"].items():
         if k.startswith(t):
-            rank = 0 if k == t else 1
+            hits.append((0 if k == t else 1, 0, len(k), shown, lat, lng))
         elif len(t) >= 4 and t in k:
-            rank = 2
-        else:
-            continue
-        hits.append((rank, len(k), shown, lat, lng))
-    hits.sort(key=lambda x: (x[0], x[1]))
-    return [(h[2], h[3], h[4]) for h in hits[:limit]]
+            hits.append((2, 0, len(k), shown, lat, lng))
+        elif tm and _lev(t, k, tm) <= tm:
+            fuzzy.append((3, _lev(t, k, tm), len(k), shown, lat, lng))
+    hits.sort(key=lambda x: (x[0], x[2]))
+    res = hits[:limit]
+    if len(res) < limit and fuzzy:
+        fuzzy.sort(key=lambda x: (x[1], x[2]))
+        res += fuzzy[:limit - len(res)]
+    return [(h[3], h[4], h[5]) for h in res]
 
 
 def _tok(s):
@@ -2074,6 +2155,8 @@ def geocode():
                             score -= 1.5
                         elif any(h.startswith(t) for h in hay):
                             score -= 0.8
+                        elif any(_word_like(t, h) for h in hay):
+                            score -= 0.5   # опечатка — тоже релевантно, но слабее
                 if qnum:
                     if _same_house(qnum, it["hn"]):
                         score -= 0.6          # точное совпадение номера дома
@@ -2092,12 +2175,12 @@ def geocode():
                 seen_lbl[lbl] = score
                 scored.append({"label": it["label"], "lat": it["lat"], "lng": it["lng"],
                                "km": round(dist), "_s": score})
-        # все слова запроса обязаны найтись в адресе: «еремино, школьная 13»
-        # не должно давать «Улукаўскі, ул. Школьная, 13» из запасного геокодера
+        # все слова запроса обязаны найтись в адресе (с допуском опечаток):
+        # «еремино, школьная 13» не должно давать «Улукаўскі, ул. Школьная, 13»
         if q_words and scored:
             def _hit_all(x):
                 hay = set(_tok(x["label"].split("(")[0]))
-                return all(any(t == h or h.startswith(t) or t.startswith(h) for h in hay) for t in q_words)
+                return all(any(_word_like(t, h) for h in hay) for t in q_words)
             survived = [x for x in scored if _hit_all(x)]
             if survived:
                 scored = survived
@@ -2122,21 +2205,53 @@ def geocode():
             cands = [it for it in v1 if it["kind"] in ("street", "residential") and it.get("road")]
             cands.sort(key=lambda it: -_word_hit(it))
             street_hit = cands[0] if cands else None
+            if not street_hit and q_words:
+                # геокодеры промахнулись (опечатка/префикс) — локальный индекс улиц
+                loc = _search_local_streets(q_words[0], 1)
+                if loc:
+                    shown, slat, slng = loc[0]
+                    street_hit = {"road": shown, "place": "Гомель",
+                                  "lat": slat, "lng": slng, "osm_type": "", "osm_id": "",
+                                  "_local": True}
             if street_hit:
-                mnum = re.match(r"\d+", qnum)
-                if mnum:
+
+                def _interp():
+                    mnum = re.match(r"\d+", qnum)
+                    if not mnum:
+                        return None
                     base_ru = _strip_street_type(street_hit["road"])
-                    base_osm = osm_local_street_name(street_hit["osm_type"], street_hit["osm_id"]) or ""
+                    base_osm = (osm_local_street_name(street_hit.get("osm_type"), street_hit.get("osm_id"))
+                                or STREET_IDX["alt"].get(base_ru.lower()) or "")
                     houses = overpass_street_houses(base_osm or base_ru, street_hit["lat"], street_hit["lng"],
                                                     alt=base_ru if base_osm else None)
-                    pt = interp_house(houses, int(mnum.group(0)))
-                    if pt:
-                        hlat, hlng, note = pt
+                    return interp_house(houses, int(mnum.group(0)))
+
+                pt = None
+                ex2 = ThreadPoolExecutor(1)  # бюджет на сетевые походы за домами
+                try:
+                    pt = ex2.submit(_interp).result(timeout=9)
+                except FuturesTimeout:
+                    pt = None
+                finally:
+                    ex2.shutdown(wait=False)
+                if pt:
+                    hlat, hlng, note = pt
+                    base = _strip_street_type(street_hit["road"])
+                    city = street_hit.get("place") or "Гомель"
+                    suffix = f" ({note})" if note else ""
+                    scored.insert(0, {"label": _place_label(base, city, qnum, True) + suffix,
+                                      "lat": hlat, "lng": hlng, "_s": -1})
+                else:
+                    # дома не добыли за бюджет — хотя бы сама улица,
+                    # но только если геокодеры её сами не дали (нет дубля)
+                    if street_hit.get("_local"):
                         base = _strip_street_type(street_hit["road"])
                         city = street_hit.get("place") or "Гомель"
-                        suffix = f" ({note})" if note else ""
-                        scored.insert(0, {"label": _place_label(base, city, qnum, True) + suffix,
-                                          "lat": hlat, "lng": hlng, "_s": -1})
+                        d = haversine_km({"lat": lat, "lng": lng},
+                                         {"lat": street_hit["lat"], "lng": street_hit["lng"]})
+                        scored.append({"label": _place_label(base, city, "", False),
+                                       "lat": street_hit["lat"], "lng": street_hit["lng"],
+                                       "km": round(d), "_s": 3.0 + d * 0.1})
         if not scored and len(q_words) > 1:  # «бобовичи советская» -> «бобовичи»
             try:
                 v4 = search_nominatim(" ".join(q_words[:-1]), lat, lng, 25.0, bounded=False)
@@ -2157,10 +2272,11 @@ def geocode():
                       for it in search_nominatim(q, lat, lng, 25.0, bounded=False)[:5]]
         scored.sort(key=lambda x: x["_s"])
         payload = [{k: v for k, v in x.items() if k != "_s"} for x in scored[:7]]
-        _GEO_CACHE[gkey] = (time.time(), payload)
-        _GEO_CACHE.move_to_end(gkey)
-        while len(_GEO_CACHE) > _GEO_CACHE_MAX:
-            _GEO_CACHE.popitem(last=False)
+        if payload:  # пустой ответ не кэшируем: часто это «индекс ещё не прогрелся»
+            _GEO_CACHE[gkey] = (time.time(), payload)
+            _GEO_CACHE.move_to_end(gkey)
+            while len(_GEO_CACHE) > _GEO_CACHE_MAX:
+                _GEO_CACHE.popitem(last=False)
         return jsonify(payload)
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": f"Геокодер недоступен: {e}"}), 502
@@ -2181,6 +2297,7 @@ def _warm_street_index():
 if __name__ == "__main__":
     load_state()
     ensure_default_admin()
+    _houses_disk_load()
     threading.Thread(target=_warm_street_index, daemon=True).start()  # прогрев индекса улиц
     log.info("starting on %s:%s (auth=email, db=%s)", CFG["host"], CFG["port"], _db_path)
     try:
