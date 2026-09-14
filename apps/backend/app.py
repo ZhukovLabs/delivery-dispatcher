@@ -24,12 +24,37 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
+def _pick_data_dir():
+    """Первый каталог, доступный на запись: рядом с кодом -> DISPATCHER_DATA -> temp.
+    На PaaS с read-only FS (Belmo) код лежит в /app только для чтения."""
+    import tempfile
+    cands = [BASE_DIR,
+             os.environ.get("DISPATCHER_DATA", ""),
+             os.path.join(tempfile.gettempdir(), "dispatcher")]
+    for d in cands:
+        if not d:
+            continue
+        try:
+            os.makedirs(d, exist_ok=True)
+            probe = os.path.join(d, ".write-probe")
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("1")
+            os.remove(probe)
+            return d
+        except OSError:
+            continue
+    return BASE_DIR
+
+
+DATA_DIR = _pick_data_dir()
+
 # ---------- конфигурация (config.ini рядом с app.py) ----------
 
 CFG = {"ors_key": "", "host": "127.0.0.1", "port": 5050,
         "admin_email": "admin@local", "admin_password": "admin",
         "tg_bot_token": "", "tg_poll": 1,
-        "db_path": os.path.join(BASE_DIR, "dispatcher.db")}
+        "db_path": os.path.join(DATA_DIR, "dispatcher.db")}
 
 _cp = configparser.ConfigParser()
 if _cp.read(os.path.join(BASE_DIR, "config.ini"), encoding="utf-8"):
@@ -76,10 +101,15 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
 
 # ---------- логирование ----------
 
-_log_path = os.path.join(BASE_DIR, "dispatcher.log")
+_handlers = [logging.StreamHandler()]  # всегда: stderr (доступен на любом PaaS)
+try:
+    _handlers.insert(0, RotatingFileHandler(os.path.join(DATA_DIR, "dispatcher.log"),
+                                            maxBytes=1_000_000, backupCount=3,
+                                            encoding="utf-8"))
+except OSError:
+    pass  # read-only FS: живём только в stderr
 logging.basicConfig(
-    handlers=[RotatingFileHandler(_log_path, maxBytes=1_000_000, backupCount=3,
-                                  encoding="utf-8")],
+    handlers=_handlers,
     level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logging.getLogger("waitress").setLevel(logging.WARNING)
 log = logging.getLogger("dispatcher")
@@ -1919,7 +1949,7 @@ OVERPASS_URLS = ("https://overpass-api.de/api/interpreter",
                  "https://overpass.kumi.systems/api/interpreter")
 HOUSES_CACHE = {}  # street_lower -> (ts, houses[(num, lat, lng)])
 HOUSES_CACHE_MAX = 200
-HOUSES_DISK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "houses_cache.json")
+HOUSES_DISK = os.path.join(DATA_DIR, "houses_cache.json")
 HOUSES_DISK_LOCK = threading.Lock()
 
 
@@ -2193,7 +2223,7 @@ def _fill_street_index(network=True):
     network=False — только дисковый кэш (для запросов геокода, без задержек на сеть)."""
     if STREET_IDX["names"] and time.time() - STREET_IDX["ts"] < STREET_IDX_TTL:
         return STREET_IDX["names"]
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "streets_cache.json")
+    path = os.path.join(DATA_DIR, "streets_cache.json")
     try:  # дисковый кэш переживает рестарты (формат v2: names + ways)
         if os.path.exists(path) and time.time() - os.path.getmtime(path) < STREET_IDX_TTL:
             with open(path, encoding="utf-8") as fh:
