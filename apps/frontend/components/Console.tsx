@@ -47,8 +47,9 @@ interface AskState { text: string; ok: string; danger: boolean; resolve: (v: boo
 
 export default function Console() {
   /* ---------- состояние через TanStack Query: кэш + синхронизация по фокусу окна.
-     План считается ТОЛЬКО по кнопке «Рассчитать» — фонового опроса нет,
-     данные обновляются после каждой мутации (optimisticFor + invalidate). ---------- */
+     План считается ТОЛЬКО по кнопке «Рассчитать». Живые обновления (несколько
+     админов, геолокации курьеров) приходят по SSE /api/stream: событие patch
+     инвалидирует кэш — каждый браузер перезаказывает /api/state сам. ---------- */
   const qc = useQueryClient();
   const { data: stData, error: stateErr, isPending: stLoading } = useQuery({
     queryKey: ["state"],
@@ -56,13 +57,15 @@ export default function Console() {
     staleTime: 10000,
     retry: 1,
     refetchOnWindowFocus: "always",
-    // пока кто-то из курьеров привязан к боту — подтягиваем геолокации
-    refetchInterval: q => {
-      const d = q.state.data;
-      if (d?.couriers?.some(c => c.tg_chat_id)) return 20000;
-      return false;
-    },
   });
+
+  // SSE-подписка: сервер пинает при каждом изменении состояния
+  useEffect(() => {
+    const es = new EventSource("/api/stream");
+    const onPatch = () => { qc.invalidateQueries({ queryKey: ["state"] }); };
+    es.addEventListener("patch", onPatch);
+    return () => { es.removeEventListener("patch", onPatch); es.close(); };
+  }, [qc]);
   const st = stData ?? null;
   const setSt = useCallback((s: AppState) => { qc.setQueryData(["state"], s); }, [qc]);
   const refresh = useCallback(async () => { await qc.invalidateQueries({ queryKey: ["state"] }); }, [qc]);

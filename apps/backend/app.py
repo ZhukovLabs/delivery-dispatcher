@@ -18,8 +18,8 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 
 import requests
-from flask import (Flask, after_this_request, jsonify, redirect, render_template,
-                   request, send_file, session, url_for)
+from flask import (Flask, Response, after_this_request, jsonify, redirect,
+                   render_template, request, send_file, session, url_for)
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -959,6 +959,45 @@ def logout_api():
     return jsonify(ok=True)
 
 
+@app.get("/api/stream")
+def api_stream():
+    """SSE-поток изменений: событие patch при каждом _bump(), heartbeat 15 c."""
+    if not _me():
+        return Response("unauthorized", 401, mimetype="text/plain")
+
+    def gen():
+        yield "retry: 3000\n\n"
+        last = STATE.get("rev", 0)
+        while True:
+            with _REV_LOCK:
+                _REV_LOCK.wait(timeout=15)
+            rev = STATE.get("rev", 0)
+            if rev != last:
+                last = rev
+                yield f"event: patch\ndata: {{\"rev\": {rev}}}\n\n"
+            else:
+                yield ": ping\n\n"  # держим соединение живым
+
+    return Response(gen(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache",
+                             "X-Accel-Buffering": "no"})
+
+
+# ---------- live-рассылка: сервер сообщает клиентам, что состояние изменилось ----
+# SSE (/api/stream): каждое изменение состояния поднимает счётчик rev и будит
+# все открытые потоки; клиенты (несколько админов) получают событие и сами
+# перезаказывают /api/state. Мутации по-прежнему идут обычными POST/PATCH.
+
+_REV_LOCK = threading.Condition()
+
+
+def _bump():
+    """Пометить состояние изменённым и разбудить подписчиков SSE."""
+    STATE["rev"] = STATE.get("rev", 0) + 1
+    with _REV_LOCK:
+        _REV_LOCK.notify_all()
+
+
 @app.before_request
 def _guard():
     if request.path in ("/login", "/api/login", "/health", "/favicon.ico") \
@@ -985,6 +1024,7 @@ def api_add_user():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     log.info("user added by %s: %s", me["email"], data.get("email"))
+    _bump()
     return _payload()
 
 
@@ -1004,6 +1044,7 @@ def api_del_user(uid):
             return jsonify({"error": "Нельзя удалить последнего администратора"}), 400
         c.execute("DELETE FROM users WHERE id = ?", (uid,))
     log.info("user removed by %s: %s", me["email"], victim["email"])
+    _bump()
     return _payload()
 
 
@@ -1159,6 +1200,7 @@ def _tg_handle_update(u):
                 "lat": lats[len(lats) // 2], "lng": lngs[len(lngs) // 2],
                 "ts": raw["ts"], "live": raw["live"], "acc": raw["acc"],
                 "hist": hist}
+            _bump()  # курьер двигается — карта обновится у всех
         else:
             # live-локация шлёт правки каждые несколько секунд — «не привязан»
             # отправляем не чаще раза в 30 минут на чат
@@ -1336,6 +1378,7 @@ def bind_courier(cid):
                      f"Привязано к курьеру «{c['name']}». Отправьте геолокацию "
                      "(скрепка → «Геолокация» или live-трансляция) — вы появитесь "
                      "на карте диспетчера.")
+            _bump()
             return _payload()
     return jsonify({"error": "Курьер не найден"}), 404
 
@@ -1348,6 +1391,7 @@ def unbind_courier(cid):
             c["tg_chat_id"] = ""
             c["tg_login"] = ""
             _persist_couriers()
+            _bump()
             return _payload()
     return jsonify({"error": "Курьер не найден"}), 404
 
@@ -1488,6 +1532,7 @@ def _patch_plan_after_assign(oids):
     plan["advice"] = None  # сценарии «ждать/не ждать» больше не соответствуют плану
     plan.pop("moved", None)
     _persist_meta()
+    _bump()  # выдача видна всем консолям сразу
     return True
 
 
@@ -1661,6 +1706,7 @@ def _compute_plan(mode="auto", advice=True):
                          for s in r["stops"]],
             }
             chosen["advice"] = advice_obj
+    _bump()  # план готов — сообщаем всем открытым консолям
     return STATE["plan"]
 
 
@@ -1682,6 +1728,7 @@ def _invalidate_plan(drop_plan=False):
         _persist_meta()
     except sqlite3.Error:
         pass
+    _bump()  # состояние изменилось — консоли обновятся сами
 
 
 def _days_param():
@@ -1815,6 +1862,7 @@ def plan_move():
     plan["moved"] = True
     log.info("plan move: %s -> %s (удлинение +%d мин)", oid, dst["courier_name"], best[0])
     _persist_meta()
+    _bump()
     return _payload()
 
 
@@ -2587,7 +2635,7 @@ if __name__ == "__main__":
     log.info("starting on %s:%s (auth=email, db=%s)", CFG["host"], CFG["port"], _db_path)
     try:
         from waitress import serve
-        serve(app, host=CFG["host"], port=CFG["port"], threads=8)
+        serve(app, host=CFG["host"], port=CFG["port"], threads=24)
     except ImportError:
         log.warning("waitress not installed — falling back to Flask dev server")
         app.run(host=CFG["host"], port=CFG["port"], debug=False, threaded=True)
