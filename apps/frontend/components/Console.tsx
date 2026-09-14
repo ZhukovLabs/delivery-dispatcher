@@ -59,12 +59,26 @@ export default function Console() {
     refetchOnWindowFocus: "always",
   });
 
-  // SSE-подписка: сервер пинает при каждом изменении состояния
+  // живые обновления: long-poll /api/rev — висит, пока состояние не изменится
+  // (кто-то из админов что-то сделал / курьер прислал геолокацию), тогда
+  // инвалидируем кэш и каждый браузер перезаказывает /api/state сам
   useEffect(() => {
-    const es = new EventSource("/api/stream");
-    const onPatch = () => { qc.invalidateQueries({ queryKey: ["state"] }); };
-    es.addEventListener("patch", onPatch);
-    return () => { es.removeEventListener("patch", onPatch); es.close(); };
+    let stop = false;
+    let rev = 0;
+    (async () => {
+      while (!stop) {
+        try {
+          const r = await fetch(`/api/rev?since=${rev}`);
+          if (r.status === 401) { location.assign("/login"); return; }
+          const d = await r.json();
+          if (d.rev > rev) {
+            rev = d.rev;
+            qc.invalidateQueries({ queryKey: ["state"] });
+          }
+        } catch { await new Promise(res => setTimeout(res, 3000)); }
+      }
+    })();
+    return () => { stop = true; };
   }, [qc]);
   const st = stData ?? null;
   const setSt = useCallback((s: AppState) => { qc.setQueryData(["state"], s); }, [qc]);

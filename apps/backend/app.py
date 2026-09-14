@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 
 import requests
-from flask import (Flask, Response, after_this_request, jsonify, redirect,
+from flask import (Flask, after_this_request, jsonify, redirect,
                    render_template, request, send_file, session, url_for)
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
@@ -959,28 +959,25 @@ def logout_api():
     return jsonify(ok=True)
 
 
-@app.get("/api/stream")
-def api_stream():
-    """SSE-поток изменений: событие patch при каждом _bump(), heartbeat 15 c."""
+@app.get("/api/rev")
+def api_rev():
+    """Long-poll версии состояния: висит до изменения (или 25 с), отдаёт rev.
+
+    Надёжнее SSE за буферизующими прокси: обычный запрос-ответ, потоков нет.
+    """
     if not _me():
-        return Response("unauthorized", 401, mimetype="text/plain")
-
-    def gen():
-        yield "retry: 3000\n\n"
-        last = STATE.get("rev", 0)
-        while True:
-            with _REV_LOCK:
-                _REV_LOCK.wait(timeout=15)
-            rev = STATE.get("rev", 0)
-            if rev != last:
-                last = rev
-                yield f"event: patch\ndata: {{\"rev\": {rev}}}\n\n"
-            else:
-                yield ": ping\n\n"  # держим соединение живым
-
-    return Response(gen(), mimetype="text/event-stream",
-                    headers={"Cache-Control": "no-cache",
-                             "X-Accel-Buffering": "no"})
+        return jsonify({"error": "Требуется вход"}), 401
+    try:
+        since = int(request.args.get("since", 0))
+    except ValueError:
+        since = 0
+    deadline = time.time() + 25
+    while time.time() < deadline:
+        with _REV_LOCK:
+            _REV_LOCK.wait(timeout=max(0.2, deadline - time.time()))
+        if STATE.get("rev", 0) > since:
+            break
+    return jsonify({"rev": STATE.get("rev", 0)})
 
 
 # ---------- live-рассылка: сервер сообщает клиентам, что состояние изменилось ----
