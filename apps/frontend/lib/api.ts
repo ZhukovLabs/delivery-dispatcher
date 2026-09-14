@@ -47,11 +47,12 @@ export interface AppState {
   cfg?: { tg?: boolean };
 }
 
-export async function api<T = AppState>(path: string, method = "GET", body?: unknown): Promise<T> {
+export async function api<T = AppState>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method,
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
   });
   if (res.status === 401 && typeof window !== "undefined") {
     window.location.href = "/login";

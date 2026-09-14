@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, fmtCoords, type AppState, type Order, type Route, type Advice } from "@/lib/api";
 import GeoInput, { type GeoItem } from "./GeoInput";
 
@@ -44,7 +45,25 @@ interface ToastState { msg: string; err?: boolean; act?: { label: string; fn: ()
 interface AskState { text: string; ok: string; danger: boolean; resolve: (v: boolean) => void; }
 
 export default function Console() {
-  const [st, setSt] = useState<AppState | null>(null);
+  /* ---------- состояние через TanStack Query: кэш, авто-опрос только когда план устарел, синхронизация по фокусу окна ---------- */
+  const qc = useQueryClient();
+  const { data: stData, error: stateErr, isPending: stLoading } = useQuery({
+    queryKey: ["state"],
+    queryFn: () => api<AppState>("/api/state"),
+    staleTime: 10000,
+    retry: 1,
+    refetchInterval: query => {
+      const d = query.state.data;
+      if (!d || document.hidden) return false;
+      const need = !!d.depot && d.orders.length > 0 &&
+        d.couriers.some(c => c.status !== "off") &&
+        (d.plan === null || !!d.plan?.stale);
+      return need ? 2500 : false;   // опрашиваем, пока бэкенд пересчитывает план; свежий план — тишина
+    },
+  });
+  const st = stData ?? null;
+  const setSt = useCallback((s: AppState) => { qc.setQueryData(["state"], s); }, [qc]);
+  const refresh = useCallback(async () => { await qc.invalidateQueries({ queryKey: ["state"] }); }, [qc]);
   const [tick, setTick] = useState(0); // ежеминутное обновление возраста/бейджей
   const [dark, setDark] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -85,9 +104,6 @@ export default function Console() {
   const [dragOverCourier, setDragOverCourier] = useState<string | null>(null);
   const [dragOverRoute, setDragOverRoute] = useState<string | null>(null);
 
-  const polls = useRef(0);
-  const seenSolvedAt = useRef<string | null>(null);
-
   const showToast = useCallback((msg: string, err = false, act?: ToastState["act"]) => {
     setToast({ msg, err, act });
     if (toastT.current) clearTimeout(toastT.current);
@@ -99,35 +115,9 @@ export default function Console() {
       setAsk({ text, ok: opts.ok || "Да", danger: !!opts.danger, resolve });
     }), []);
 
-  const refresh = useCallback(async () => {
-    const s = await api<AppState>("/api/state");
-    setSt(s);
-  }, []);
-
-  /* авто-пересчёт: план сброшен или устарел → тихо опрашиваем */
-  useEffect(() => {
-    if (!st) return;
-    const need = st.depot && st.orders.length &&
-      st.couriers.some(c => c.status !== "off") &&
-      (st.plan === null || st.plan.stale);
-    if (!need) { polls.current = 0; return; }
-    if (seenSolvedAt.current !== (st.plan?.solved_at ?? null)) {
-      seenSolvedAt.current = st.plan?.solved_at ?? null;
-      polls.current = 0;
-    }
-    const slow = polls.current >= 20;
-    polls.current += 1;
-    const t = setTimeout(async () => {
-      if (document.hidden) return;
-      try { await refresh(); } catch { polls.current = 0; }
-    }, slow ? 10000 : 2500);
-    return () => clearTimeout(t);
-  }, [st, refresh]);
-
   /* старт, тикер возраста, Ctrl+Z, тема, закрытие дедлайн-попапа по клику мимо */
   useEffect(() => {
     setDark(document.documentElement.classList.contains("dark"));
-    refresh().catch(e => showToast("Не удалось загрузить состояние: " + e.message, true));
     const iv = setInterval(() => { if (!document.hidden) setTick(t => t + 1); }, 60000);
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "z") return;
@@ -344,7 +334,10 @@ export default function Console() {
   }, [st?.plan?.solved_at]);
 
   if (!st) {
-    return <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#6d7688" }}>Загрузка…</div>;
+    const err = stateErr as Error | null;
+    return <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#6d7688" }}>
+      {err ? "Ошибка загрузки: " + err.message : stLoading ? "Загрузка…" : "Нет данных"}
+    </div>;
   }
 
   const me: NonNullable<AppState["me"]> = st.me || { id: "", email: "" };

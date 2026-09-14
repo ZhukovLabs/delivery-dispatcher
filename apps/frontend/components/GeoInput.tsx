@@ -1,6 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 
 export interface GeoItem { label: string; lat: number; lng: number; km?: number; }
 
@@ -13,17 +15,31 @@ interface GeoInputProps {
   inputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
-/** Поле адреса с подсказками геокодера (debounce 300 мс, кэш повторных запросов, стрелки/Enter/Esc). */
-const GEO_CACHE = new Map<string, GeoItem[]>();   // повторный ввод того же адреса — мгновенно, без сети
+/** Поле адреса с подсказками геокодера: debounce 300 мс, кэш TanStack Query (повтор — без сети), стрелки/Enter/Esc. */
 export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpty, inputRef }: GeoInputProps) {
   const [val, setVal] = useState("");
-  const [items, setItems] = useState<GeoItem[]>([]);
+  const [deb, setDeb] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const seq = useRef(0);
   const itemsRef = useRef<GeoItem[]>([]);
   const activeRef = useRef(-1);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDeb(val.trim()), 300);
+    return () => clearTimeout(t);
+  }, [val]);
+
+  const { data: items = [], isPending } = useQuery({
+    queryKey: ["geo", deb],
+    queryFn: async ({ signal }) => {
+      const list = await api<GeoItem[]>("/api/geocode?q=" + encodeURIComponent(deb), "GET", undefined, signal);
+      return (Array.isArray(list) ? list : []).slice(0, 5);
+    },
+    enabled: deb.length >= 3,
+    staleTime: 5 * 60_000,   // повторный ввод того же адреса — из кэша
+    gcTime: 30 * 60_000,
+    retry: 0,
+  });
   itemsRef.current = items;
   activeRef.current = active;
 
@@ -37,32 +53,9 @@ export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpt
 
   const onInput = (q: string) => {
     setVal(q);
+    setOpen(q.trim().length >= 3);
     onPicked(null, q); // пользователь правил текст — выбранная точка больше не актуальна
-    if (timer.current) clearTimeout(timer.current);
-    q = q.trim();
-    if (q.length < 3) { close(); return; }
-    const key = q.toLowerCase();
-    const cached = GEO_CACHE.get(key);
-    if (cached) { setItems(cached); setActive(-1); setOpen(true); return; }
-    const mySeq = ++seq.current;
-    timer.current = setTimeout(async () => {
-      try {
-        const res = await fetch("/api/geocode?q=" + encodeURIComponent(q), { headers: { Accept: "application/json" } });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "ошибка геокодера");
-        const list = (Array.isArray(data) ? data : []).slice(0, 5);
-        if (mySeq !== seq.current) return;          // пришёл ответ на устаревший запрос
-        if (GEO_CACHE.size > 40) GEO_CACHE.clear();
-        GEO_CACHE.set(key, list);
-        setItems(list);
-        setActive(-1);
-        setOpen(true);
-      } catch {
-        if (mySeq !== seq.current) return;
-        setItems([]);
-        setOpen(true);
-      }
-    }, 300);
+    if (q.trim().length < 3) close();
   };
 
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -93,18 +86,20 @@ export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpt
         onBlur={() => setTimeout(close, 150)}
       />
       <div className={"autolist" + (open ? " open" : "")}>
-        {items.length
-          ? items.map((it, i) => (
-            <div
-              key={i}
-              className={"opt" + (i === active ? " active" : "")}
-              onMouseDown={e => { e.preventDefault(); pick(it); }}
-            >
-              {it.label}
-              {it.km != null && <span className="opt-km">{it.km} км</span>}
-            </div>
-          ))
-          : <div className="muted">ничего не найдено</div>}
+        {isPending
+          ? <div className="muted">ищем…</div>
+          : items.length
+            ? items.map((it, i) => (
+              <div
+                key={i}
+                className={"opt" + (i === active ? " active" : "")}
+                onMouseDown={e => { e.preventDefault(); pick(it); }}
+              >
+                {it.label}
+                {it.km != null && <span className="opt-km">{it.km} км</span>}
+              </div>
+            ))
+            : <div className="muted">ничего не найдено</div>}
       </div>
     </div>
   );
