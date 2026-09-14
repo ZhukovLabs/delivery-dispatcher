@@ -868,11 +868,6 @@ function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOver
   if (plan.provider === "ORS") prov += ors.paused ? " · пауза" : ` · квота ${ors.used ?? "?"}/${ors.soft_limit ?? "?"}`;
   if (plan.unassigned) prov += ` · без маршрута: ${plan.unassigned}`;
 
-  const tlSpan = Math.max(15, plan.last_delivery_min + 5);
-  const tlStep = tlSpan > 90 ? 60 : 30;
-  const ticks: number[] = [];
-  for (let m = 0; m <= tlSpan; m += tlStep) ticks.push(m);
-
   return (
     <>
       <div className="plan-top">
@@ -886,29 +881,6 @@ function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOver
       </div>
 
       {plan.advice && <AdviceCard a={plan.advice} busy={busyMode} onMode={onMode} />}
-
-      <div className="tl" title="Шкала от момента расчёта: полоски = время в развозке, отступ слева = задержка старта">
-        {ticks.map(m => (
-          <span key={m}>
-            <i style={{ position: "absolute", top: 8, left: `${(m / tlSpan) * 100}%`, width: 1, height: "calc(100% - 12px)", background: "#d6dce6" }} title={`+${m} мин`} />
-            <b style={{ left: `${(m / tlSpan) * 100}%` }}>
-              {clock(m).slice(0, 2)}{m % 60 === 0 ? ":" + clock(m).slice(3) : ""}
-            </b>
-          </span>
-        ))}
-        {plan.routes.map(r => (
-          <div className="tl-row" key={r.courier_id}>
-            <s>{r.courier_name}</s>
-            <p>
-              {r.trips.map((tr, i) => (
-                <u key={i}
-                  style={{ left: `${(tr.start_delay_min / tlSpan) * 100}%`, width: `${(tr.total_min - tr.start_delay_min) / tlSpan * 100}%`, background: r.color }}
-                  title={`${r.courier_name}: ${tr.stops.length} заказ(ов) · ${tr.start_clock || ""}→${tr.end_clock || ""}`} />
-              ))}
-            </p>
-          </div>
-        ))}
-      </div>
 
       {plan.routes.map((r, ri) => {
         const giveIds = r.stops.map(s => s.order_id).filter(id => {
