@@ -24,12 +24,12 @@ const pin = (text: string, color: string) =>
 
 const SCOOTER_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="17.2" r="2.1"/><circle cx="18.6" cy="17.2" r="2.1"/><path d="M7.6 17.2h6.3l1-7.4h1.7"/><path d="M14.9 9.8h2.1l1.7 7.4"/><path d="M4.6 8.2h3.4l.9 3.6"/></svg>`;
 
-const courierPin = (color: string, live: boolean) =>
+const courierPin = (color: string, live: boolean, name: string) =>
   L.divIcon({
     className: "courier-marker",
-    iconSize: [38, 38],
-    iconAnchor: [19, 19],  // центр маркера = сама позиция GPS
-    html: `<div style="--c:${color}">${live ? '<span class="cm-pulse"></span>' : ""}<span class="cm-body">${SCOOTER_SVG}</span></div>`,
+    iconSize: [46, 46],
+    iconAnchor: [23, 23],  // центр маркера = сама позиция GPS
+    html: `<div style="--c:${color}"><span class="cm-glow"></span>${live ? '<span class="cm-pulse"></span>' : ""}<span class="cm-body">${SCOOTER_SVG}</span><span class="cm-name">${name}</span></div>`,
   });
 
 const posAge = (ts: number) => {
@@ -164,7 +164,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         <Marker
           key={`cr-${c.id}`}
           position={[c.pos!.lat, c.pos!.lng]}
-          icon={courierPin(c.color || "#e8482b", !!c.pos?.live)}
+          icon={courierPin(c.color || "#e8482b", !!c.pos?.live, c.name)}
           zIndexOffset={900}
         >
           <Popup autoPan={false}>
