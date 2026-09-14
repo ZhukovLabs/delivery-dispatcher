@@ -70,7 +70,7 @@ html.dark .fit-btn:hover{background:#283548}
 .addnote b{color:var(--ok);font-weight:600}
 .autowrap{position:relative;flex:1;min-width:0}
 .autowrap input{width:100%}
-.autolist{position:absolute;top:100%;left:0;right:0;z-index:1400;background:#fff;border:1px solid var(--line);border-radius:8px;margin-top:3px;max-height:250px;overflow:auto;box-shadow:0 10px 28px rgba(20,30,50,.16);display:none;color:var(--ink)}
+.autolist{position:fixed;width:460px;max-width:calc(100vw - 16px);z-index:1400;background:#fff;border:1px solid var(--line);border-radius:8px;margin-top:0;max-height:250px;overflow:auto;box-shadow:0 10px 28px rgba(20,30,50,.16);display:none;color:var(--ink)}
 .autolist.open{display:block}
 .autolist .opt{padding:8px 10px;font-size:12.5px;cursor:pointer;border-bottom:1px solid #f1f3f7;line-height:1.35;display:flex;gap:8px;align-items:baseline}
 .autolist .opt-km{margin-left:auto;flex:none;font-size:11px;color:var(--mut);white-space:nowrap}

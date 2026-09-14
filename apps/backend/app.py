@@ -12,6 +12,8 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 
@@ -1758,7 +1760,7 @@ def overpass_street_houses(base, clat, clng, alt=None):
     for attempt in range(2):
         for url in OVERPASS_URLS:
             try:
-                r = requests.post(url, data={"data": q}, headers=UA, timeout=25)
+                r = requests.post(url, data={"data": q}, headers=UA, timeout=8)
                 r.raise_for_status()
                 answered = True
                 for e in r.json().get("elements", []):
@@ -1836,14 +1838,24 @@ def _place_label(street, place, hn="", is_street=True):
     return name or place or "точка"
 
 
+_NOM_LAST = [0.0]  # темп 1 запрос/сек к Nominatim: спим только остаток, а не вслепую
+_GEO_CACHE = OrderedDict()  # готовые ответы геокодера: адреса не двигаются
+_GEO_CACHE_MAX = 300
+_GEO_TTL = 24 * 3600
+
+
 def search_nominatim(q, lat, lng, radius_km, bounded=True):
+    wait = 1.05 - (time.monotonic() - _NOM_LAST[0])
+    if wait > 0:
+        time.sleep(wait)
+    _NOM_LAST[0] = time.monotonic()
     params = {"q": q, "format": "json", "limit": 12, "addressdetails": 1,
               "accept-language": "ru", "countrycodes": "by"}
     if bounded:
         params["viewbox"] = _bbox(lat, lng, radius_km)
         params["bounded"] = 1
     resp = requests.get("https://nominatim.openstreetmap.org/search",
-                        params=params, headers=UA, timeout=10)
+                        params=params, headers=UA, timeout=7)
     resp.raise_for_status()
     out = []
     for it in resp.json():
@@ -1869,7 +1881,7 @@ def search_photon(q, lat, lng, radius_km=None):
     if radius_km:
         params["bbox"] = _bbox(lat, lng, radius_km)
     resp = requests.get("https://photon.komoot.io/api",
-                        params=params, headers=UA, timeout=10)
+                        params=params, headers=UA, timeout=6)
     resp.raise_for_status()
     out = []
     for f in resp.json().get("features", []):
@@ -1947,7 +1959,7 @@ def _fill_street_index(network=True):
     acc = {}  # lower -> [shown, sum_lat, sum_lng, cnt]
     for url in (OVERPASS_URLS if network else []):
         try:
-            r = requests.post(url, data={"data": q}, headers=UA, timeout=60)
+            r = requests.post(url, data={"data": q}, headers=UA, timeout=15)
             r.raise_for_status()
             for el in r.json().get("elements", []):
                 tags = el.get("tags") or {}
@@ -2025,26 +2037,41 @@ def geocode():
     if len(q) < 2:
         return jsonify([])
     lat, lng = _geocode_center()
+    gkey = (q.lower(), round(lat, 3), round(lng, 3))
+    hit = _GEO_CACHE.get(gkey)
+    if hit and time.time() - hit[0] < _GEO_TTL:
+        return jsonify(hit[1])
     qnum = _extract_house(q)
     q_words = _tok(re.sub(r"\d+[а-яa-z]*", " ", q))  # слова запроса без номера дома
     try:
-        v1, v2 = search_nominatim(q, lat, lng, 25.0), []
+        # два геокодера — параллельно; для запроса с домом параллельно же
+        # прогреваем кэш домов вероятной улицы (Overpass медленный, но теперь
+        # он не блокирует: к моменту интерполяции кэш уже горячий)
+        with ThreadPoolExecutor(3) as ex:
+            f_nom = ex.submit(search_nominatim, q, lat, lng, 25.0)
+            f_ph = ex.submit(search_photon, q, lat, lng)
+            f_houses = (ex.submit(overpass_street_houses, _strip_street_type(q_words[-1]), lat, lng)
+                        if qnum and q_words else None)
+            v1 = f_nom.result()
+            try:
+                v2 = f_ph.result()
+            except Exception:  # noqa: BLE001
+                v2 = []
+            if f_houses is not None:
+                try:
+                    f_houses.result()
+                except Exception:  # noqa: BLE001
+                    pass
         # «еремино, школьная 13» Nominatim в таком порядке не находит —
         # пробуем «школьная 13, еремино» (улица+дом вперёд)
         if qnum and len(q_words) >= 2 and not v1:
-            time.sleep(1.1)
             v1 = search_nominatim(f"{q_words[-1]} {qnum}, {' '.join(q_words[:-1])}", lat, lng, 25.0)
-        try:
-            v2 = search_photon(q, lat, lng)
-        except Exception:  # noqa: BLE001
-            pass
 
         def dist_of(it):
             return haversine_km({"lat": lat, "lng": lng}, {"lat": it["lat"], "lng": it["lng"]})
 
         # в городе мало совпадений — ищем по всей Гомельской области
         if sum(1 for it in v1 + v2 if dist_of(it) <= 25) < 4:
-            time.sleep(1.1)  # политика Nominatim: не чаще запроса в секунду
             v3 = search_nominatim(q, lat, lng, 0, bounded=False)
         else:
             v3 = []
@@ -2144,7 +2171,6 @@ def geocode():
                         scored.insert(0, {"label": _place_label(base, city, qnum, True) + suffix,
                                           "lat": hlat, "lng": hlng, "_s": -1})
         if not scored and len(q_words) > 1:  # «бобовичи советская» -> «бобовичи»
-            time.sleep(1.1)
             try:
                 v4 = search_nominatim(" ".join(q_words[:-1]), lat, lng, 25.0, bounded=False)
             except Exception:  # noqa: BLE001
@@ -2163,7 +2189,12 @@ def geocode():
             scored = [{"label": it["label"], "lat": it["lat"], "lng": it["lng"], "_s": 99}
                       for it in search_nominatim(q, lat, lng, 25.0, bounded=False)[:5]]
         scored.sort(key=lambda x: x["_s"])
-        return jsonify([{k: v for k, v in x.items() if k != "_s"} for x in scored[:7]])
+        payload = [{k: v for k, v in x.items() if k != "_s"} for x in scored[:7]]
+        _GEO_CACHE[gkey] = (time.time(), payload)
+        _GEO_CACHE.move_to_end(gkey)
+        while len(_GEO_CACHE) > _GEO_CACHE_MAX:
+            _GEO_CACHE.popitem(last=False)
+        return jsonify(payload)
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": f"Геокодер недоступен: {e}"}), 502
 

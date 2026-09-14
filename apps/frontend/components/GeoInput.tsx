@@ -23,11 +23,36 @@ export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpt
   const [active, setActive] = useState(-1);
   const itemsRef = useRef<GeoItem[]>([]);
   const activeRef = useRef(-1);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setDeb(val.trim()), 300);
     return () => clearTimeout(t);
   }, [val]);
+
+  // дропдаун шире поля и не обрезается скроллящимися панелями: fixed-позиция от input
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const el = wrapRef.current?.querySelector("input");
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const width = Math.min(460, window.innerWidth - 16);
+      setPos({
+        top: Math.round(r.bottom + 4),
+        left: Math.max(8, Math.min(Math.round(r.left), window.innerWidth - 8 - width)),
+      });
+    };
+    place();
+    const scrollOpts = { capture: true, passive: true } as AddEventListenerOptions;
+    window.addEventListener("scroll", place, scrollOpts);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, scrollOpts);
+      window.removeEventListener("resize", place);
+    };
+  }, [open, deb]);
 
   const { data: items = [], isPending } = useQuery({
     queryKey: ["geo", deb],
@@ -73,7 +98,7 @@ export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpt
   };
 
   return (
-    <div className="autowrap">
+    <div className="autowrap" ref={wrapRef}>
       <input
         ref={inputRef}
         type="text"
@@ -85,7 +110,10 @@ export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpt
         onKeyDown={onKey}
         onBlur={() => setTimeout(close, 150)}
       />
-      <div className={"autolist" + (open ? " open" : "")}>
+      <div
+        className={"autolist" + (open ? " open" : "")}
+        style={pos ? { top: pos.top, left: pos.left } : undefined}
+      >
         {isPending
           ? <div className="muted">ищем…</div>
           : items.length
