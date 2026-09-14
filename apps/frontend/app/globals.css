@@ -356,8 +356,10 @@ html.dark .adv-verdict.no{background:#3a2114;color:#f0a56a}
 html.dark .adv-held{color:#c9b083;border-color:#4d3f1c}
 html.dark .chip-green{background:#17301f;color:#5ad58f}
 html.dark .chip-amber{background:#33290f;color:#e3b04b}
-html.dark .leaflet-popup-content-wrapper,html.dark .leaflet-popup-tip{background:#212b3b;color:#dde4ee}
-html.dark .leaflet-tile{filter:brightness(.75) contrast(1.08) saturate(.65)}
+html.dark .col-map canvas{filter:brightness(.78) contrast(1.06) saturate(.68)}
+.ymaps-b-balloon .ymaps-b-balloon__content, .ymaps-b-balloon__content *{font-family:inherit}
+.ymaps-2-1-79-b-balloon__content{font-size:13px;line-height:1.45}
+.map-err{display:flex;align-items:center;justify-content:center;height:100%;color:#8b95a8;font-size:14px;padding:20px;text-align:center}
 html.dark .wk-bar{background:#273040}
 html.dark .hrow{border-bottom-color:#232d3f}
 html.dark .depot-edit{background:var(--panel)}
