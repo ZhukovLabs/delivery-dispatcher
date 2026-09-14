@@ -829,6 +829,7 @@ _LOGIN_LOCK_SEC = 60
 @app.post("/login")
 def login():
     data = request.get_json(silent=True) or {}
+    wants_json = request.accept_mimetypes.best == "application/json"
     email = (request.form.get("email") or data.get("email") or "").strip().lower()
     pwd = request.form.get("password") or data.get("password") or ""
     ip = request.remote_addr or "?"
@@ -839,6 +840,8 @@ def login():
     if fails and fails[1] > now:
         wait = int(fails[1] - now) + 1
         log.warning("login locked: %s (%ds left)", ip, wait)
+        if wants_json:
+            return jsonify(error=f"Слишком много попыток входа. Подождите {wait} с"), 429
         return render_template("login.html",
                                error=f"Слишком много попыток входа. Подождите {wait} с"), 429
     with _db_lock, _db() as c:
@@ -848,11 +851,15 @@ def login():
         session.permanent = True  # сессия живёт 12 ч, а не до закрытия браузера
         _LOGIN_FAILS.pop(ip, None)
         log.info("login ok: %s", email)
+        if wants_json:
+            return jsonify(ok=True)
         return redirect(url_for("index"))
     time.sleep(0.3)  # тормозим перебор паролей
     n = (fails[0] + 1) if fails else 1
     _LOGIN_FAILS[ip] = [n, now + _LOGIN_LOCK_SEC] if n >= _LOGIN_MAX_FAILS else [n, 0]
     log.warning("login failed: %s (attempt %d from %s)", email or "?", n, ip)
+    if wants_json:
+        return jsonify(error="Неверный email или пароль"), 401
     return render_template("login.html", error="Неверный email или пароль"), 401
 
 
@@ -866,12 +873,26 @@ def login_page():
 @app.get("/logout")
 def logout():
     session.clear()
+    if request.accept_mimetypes.best == "application/json":
+        return jsonify(ok=True)
     return redirect(url_for("login_page"))
+
+
+@app.post("/api/login")
+def login_api():
+    """Алиас для SPA (Next.js проксирует /api/* сюда)."""
+    return login()
+
+
+@app.get("/api/logout")
+def logout_api():
+    session.clear()
+    return jsonify(ok=True)
 
 
 @app.before_request
 def _guard():
-    if request.path in ("/login", "/health", "/favicon.ico") \
+    if request.path in ("/login", "/api/login", "/health", "/favicon.ico") \
             or request.path.startswith("/static/"):
         return None
     if _me():
