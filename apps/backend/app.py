@@ -28,7 +28,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 CFG = {"ors_key": "", "host": "127.0.0.1", "port": 5050,
         "admin_email": "admin@local", "admin_password": "admin",
-        "tg_bot_token": "",
+        "tg_bot_token": "", "tg_poll": 1,
         "db_path": os.path.join(BASE_DIR, "dispatcher.db")}
 
 _cp = configparser.ConfigParser()
@@ -43,6 +43,10 @@ if _cp.read(os.path.join(BASE_DIR, "config.ini"), encoding="utf-8"):
     CFG["admin_email"] = (_s.get("admin_email", "") or "admin@local").strip().lower()
     CFG["admin_password"] = _s.get("admin_password", "") or "admin"
     CFG["tg_bot_token"] = _s.get("tg_bot_token", "").strip()
+    try:
+        CFG["tg_poll"] = _s.getint("tg_poll", 1)
+    except ValueError:
+        pass
     _db = _s.get("db_path", "").strip()
     if _db:
         CFG["db_path"] = _db if os.path.isabs(_db) else os.path.join(BASE_DIR, _db)
@@ -50,6 +54,13 @@ if _cp.read(os.path.join(BASE_DIR, "config.ini"), encoding="utf-8"):
 # Окружение перекрывает config.ini (деплой в облако: Render и т.п.)
 CFG["ors_key"] = os.environ.get("ORS_KEY", "").strip() or CFG["ors_key"]
 CFG["tg_bot_token"] = os.environ.get("TG_BOT_TOKEN", "").strip() or CFG["tg_bot_token"]
+# tg_poll=0 — этот инстанс НЕ слушает бота (когда бот занят другим сервером,
+# например локальный + облачный одновременно; Telegram отдаёт getUpdates одному)
+if os.environ.get("TG_POLL", "").strip():
+    try:
+        CFG["tg_poll"] = 1 if os.environ["TG_POLL"].strip() not in ("0", "false", "no") else 0
+    except ValueError:
+        pass
 CFG["admin_email"] = (os.environ.get("ADMIN_EMAIL", "").strip() or CFG["admin_email"]).lower()
 CFG["admin_password"] = os.environ.get("ADMIN_PASSWORD", "").strip() or CFG["admin_password"]
 if os.environ.get("PORT", "").strip():  # PaaS выдаёт порт через PORT
@@ -88,6 +99,7 @@ STATE = {
     # Telegram: кто писал боту (для привязки), последние локации курьеров, курсор getUpdates
     "tg_seen": {},       # chat_id -> {"chat_id", "login", "ts"}
     "tg_pos": {},        # chat_id -> {"lat", "lng", "ts", "live"}
+    "tg_nagged": {},     # chat_id -> ts последнего «не привязан» (антиспам live-правок)
     "tg_offset": 0,
     "tg_bot": "",        # @username бота (для подсказок в интерфейсе)
 }
@@ -1110,9 +1122,14 @@ def _tg_handle_update(u):
                 "ts": raw["ts"], "live": raw["live"], "acc": raw["acc"],
                 "hist": hist}
         else:
-            _tg_send(chat_id,
-                     f"Вас ещё не привязали к курьеру. Сообщите администратору "
-                     f"ваш ID: {chat_id}")
+            # live-локация шлёт правки каждые несколько секунд — «не привязан»
+            # отправляем не чаще раза в 30 минут на чат
+            now_ts = time.time()
+            if now_ts - STATE["tg_nagged"].get(chat_id, 0) > 1800:
+                STATE["tg_nagged"][chat_id] = now_ts
+                _tg_send(chat_id,
+                         f"Вас ещё не привязали к курьеру. Сообщите администратору "
+                         f"ваш ID: {chat_id}")
     elif (msg.get("text") or "").strip().startswith("/start"):
         _tg_send(chat_id,
                  "Привет! Отправьте геолокацию (скрепка → «Геолокация») или "
@@ -1154,6 +1171,10 @@ def _tg_poll_loop():
 def _tg_start_polling():
     """Запуск поллера при старте, если задан токен бота."""
     if not CFG["tg_bot_token"]:
+        return
+    if not CFG["tg_poll"]:
+        log.info("tg bot: поллер выключен (tg_poll=0) — геолокации слушает "
+                 "другой сервер")
         return
     try:
         me = requests.get(_tg_api("getMe"), timeout=10).json().get("result") or {}
