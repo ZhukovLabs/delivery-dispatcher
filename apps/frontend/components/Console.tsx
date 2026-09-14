@@ -642,12 +642,21 @@ export default function Console() {
                               }}>✕</button>
                           </span>
                         </div>
-                        {c.status === "away" && (
-                          <div className="c-row2">⏱ вернётся через
+                        {c.status === "away" && (c.geo
+                          ? <div className="c-row2" title="Возврат рассчитан по живой геолокации курьера (обновляется автоматически)">
+                              {c.geo.at_depot
+                                ? "📍 у депо — готов грузиться"
+                                : `📍 вернётся ≈${c.geo.back_min} мин (по гео)`}
+                            </div>
+                          : <div className="c-row2">⏱ вернётся через
                             <input className="backMin" type="number" min={0} max={480} defaultValue={c.back_min ?? 15}
-                              title="Через сколько минут вернётся на базу" aria-label="Возврат на базу, минут"
+                              title="Через сколько минут вернётся на базу (привяжите Telegram — будет считаться сам)" aria-label="Возврат на базу, минут"
                               onChange={e => void mutate("PATCH", "/api/couriers/" + c.id, { back_min: +e.target.value || 0 })} />
                             мин
+                          </div>)}
+                        {c.geo?.at_order && (
+                          <div className="c-row2" title="Курьер сейчас стоит у этого заказа">
+                            🛵 у заказа: {c.geo.at_order}
                           </div>
                         )}
                         {st.cfg?.tg && (

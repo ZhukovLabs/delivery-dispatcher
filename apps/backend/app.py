@@ -621,8 +621,16 @@ def solve_plan(include_away=True, with_geometry=True):
         auto_flag[i] = bool(auto_prio > 0 and age_min >= auto_prio)
         eff_prio[i] = bool(o.get("prio") or auto_flag[i])
 
-    avail = {c["id"]: (max(0, int(c.get("back_min", 15))) if c["status"] == "away" else 0)
-             for c in couriers}
+    def _start_delay(c):
+        """Когда курьер сможет выехать с депо с новой партией заказов."""
+        if c["status"] != "away":
+            return 0
+        g = _courier_geo(c, depot)
+        if g:  # живая гео точнее ручной оценки
+            return g["back_min"]
+        return max(0, int(c.get("back_min", 15)))
+
+    avail = {c["id"]: _start_delay(c) for c in couriers}
     trips_by_cid = {}
     remaining = list(range(1, len(points)))
 
@@ -1023,6 +1031,50 @@ def _tg_send(chat_id, text):
         log.warning("tg sendMessage: %s", e)
 
 
+TG_GEO_FRESH = 600      # гео свежая для расчётов <= 10 мин
+TG_GEO_AT_PLACE = 0.15  # ближе 150 м = «на месте» (депо/заказ)
+
+
+def _courier_geo(c, depot, now=None):
+    """Гео-данные курьера для расчётов: сглаженная позиция + оценка возврата на депо.
+
+    Возвращает None, если привязки нет или гео старше TG_GEO_FRESH.
+    back_min - за сколько курьер физически доедет до депо (анти-прыжки уже
+    применены медианой при приёме точки, здесь только расстояние).
+    """
+    pos = STATE["tg_pos"].get(c.get("tg_chat_id") or "")
+    if not pos or not depot:
+        return None
+    now = now or time.time()
+    age = now - pos["ts"]
+    if age > TG_GEO_FRESH:
+        return None
+    g = {"lat": pos["lat"], "lng": pos["lng"], "age_min": int(age // 60),
+         "live": bool(pos.get("live"))}
+    km = haversine_km(pos, depot)
+    if km <= TG_GEO_AT_PLACE:
+        g["at_depot"] = True
+        g["back_min"] = 0
+    else:
+        speed = max(5.0, float(STATE["settings"].get("speed_kmh", 60)))
+        g["at_depot"] = False
+        g["back_min"] = int(min(480, max(1, round(
+            km * ROAD_FACTOR / speed * 60))))
+    # стоит ли курьер прямо сейчас у одного из своих выданных заказов
+    best, best_km = None, None
+    for o in STATE["orders"]:
+        if (o.get("status") or "ready") != "out":
+            continue
+        if o.get("assigned") and o["assigned"] != c.get("id"):
+            continue
+        d = haversine_km(pos, o)
+        if d <= TG_GEO_AT_PLACE and (best_km is None or d < best_km):
+            best, best_km = o["address"], d
+    if best:
+        g["at_order"] = best
+    return g
+
+
 def _tg_handle_update(u):
     """Один апдейт от Telegram: текст (/start) или геолокация (в т.ч. live)."""
     msg = u.get("message") or u.get("edited_message") or {}
@@ -1043,10 +1095,20 @@ def _tg_handle_update(u):
     loc = msg.get("location")
     if loc:
         if courier:
+            raw = {"lat": loc["latitude"], "lng": loc["longitude"],
+                   "ts": time.time(), "live": bool(loc.get("live_period")),
+                   "acc": loc.get("horizontal_accuracy") or 0}
+            # анти-дребезг: буфер последних точек, сглаживание медианой
+            hist = STATE["tg_pos"].get(chat_id, {}).get("hist", [])
+            hist = [h for h in hist if raw["ts"] - h["ts"] <= 600][-4:]
+            hist.append(raw)
+            recent = [h for h in hist if raw["ts"] - h["ts"] <= 600][-3:]
+            lats = sorted(h["lat"] for h in recent)
+            lngs = sorted(h["lng"] for h in recent)
             STATE["tg_pos"][chat_id] = {
-                "lat": loc["latitude"], "lng": loc["longitude"],
-                "ts": time.time(), "live": bool(loc.get("live_period")),
-                "acc": loc.get("horizontal_accuracy") or 0}
+                "lat": lats[len(lats) // 2], "lng": lngs[len(lngs) // 2],
+                "ts": raw["ts"], "live": raw["live"], "acc": raw["acc"],
+                "hist": hist}
         else:
             _tg_send(chat_id,
                      f"Вас ещё не привязали к курьеру. Сообщите администратору "
@@ -1099,7 +1161,10 @@ def _payload():
         cc = dict(c)
         pos = STATE["tg_pos"].get(c.get("tg_chat_id") or "")
         if pos and now - pos["ts"] < TG_POS_TTL:
-            cc["pos"] = pos
+            cc["pos"] = {k: v for k, v in pos.items() if k != "hist"}
+        geo = _courier_geo(c, STATE.get("depot"), now)
+        if geo:
+            cc["geo"] = geo
         couriers.append(cc)
     st = {k: v for k, v in STATE.items()
           if k not in ("tg_seen", "tg_pos", "tg_offset")}

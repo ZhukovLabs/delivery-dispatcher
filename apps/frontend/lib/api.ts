@@ -1,9 +1,10 @@
 export interface Depot { address: string; lat: number; lng: number; }
 export interface CourierPos { lat: number; lng: number; ts: number; live?: boolean; acc?: number; }
+export interface CourierGeo { lat: number; lng: number; age_min: number; back_min: number; at_depot: boolean; live?: boolean; at_order?: string; }
 export interface Courier {
   id: string; name: string; status: "base" | "away" | "off";
   color?: string; back_min?: number; tg_chat_id?: string; tg_login?: string;
-  pos?: CourierPos;
+  pos?: CourierPos; geo?: CourierGeo;
 }
 export interface Order {
   id: string; address: string; lat: number; lng: number;
