@@ -6,14 +6,37 @@
 дорогам: OpenRouteService, запасной вариант OSRM, на крайний случай оценка
 по прямой.
 
+## Структура (монорепозиторий)
+
+```
+apps/backend/   Flask + OR-Tools: JSON API, расчёт, SQLite (python app.py)
+apps/frontend/  Next.js: интерфейс диспетчера (npm run start)
+```
+
+Бэкенд можно использовать и без фронтенда: его встроенная страница
+(templates/) остаётся рабочей.
+
 ## Установка и запуск
 
 ```
+rem 1. Бэкенд (из apps/backend):
+cd apps/backend
 pip install -r requirements.txt
-python app.py          # или двойной клик по run.bat
+python app.py            # или двойной клик по run.bat, http://127.0.0.1:5050
+
+rem 2. Фронтенд (из apps/frontend, Node 20+):
+cd apps/frontend
+npm install
+npm run build
+npm run start            # http://127.0.0.1:3000
 ```
 
-Откроется на http://127.0.0.1:5050
+Фронтенд ходит в API через прокси (`/api/*` → `BACKEND_URL`, по умолчанию
+`http://127.0.0.1:5050`), куки общие. Для продакшена фронтенду задайте
+`BACKEND_URL` с адресом бэкенда.
+
+Открывать http://127.0.0.1:3000 (новый интерфейс) или
+http://127.0.0.1:5050 (встроенный).
 
 ## Настройка (config.ini)
 
