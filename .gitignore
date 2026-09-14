@@ -1,0 +1,7 @@
+config.ini
+dispatcher.db
+dispatcher.log*
+streets_cache.json
+__pycache__/
+*.pyc
+.env

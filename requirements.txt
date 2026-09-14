@@ -1,0 +1,4 @@
+flask>=3.0
+requests>=2.31
+ortools>=9.8
+waitress>=3.0

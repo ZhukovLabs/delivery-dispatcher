@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Отчёт за {{ today }}</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.45 "Segoe UI", system-ui, sans-serif; color: #1c2430; margin: 32px auto; max-width: 780px; background: #fff; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .sub { color: #6b7684; font-size: 12.5px; margin-bottom: 18px; }
+  .grid { display: flex; gap: 12px; margin-bottom: 22px; flex-wrap: wrap; }
+  .kpi { flex: 1 1 140px; border: 1px solid #e3e8ef; border-radius: 10px; padding: 12px 14px; }
+  .kpi b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .kpi span { color: #6b7684; font-size: 12px; }
+  h2 { font-size: 14px; margin: 20px 0 8px; color: #39424e; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; color: #6b7684; font-weight: 600; border-bottom: 1px solid #dfe5ec; padding: 5px 8px; }
+  td { border-bottom: 1px solid #eef1f5; padding: 5px 8px; vertical-align: top; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ok { color: #0e7a3d; } .no { color: #b3261e; }
+  .note { color: #6b7684; font-size: 12px; margin-top: 20px; }
+  .cour { display: inline-block; background: #f1f4f9; border-radius: 12px; padding: 2px 10px; margin: 0 6px 6px 0; font-size: 12.5px; }
+  @media print { body { margin: 0; } .kpi { break-inside: avoid; } tr { break-inside: avoid; } }
+</style>
+</head>
+<body>
+  <h1>Отчёт о доставке за {{ today }}</h1>
+  <div class="sub">Сформирован в {{ now }} · Диспетчер доставки · печать: Ctrl+P (сохранить как PDF)</div>
+
+  {% set s = hist.summary %}
+  <div class="grid">
+    <div class="kpi"><b>{{ s.delivered }}</b><span>выдано (доставлено)</span></div>
+    <div class="kpi"><b>{{ s.cancelled }}</b><span>отменено</span></div>
+    <div class="kpi"><b>{{ s.avg_cycle_min if s.avg_cycle_min is not none else "–" }}{% if s.avg_cycle_min is not none %} мин{% endif %}</b><span>средний цикл заказа</span></div>
+  </div>
+
+  {% set couriers = hist.rows | map(attribute="courier") | reject("in", ["", None]) | unique | list %}
+  <h2>Курьеры</h2>
+  {% if couriers %}
+    <div>
+      {% for c in couriers %}
+      {% set crows = hist.rows | selectattr("courier", "equalto", c) | list %}
+      {% set cd = crows | selectattr("outcome", "equalto", "delivered") | list %}
+      <span class="cour"><b>{{ c }}</b> · выдано за смену {{ cd | length }}</span>
+      {% endfor %}
+    </div>
+  {% else %}<p class="note">Сегодня доставок не было.</p>{% endif %}
+
+  <h2>Заказы дня ({{ hist.rows | length }})</h2>
+  <table>
+    <tr><th>Время</th><th>Адрес</th><th>Курьер</th><th>Дедлайн</th><th>Исход</th><th>Цикл</th></tr>
+    {% for r in hist.rows %}
+    <tr>
+      <td class="num">{{ (r.closed_at or "")[11:16] }}</td>
+      <td>{{ r.address }}</td>
+      <td>{{ r.courier or "–" }}</td>
+      <td class="num">{{ r.deadline or "–" }}</td>
+      <td class="{{ "ok" if r.outcome == "delivered" else "no" }}">{{ "выдан" if r.outcome == "delivered" else "отменён" }}</td>
+      <td class="num">{{ (r.cycle_min ~ " мин") if r.cycle_min is not none else "–" }}</td>
+    </tr>
+    {% endfor %}
+    {% if not hist.rows %}<tr><td colspan="6" class="note">Нет записей.</td></tr>{% endif %}
+  </table>
+
+  {% if plan and plan.routes %}
+  <h2>Неразобранные заказы на момент отчёта</h2>
+  <table>
+    <tr><th>Курьер</th><th>Маршрут</th></tr>
+    {% for r in plan.routes %}
+    <tr>
+      <td>{{ r.courier_name }}{% if r.status == "away" %} (следующим){% endif %}</td>
+      <td>{% for s in r.stops %}{{ s.address }}{% if not loop.last %} → {% endif %}{% endfor %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <p class="note">Цикл заказа: от добавления в очередь до отметки «выдан».</p>
+</body>
+</html>
