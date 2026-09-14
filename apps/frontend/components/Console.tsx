@@ -48,8 +48,7 @@ interface AskState { text: string; ok: string; danger: boolean; resolve: (v: boo
 export default function Console() {
   /* ---------- состояние через TanStack Query: кэш + синхронизация по фокусу окна.
      План считается ТОЛЬКО по кнопке «Рассчитать». Живые обновления (несколько
-     админов, геолокации курьеров) приходят по SSE /api/stream: событие patch
-     инвалидирует кэш — каждый браузер перезаказывает /api/state сам. ---------- */
+     админов, геолокации курьеров) — long-poll /api/rev ниже. ---------- */
   const qc = useQueryClient();
   const { data: stData, error: stateErr, isPending: stLoading } = useQuery({
     queryKey: ["state"],
