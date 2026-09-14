@@ -1026,7 +1026,7 @@ def _tg_send(chat_id, text):
     """Исходящее сообщение курьеру (ошибки не критичны — молча в лог)."""
     try:
         requests.post(_tg_api("sendMessage"),
-                      json={"chat_id": chat_id, "text": text}, timeout=10)
+                      json={"chat_id": chat_id, "text": text}, timeout=5)
     except requests.RequestException as e:
         log.warning("tg sendMessage: %s", e)
 
@@ -1128,7 +1128,19 @@ def _tg_poll_loop():
                 params={"offset": STATE["tg_offset"], "timeout": 25,
                         "allowed_updates": json.dumps(["message", "edited_message"])},
                 timeout=30)
-            for u in r.json().get("result", []):
+            data = r.json()
+            if not data.get("ok"):
+                # 409 Conflict: бота уже слушает другой процесс (например,
+                # облачный сервер, пока работает локальный). Не боремся за
+                # getUpdates — уступаем и замолкаем.
+                if r.status_code == 409:
+                    log.warning("tg poll: бот уже слушается другим процессом "
+                                "(409) — поллер остановлен")
+                    return
+                log.warning("tg poll: api error %s", data.get("description"))
+                time.sleep(10)
+                continue
+            for u in data.get("result", []):
                 STATE["tg_offset"] = max(STATE["tg_offset"], u.get("update_id", 0) + 1)
                 _tg_handle_update(u)
         except requests.RequestException as e:
@@ -1232,7 +1244,10 @@ def upd_courier(cid):
                 except (TypeError, ValueError):
                     pass
             if "tg_chat_id" in data:
-                c["tg_chat_id"] = str(data["tg_chat_id"]).strip()[:64]
+                new_tg = str(data["tg_chat_id"]).strip()[:64]
+                if new_tg and not new_tg.isdigit():
+                    return jsonify({"error": "ID Telegram должен быть числом"}), 400
+                c["tg_chat_id"] = new_tg
             _persist_couriers()
             _invalidate_plan(drop_plan=True)
             return _payload()
@@ -1248,6 +1263,11 @@ def bind_courier(cid):
         return jsonify({"error": "ID Telegram должен быть числом"}), 400
     for c in STATE["couriers"]:
         if c["id"] == cid:
+            # гео не должна утекать к двум курьерам сразу
+            for other in STATE["couriers"]:
+                if other is not c and other.get("tg_chat_id") == chat_id:
+                    other["tg_chat_id"] = ""
+                    other["tg_login"] = ""
             c["tg_chat_id"] = chat_id
             c["tg_login"] = (data.get("login")
                              or STATE["tg_seen"].get(chat_id, {}).get("login")
