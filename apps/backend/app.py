@@ -125,6 +125,7 @@ log = logging.getLogger("dispatcher")
 DEFAULT_DEPOT = {"address": "ул. Подгорная 12/1, Гомель", "lat": 52.44146, "lng": 31.01476}
 
 STATE = {
+    "rev": 0,            # версия состояния для long-poll /api/rev
     "depot": dict(DEFAULT_DEPOT),  # {"address", "lat", "lng"}
     "couriers": [],      # {"id", "name", "status": base|away|off, "color", "back_min"}
     "orders": [],        # {"id", "address", "lat", "lng"}
@@ -1177,6 +1178,7 @@ def _tg_handle_update(u):
     if len(STATE["tg_seen"]) > 50:  # храним только недавних
         for k in sorted(STATE["tg_seen"], key=lambda x: STATE["tg_seen"][x]["ts"])[:-50]:
             STATE["tg_seen"].pop(k, None)
+            STATE["tg_nagged"].pop(k, None)  # антиспам-память чистим вместе
 
     courier = next((c for c in STATE["couriers"]
                     if (c.get("tg_chat_id") or "") == chat_id), None)
@@ -1277,7 +1279,7 @@ def _payload():
             cc["geo"] = geo
         couriers.append(cc)
     st = {k: v for k, v in STATE.items()
-          if k not in ("tg_seen", "tg_pos", "tg_offset")}
+          if k not in ("tg_seen", "tg_pos", "tg_offset", "tg_nagged")}
     seen = sorted(STATE["tg_seen"].values(), key=lambda x: -x["ts"])[:20]
     return jsonify({**st, "couriers": couriers,
                     "tg": {"bot": STATE["tg_bot"], "seen": seen},

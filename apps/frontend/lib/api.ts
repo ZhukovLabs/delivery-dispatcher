@@ -41,6 +41,7 @@ export interface Plan {
   advice?: Advice | null;
 }
 export interface AppState {
+  rev?: number; // версия состояния (long-poll /api/rev)
   depot: Depot | null; couriers: Courier[]; orders: Order[];
   settings: Record<string, number>;
   plan: Plan | null; me?: { id: string; email: string; is_admin?: number };

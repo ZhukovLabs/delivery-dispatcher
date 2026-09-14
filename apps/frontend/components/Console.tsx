@@ -60,18 +60,21 @@ export default function Console() {
 
   // живые обновления: long-poll /api/rev — висит, пока состояние не изменится
   // (кто-то из админов что-то сделал / курьер прислал геолокацию), тогда
-  // инвалидируем кэш и каждый браузер перезаказывает /api/state сам
+  // инвалидируем кэш и каждый браузер перезаказывает /api/state сам.
+  // rev берём из уже загруженного state — иначе первый опрос с since=0
+  // будил нас сразу и дёргал лишний /api/state на каждой загрузке страницы
+  const revRef = useRef(0);
+  useEffect(() => { if (stData?.rev != null) revRef.current = stData.rev; }, [stData]);
   useEffect(() => {
     let stop = false;
-    let rev = 0;
     (async () => {
       while (!stop) {
         try {
-          const r = await fetch(`/api/rev?since=${rev}`);
+          const r = await fetch(`/api/rev?since=${revRef.current}`);
           if (r.status === 401) { location.assign("/login"); return; }
           const d = await r.json();
-          if (d.rev > rev) {
-            rev = d.rev;
+          if (d.rev > revRef.current) {
+            revRef.current = d.rev;
             qc.invalidateQueries({ queryKey: ["state"] });
           }
         } catch { await new Promise(res => setTimeout(res, 3000)); }
