@@ -2147,10 +2147,22 @@ def geocode():
         return jsonify({"error": f"Геокодер недоступен: {e}"}), 502
 
 
+def _warm_street_index():
+    # Облачный инстанс: Overpass может отвергнуть первый запрос (rate-limit) —
+    # повторяем с нарастающей паузой, пока индекс не соберётся.
+    for attempt, delay in enumerate((5, 60, 300, 900), start=1):
+        _load_street_index()
+        if STREET_IDX["names"]:
+            return
+        log.warning("street index empty (attempt %d), retry in %ss", attempt, delay)
+        time.sleep(delay)
+    log.error("street index failed — prefix search degraded")
+
+
 if __name__ == "__main__":
     load_state()
     ensure_default_admin()
-    threading.Thread(target=_load_street_index, daemon=True).start()  # прогрев индекса улиц
+    threading.Thread(target=_warm_street_index, daemon=True).start()  # прогрев индекса улиц
     # после рестарта: заказы есть, плана нет -> пересчитать в фоне
     if STATE["orders"] and STATE["plan"] is None and any(
             c["status"] != "off" for c in STATE["couriers"]):
