@@ -1902,72 +1902,85 @@ STREET_IDX_TTL = 24 * 3600
 STREET_IDX_LOCK = threading.Lock()
 
 
+def _fill_street_index():
+    """Тело загрузки индекса улиц; вызывать только под STREET_IDX_LOCK."""
+    if STREET_IDX["names"] and time.time() - STREET_IDX["ts"] < STREET_IDX_TTL:
+        return STREET_IDX["names"]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "streets_cache.json")
+    try:  # дисковый кэш переживает рестарты (формат v2: names + ways)
+        if os.path.exists(path) and time.time() - os.path.getmtime(path) < STREET_IDX_TTL:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if data.get("v") == 2:
+                STREET_IDX["names"] = {k: tuple(v) for k, v in data["names"].items()}
+                STREET_IDX["ways"] = {int(k): tuple(v) for k, v in data["ways"].items()}
+                STREET_IDX["ts"] = os.path.getmtime(path)
+                return STREET_IDX["names"]
+    except Exception:  # noqa: BLE001
+        pass
+    s, w, n, e = GOMEL_BBOX
+    q = (f'[out:json][timeout:25];'
+         f'way["highway"~"^(residential|tertiary|secondary|primary|unclassified|living_street|pedestrian)$"]["name"]'
+         f'({s},{w},{n},{e});out tags center 8000;')
+    acc = {}  # lower -> [shown, sum_lat, sum_lng, cnt]
+    for url in OVERPASS_URLS:
+        try:
+            r = requests.post(url, data={"data": q}, headers=UA, timeout=60)
+            r.raise_for_status()
+            for el in r.json().get("elements", []):
+                tags = el.get("tags") or {}
+                c = el.get("center") or {}
+                if not c.get("lat"):
+                    continue
+                loc = _strip_street_type(tags.get("name") or "")
+                ru = _strip_street_type(tags.get("name:ru") or "")
+                if el.get("id") and (loc or ru):
+                    STREET_IDX["ways"][el["id"]] = (loc, ru)
+                for nm in (tags.get("name:ru"), tags.get("name")):
+                    nm = _strip_street_type(nm or "")
+                    if len(nm) < 3:
+                        continue
+                    k = nm.lower()
+                    a = acc.setdefault(k, [nm, 0.0, 0.0, 0])
+                    a[1] += float(c["lat"]); a[2] += float(c.get("lon", 0)); a[3] += 1
+            break
+        except Exception:  # noqa: BLE001
+            continue
+    if acc:  # пустой ответ не затирает то, что уже есть
+        STREET_IDX["names"] = {k: (v[0], v[1] / v[3], v[2] / v[3]) for k, v in acc.items()}
+        STREET_IDX["ts"] = time.time()
+        app.logger.info("street index: %d улиц", len(STREET_IDX["names"]))
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"v": 2, "names": STREET_IDX["names"], "ways": STREET_IDX["ways"]},
+                          fh, ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            pass
+    return STREET_IDX["names"]
+
+
 def _load_street_index():
     """Именованные улицы Гомеля одним Overpass-запросом; кэш в памяти, на диске и на сутки.
     Photon не индексирует name:ru, Nominatim не умеет префиксы — этот индекс закрывает both."""
     with STREET_IDX_LOCK:
-        if STREET_IDX["names"] and time.time() - STREET_IDX["ts"] < STREET_IDX_TTL:
-            return STREET_IDX["names"]
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "streets_cache.json")
-        try:  # дисковый кэш переживает рестарты (формат v2: names + ways)
-            if os.path.exists(path) and time.time() - os.path.getmtime(path) < STREET_IDX_TTL:
-                with open(path, encoding="utf-8") as fh:
-                    data = json.load(fh)
-                if data.get("v") == 2:
-                    STREET_IDX["names"] = {k: tuple(v) for k, v in data["names"].items()}
-                    STREET_IDX["ways"] = {int(k): tuple(v) for k, v in data["ways"].items()}
-                    STREET_IDX["ts"] = os.path.getmtime(path)
-                    return STREET_IDX["names"]
-        except Exception:  # noqa: BLE001
-            pass
-        s, w, n, e = GOMEL_BBOX
-        q = (f'[out:json][timeout:25];'
-             f'way["highway"~"^(residential|tertiary|secondary|primary|unclassified|living_street|pedestrian)$"]["name"]'
-             f'({s},{w},{n},{e});out tags center 8000;')
-        acc = {}  # lower -> [shown, sum_lat, sum_lng, cnt]
-        for url in OVERPASS_URLS:
-            try:
-                r = requests.post(url, data={"data": q}, headers=UA, timeout=60)
-                r.raise_for_status()
-                for el in r.json().get("elements", []):
-                    tags = el.get("tags") or {}
-                    c = el.get("center") or {}
-                    if not c.get("lat"):
-                        continue
-                    loc = _strip_street_type(tags.get("name") or "")
-                    ru = _strip_street_type(tags.get("name:ru") or "")
-                    if el.get("id") and (loc or ru):
-                        STREET_IDX["ways"][el["id"]] = (loc, ru)
-                    for nm in (tags.get("name:ru"), tags.get("name")):
-                        nm = _strip_street_type(nm or "")
-                        if len(nm) < 3:
-                            continue
-                        k = nm.lower()
-                        a = acc.setdefault(k, [nm, 0.0, 0.0, 0])
-                        a[1] += float(c["lat"]); a[2] += float(c.get("lon", 0)); a[3] += 1
-                break
-            except Exception:  # noqa: BLE001
-                continue
-        if acc:  # пустой ответ не затирает то, что уже есть
-            STREET_IDX["names"] = {k: (v[0], v[1] / v[3], v[2] / v[3]) for k, v in acc.items()}
-            STREET_IDX["ts"] = time.time()
-            app.logger.info("street index: %d улиц", len(STREET_IDX["names"]))
-            try:
-                with open(path, "w", encoding="utf-8") as fh:
-                    json.dump({"v": 2, "names": STREET_IDX["names"], "ways": STREET_IDX["ways"]},
-                              fh, ensure_ascii=False)
-            except Exception:  # noqa: BLE001
-                pass
-        return STREET_IDX["names"]
+        return _fill_street_index()
 
 
 def _search_local_streets(token, limit=6):
-    """Улицы города, начинающиеся на token (или содержащие его)."""
+    """Улицы города, начинающиеся на token (или содержащие его).
+    Индекс грузится в фоне? Не ждём — просто без локальных подсказок."""
     t = (token or "").lower().strip()
     if len(t) < 3:
         return []
+    if not (STREET_IDX["names"] and time.time() - STREET_IDX["ts"] < STREET_IDX_TTL):
+        if not STREET_IDX_LOCK.acquire(blocking=False):
+            return []
+        try:
+            _fill_street_index()
+        finally:
+            STREET_IDX_LOCK.release()
     hits = []
-    for k, (shown, lat, lng) in _load_street_index().items():
+    for k, (shown, lat, lng) in STREET_IDX["names"].items():
         if k.startswith(t):
             rank = 0 if k == t else 1
         elif len(t) >= 4 and t in k:
