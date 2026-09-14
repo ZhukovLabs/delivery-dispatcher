@@ -45,21 +45,16 @@ interface ToastState { msg: string; err?: boolean; act?: { label: string; fn: ()
 interface AskState { text: string; ok: string; danger: boolean; resolve: (v: boolean) => void; }
 
 export default function Console() {
-  /* ---------- состояние через TanStack Query: кэш, авто-опрос только когда план устарел, синхронизация по фокусу окна ---------- */
+  /* ---------- состояние через TanStack Query: кэш + синхронизация по фокусу окна.
+     План считается ТОЛЬКО по кнопке «Рассчитать» — фонового опроса нет,
+     данные обновляются после каждой мутации (optimisticFor + invalidate). ---------- */
   const qc = useQueryClient();
   const { data: stData, error: stateErr, isPending: stLoading } = useQuery({
     queryKey: ["state"],
     queryFn: () => api<AppState>("/api/state"),
     staleTime: 10000,
     retry: 1,
-    refetchInterval: query => {
-      const d = query.state.data;
-      if (!d || document.hidden) return false;
-      const need = !!d.depot && d.orders.length > 0 &&
-        d.couriers.some(c => c.status !== "off") &&
-        (d.plan === null || !!d.plan?.stale);
-      return need ? 2500 : false;   // опрашиваем, пока бэкенд пересчитывает план; свежий план — тишина
-    },
+    refetchOnWindowFocus: "always",
   });
   const st = stData ?? null;
   const setSt = useCallback((s: AppState) => { qc.setQueryData(["state"], s); }, [qc]);
@@ -885,7 +880,7 @@ function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOver
         <div className="pt-clock">≈{plan.last_delivery_clock || "?"} <small>+{plan.last_delivery_min} мин</small></div>
         <div className="pt-sub">
           {prov} · рассчитано {(plan.solved_at || "").replace("T", " ").slice(11, 16)}
-          {plan.stale && " · ⟳ пересчёт…"}
+          {plan.stale && " · ⟳ устарел — нажмите «Рассчитать»"}
           {plan.moved && " · ✋ правка вручную"}
         </div>
       </div>

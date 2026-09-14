@@ -1,4 +1,4 @@
-"""Диспетчер доставки: админ-интерфейс + оптимизация развозки (OR-Tools)."""
+﻿"""Диспетчер доставки: админ-интерфейс + оптимизация развозки (OR-Tools)."""
 import configparser
 import hashlib
 import hmac
@@ -1027,7 +1027,7 @@ def set_depot():
     address = (data.get("address") or "").strip() or reverse_geocode(lat, lng) or "Точка доставки"
     STATE["depot"] = {"address": address, "lat": lat, "lng": lng}
     _persist_meta()
-    _schedule_resolve(drop_plan=True)
+    _invalidate_plan(drop_plan=True)
     return _payload()
 
 
@@ -1042,7 +1042,7 @@ def add_courier():
                               "status": "base", "color": color, "back_min": 15,
                               "tg_chat_id": ""})
     _persist_couriers(), _persist_meta()
-    _schedule_resolve()
+    _invalidate_plan()
     return _payload()
 
 
@@ -1063,7 +1063,7 @@ def upd_courier(cid):
             if "tg_chat_id" in data:
                 c["tg_chat_id"] = str(data["tg_chat_id"]).strip()[:64]
             _persist_couriers()
-            _schedule_resolve(drop_plan=True)
+            _invalidate_plan(drop_plan=True)
             return _payload()
     return jsonify({"error": "Курьер не найден"}), 404
 
@@ -1079,7 +1079,7 @@ def del_courier(cid):
     STATE["couriers"] = [c for c in STATE["couriers"] if c["id"] != cid]
     _persist_orders()
     _persist_couriers()
-    _schedule_resolve(drop_plan=True)
+    _invalidate_plan(drop_plan=True)
     return _payload()
 
 
@@ -1105,7 +1105,7 @@ def add_order():
         "deadline": deadline if _deadline_rel_min(deadline, 0) is not None else "",
     })
     _persist_orders()
-    _schedule_resolve()
+    _invalidate_plan()
     return _payload()
 
 
@@ -1124,7 +1124,7 @@ def patch_order(oid):
             return jsonify({"error": "Дедлайн должен быть в формате ЧЧ:ММ"}), 400
         order["deadline"] = deadline
     _persist_orders()
-    _schedule_resolve()
+    _invalidate_plan()
     return _payload()
 
 
@@ -1148,7 +1148,7 @@ def del_order(oid):
         _archive_order(order, outcome, courier_name)
     STATE["orders"] = [o for o in STATE["orders"] if o["id"] != oid]
     _persist_orders()
-    _schedule_resolve(drop_plan=True)
+    _invalidate_plan(drop_plan=True)
     return _payload()
 
 
@@ -1194,7 +1194,7 @@ def _patch_plan_after_assign(oids):
         # пересчёт подхватит заказы, которые могли остаться вне маршрутов
         STATE["plan"] = None
         _persist_meta()
-        _schedule_resolve()
+        _invalidate_plan()
         return True
     all_etas = [s["eta_min"] for r in plan["routes"] for s in r["stops"]]
     plan["last_delivery_min"] = max(all_etas, default=0)
@@ -1230,7 +1230,7 @@ def assign_orders():
         return jsonify({"error": "Заказы уже выданы или не найдены"}), 400
     _persist_orders()
     if not _patch_plan_after_assign(oids):
-        _schedule_resolve(drop_plan=True)
+        _invalidate_plan(drop_plan=True)
     log.info("assign: %d заказ(ов) -> %s", given, courier["name"])
     return _payload()
 
@@ -1247,7 +1247,7 @@ def return_order(oid):
     order["assigned"] = ""
     order["out_at"] = ""
     _persist_orders()
-    _schedule_resolve()
+    _invalidate_plan()
     return _payload()
 
 
@@ -1268,7 +1268,7 @@ def courier_returned(cid):
     courier["back_min"] = 0
     _persist_orders()
     _persist_couriers()
-    _schedule_resolve(drop_plan=True)
+    _invalidate_plan(drop_plan=True)
     log.info("courier returned: %s, доставлено %d", courier["name"], delivered)
     return _payload()
 
@@ -1291,7 +1291,7 @@ def set_settings():
     except (TypeError, ValueError):
         return jsonify({"error": "Параметры должны быть числами"}), 400
     _persist_meta()
-    _schedule_resolve(drop_plan=True)
+    _invalidate_plan(drop_plan=True)
     return _payload()
 
 
@@ -1329,16 +1329,9 @@ def solve():
 def _compute_plan(mode="auto", advice=True):
     """Ядро расчёта (без HTTP): план + совет «ждать/не ждать».
 
-    Вызывается кнопкой расчёта и фоновым авто-пересчётом (advice=False,
-    чтобы не тратить квоту внешних сервисов на двойной расчёт).
-    Ручной выбор сценария («Не ждать»/«Ждать») помнится до смены обстановки:
-    авто-пересчёт его уважает и молча не сбрасывает.
+    Вызывается ТОЛЬКО вручную: кнопка «Рассчитать» и выбор сценария совета.
+    Ручной выбор («Не ждать»/«Ждать») помнится до смены обстановки.
     """
-    global _resolve_timer
-    with _resolve_lock:
-        if _resolve_timer:  # ручной расчёт отменяет ожидающий авто-пересчёт:
-            _resolve_timer.cancel()  # иначе фон перезапишет свежий план
-            _resolve_timer = None
     if mode in ("now", "split"):
         STATE["advice_mode"] = mode
     mode = STATE.get("advice_mode") or mode
@@ -1387,46 +1380,20 @@ def _compute_plan(mode="auto", advice=True):
     return STATE["plan"]
 
 
-# ---------- авто-пересчёт плана (фон, с антидребезгом) ----------
-
-_resolve_lock = threading.Lock()
-_resolve_timer = None
+# ---------- инвалидация плана (расчёт — только вручную, по кнопке) ----------
 
 
-def _schedule_resolve(delay=2.0, drop_plan=False):
-    """Пересчитать план через `delay` секунд после последнего изменения.
+def _invalidate_plan(drop_plan=False):
+    """План не пересчитываем в фоне — только помечаем/сбрасываем.
 
     drop_plan=True — старый план точно невалиден (удаление заказа/курьера,
     смена депо): сбрасываем сразу. Иначе план показывается с пометкой
-    «устарел» до готовности нового.
+    «устарел», пока администратор не нажмёт «Рассчитать».
     """
-    global _resolve_timer
     if drop_plan:
         STATE["plan"] = None
     elif STATE.get("plan"):
         STATE["plan"]["stale"] = True
-    with _resolve_lock:
-        if _resolve_timer:
-            _resolve_timer.cancel()
-        t = threading.Timer(delay, _auto_resolve)
-        t.daemon = True
-        t.start()
-        _resolve_timer = t
-
-
-def _auto_resolve():
-    global _resolve_timer
-    with _resolve_lock:
-        _resolve_timer = None
-    plan = STATE.get("plan")
-    if plan and not plan.get("stale"):
-        return  # свежий (нестейл) план трогать нельзя: ручной расчёт с советом
-    try:
-        _compute_plan(advice=False)
-    except (ValueError, RuntimeError) as e:
-        log.info("auto-resolve skipped: %s", e)
-    except Exception:  # noqa: BLE001 — фон не должен ронять процесс
-        log.exception("auto-resolve failed")
     try:
         _persist_meta()
     except sqlite3.Error:
@@ -2215,10 +2182,6 @@ if __name__ == "__main__":
     load_state()
     ensure_default_admin()
     threading.Thread(target=_warm_street_index, daemon=True).start()  # прогрев индекса улиц
-    # после рестарта: заказы есть, плана нет -> пересчитать в фоне
-    if STATE["orders"] and STATE["plan"] is None and any(
-            c["status"] != "off" for c in STATE["couriers"]):
-        _schedule_resolve()
     log.info("starting on %s:%s (auth=email, db=%s)", CFG["host"], CFG["port"], _db_path)
     try:
         from waitress import serve
