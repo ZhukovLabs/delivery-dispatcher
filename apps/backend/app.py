@@ -53,7 +53,7 @@ DATA_DIR = _pick_data_dir()
 
 CFG = {"ors_key": "", "host": "127.0.0.1", "port": 5050,
         "admin_email": "admin@local", "admin_password": "admin",
-        "tg_bot_token": "", "tg_poll": 1,
+        "tg_bot_token": "", "tg_poll": 1, "tz": "Europe/Minsk",
         "db_path": os.path.join(DATA_DIR, "dispatcher.db")}
 
 _cp = configparser.ConfigParser()
@@ -68,6 +68,7 @@ if _cp.read(os.path.join(BASE_DIR, "config.ini"), encoding="utf-8"):
     CFG["admin_email"] = (_s.get("admin_email", "") or "admin@local").strip().lower()
     CFG["admin_password"] = _s.get("admin_password", "") or "admin"
     CFG["tg_bot_token"] = _s.get("tg_bot_token", "").strip()
+    CFG["tz"] = _s.get("tz", "Europe/Minsk").strip() or "Europe/Minsk"
     try:
         CFG["tg_poll"] = _s.getint("tg_poll", 1)
     except ValueError:
@@ -88,12 +89,19 @@ if os.environ.get("TG_POLL", "").strip():
         pass
 CFG["admin_email"] = (os.environ.get("ADMIN_EMAIL", "").strip() or CFG["admin_email"]).lower()
 CFG["admin_password"] = os.environ.get("ADMIN_PASSWORD", "").strip() or CFG["admin_password"]
-if os.environ.get("PORT", "").strip():  # PaaS выдаёт порт через PORT
-    try:
-        CFG["port"] = int(os.environ["PORT"])
-        CFG["host"] = "0.0.0.0"
-    except ValueError:
-        pass
+for _pn in ("PORT", "SERVER_PORT", "P_SERVER_PORT"):  # PaaS/Pterodactyl отдают порт по-разному
+    _pv = os.environ.get(_pn, "").strip()
+    if _pv:
+        try:
+            CFG["port"] = int(_pv)
+            CFG["host"] = "0.0.0.0"
+            break
+        except ValueError:
+            pass
+if CFG.get("tz"):
+    os.environ["TZ"] = CFG["tz"]
+    if hasattr(time, "tzset"):
+        time.tzset()
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -1177,13 +1185,13 @@ def _tg_poll_loop():
                 timeout=30)
             data = r.json()
             if not data.get("ok"):
-                # 409 Conflict: бота уже слушает другой процесс (например,
-                # облачный сервер, пока работает локальный). Не боремся за
-                # getUpdates — уступаем и замолкаем.
+                # 409 Conflict: бота уже слушает другой процесс. Не боремся за
+                # getUpdates в лоб — ждём: второй инстанс умрёт и канал вернётся.
                 if r.status_code == 409:
                     log.warning("tg poll: бот уже слушается другим процессом "
-                                "(409) — поллер остановлен")
-                    return
+                                "(409) — повтор через 5 мин")
+                    time.sleep(300)
+                    continue
                 log.warning("tg poll: api error %s", data.get("description"))
                 time.sleep(10)
                 continue
