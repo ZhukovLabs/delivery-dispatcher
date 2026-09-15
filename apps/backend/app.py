@@ -436,6 +436,21 @@ def _speed_fleet_cycle_avg(day):
     return (r["s"] / r["n"]) if r and r["n"] else None
 
 
+def _courier_del_avg_min(courier):
+    """Средние минуты на один доставленный заказ: свой темп, иначе флот, иначе 15."""
+    rows = _speed_rows(courier.get("id") or "", limit=7)
+    for r in rows:
+        if (r["del_n"] or 0) >= 1 and (r["del_min"] or 0) > 0:
+            return min(90.0, r["del_min"] / r["del_n"])
+    for r in rows:
+        if r["day"]:
+            fleet = _speed_fleet_cycle_avg(r["day"])
+            if fleet:
+                return min(90.0, fleet)
+            break
+    return 15.0
+
+
 def _speed_from_row(row, default_kmh):
     """Скорость из строки дня: сначала гео, иначе темп доставок. None — нет данных."""
     if row["geo_s"] >= _SPEED_MIN_GEO_S:
@@ -1583,6 +1598,12 @@ def _courier_geo(c, depot, now=None):
     g["loaded"] = bool(load.get("loaded_at"))
     if has_out and not g["at_depot"]:
         g["delivering"] = True   # выданы и не у точки — значит, едет с заказами
+        # честный возврат: дорога до точки + развоз невыданных-недоставленных
+        rem = sum(1 for o in STATE["orders"]
+                  if (o.get("status") or "ready") == "out"
+                  and (o.get("assigned") or "") == c.get("id"))
+        per = _courier_del_avg_min(c)
+        g["back_min"] = int(min(480, g["back_min"] + rem * per))
     if not has_out and not g["at_depot"]:
         # заказы ещё не в машине: честный ETA — сначала доехать до точки
         kmh2, _ = _courier_speed(c)

@@ -374,12 +374,12 @@ ol.stops li:first-child{border-top:none}
 .pin span i{transform:rotate(45deg);font-style:normal}
 
 /* курьер: крупный GPS-бейдж с самокатом, именем и свечением; пульс при live */
-.courier-marker div{position:relative;width:46px;height:46px}
-.courier-marker .cm-body{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:50%;background:var(--c,#e8482b);border:3px solid #fff;box-shadow:0 0 0 2px rgba(15,23,42,.55),0 3px 12px rgba(0,0,0,.5)}
-.courier-marker .cm-body svg{width:26px;height:26px}
-.courier-marker .cm-glow{position:absolute;inset:-6px;border-radius:50%;background:var(--c,#e8482b);opacity:.3;filter:blur(6px)}
-.courier-marker .cm-pulse{position:absolute;inset:-3px;border-radius:50%;border:2.5px solid var(--c,#e8482b);opacity:.8;animation:cm-pulse 1.8s ease-out infinite}
-.courier-marker .cm-name{position:absolute;top:calc(100% + 7px);left:50%;transform:translateX(-50%);background:#fff;color:#0f172a;border:1.5px solid var(--c,#e8482b);font-size:10.5px;font-weight:700;line-height:1;padding:3px 7px;border-radius:9px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.courier-marker div{position:relative;width:34px;height:34px}
+.courier-marker .cm-body{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:50%;background:var(--c,#e8482b);border:2.5px solid #fff;box-shadow:0 0 0 2px rgba(15,23,42,.55),0 2px 8px rgba(0,0,0,.5)}
+.courier-marker .cm-body svg{width:18px;height:18px}
+.courier-marker .cm-glow{position:absolute;inset:-4px;border-radius:50%;background:var(--c,#e8482b);opacity:.3;filter:blur(5px)}
+.courier-marker .cm-pulse{position:absolute;inset:-2px;border-radius:50%;border:2px solid var(--c,#e8482b);opacity:.8;animation:cm-pulse 1.8s ease-out infinite}
+.courier-marker .cm-name{position:absolute;top:calc(100% + 5px);left:50%;transform:translateX(-50%);background:#fff;color:#0f172a;border:1.5px solid var(--c,#e8482b);font-size:10px;font-weight:700;line-height:1;padding:2.5px 6px;border-radius:8px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.3)}
 @keyframes cm-pulse{0%{transform:scale(.6);opacity:.9}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}
 html.dark .courier-marker .cm-name{background:#1a2436;color:#e8eef7}
 

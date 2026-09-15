@@ -164,7 +164,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         { balloonContent: `<b>${esc(c.name)}</b><br>📍 ${posAge(c.pos!.ts)}${live ? " · live" : ""}${c.pos!.acc ? ` · ±${Math.round(c.pos!.acc)} м` : ""}` },
         {
           iconLayout: ym.templateLayoutFactory.createClass(html),
-          iconShape: { type: "Rectangle", coordinates: [[-23, -23], [23, 23]] },
+          iconShape: { type: "Rectangle", coordinates: [[-17, -17], [17, 17]] },
           zIndex: 1000, cursor: "pointer",
         });
       map.geoObjects.add(pm);
