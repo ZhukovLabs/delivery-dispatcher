@@ -82,6 +82,9 @@ function declName(n: string) {
 const shortAddr = (s: string) =>
   s.replace(/,?\s*Гомель$/i, "").replace(/\s*сельский Совет$/i, "").replace(/(^|\s)улица\s/i, "$1").trim();
 
+// ключ схожести адресов для поиска дублей: регистр/пробелы/город не важны
+const addrKey = (a: string) => a.trim().toLowerCase().replace(/\s+/g, " ").replace(/,?\s*гомель$/i, "");
+
 const orderAgeMin = (o: Order) => {
   try { return Math.max(0, Math.round((Date.now() - new Date(o.created_at).getTime()) / 60000)); }
   catch { return 0; }
@@ -199,27 +202,30 @@ export default function Console() {
   useEffect(() => {
     if (!workPoint || !st?.points?.length) return;
     if (!st.points!.some(p => p.id === workPoint)) return; // сохранённая точка мертва — коррекция выше подменит id
-    if (wpSynced.current) return;
+    if (wpSynced.current || wpSwitchingRef.current) return; // ручная смена уже постит сама
     wpSynced.current = true;
     void api("/api/workpoint", "POST", { point_id: workPoint })
       .catch(() => { try { localStorage.removeItem("workPoint"); } catch {} });
   }, [workPoint, st?.points]);
   const [wpSwitching, setWpSwitching] = useState(false);
+  const wpSwitchingRef = useRef(false);
   const onWorkPoint = (pid: string) => {
-    if (pid === workPoint || wpSwitching) return;
+    if (pid === workPoint || wpSwitchingRef.current) return;
+    wpSwitchingRef.current = true;
     setWpSwitching(true);
     setWorkPoint(pid);
-    wpSynced.current = false;
     setHoverOid(null);   // подсветка/балун старого депо больше не актуальны
     setCardHl(null);
     void (async () => {
       try {
         await api("/api/workpoint", "POST", { point_id: pid });
-        wpSynced.current = true; // эффект выше не должен постить повторно
-      } catch { /* точка могла стать мёртвой — эффекто выше подменит и повторит */ }
+      } catch {
+        wpSynced.current = false; // точка могла стать мёртвой — эффект коррекции подменит id и повторит
+      }
       // заказы, план и счётчики приходят из /api/state уже для новой точки —
       // без рефетча UI показывал бы старое депо (#1/#7)
       await qc.invalidateQueries({ queryKey: ["state"] });
+      wpSwitchingRef.current = false;
       setWpSwitching(false);
       setFitSignal(s => s + 1); // пересобрать кадр карты под новое депо
     })();
@@ -553,7 +559,6 @@ export default function Console() {
   const readyOrders = st.orders.filter(o => (o.status || "ready") === "ready");
   const outOrders = st.orders.filter(o => o.status === "out");
   // дубли адресов: два диспетчера могут добавить один адрес одновременно (#3)
-  const addrKey = (a: string) => a.trim().toLowerCase().replace(/\s+/g, " ").replace(/,?\s*гомель$/i, "");
   const dupOids = useMemo(() => {
     const n = new Map<string, number>();
     st.orders.forEach(o => { const k = addrKey(o.address); n.set(k, (n.get(k) || 0) + 1); });

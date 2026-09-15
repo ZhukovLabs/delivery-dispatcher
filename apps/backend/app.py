@@ -1314,25 +1314,24 @@ def _touch_online(pt=None):
     sid = session.get("sid")
     if not sid:
         return
-    with _ONLINE_LOCK:
-        rec = ONLINE.get(sid)
-        if rec is None:
-            uid = session.get("uid")
-            if not uid:
-                return
-            with _db_lock, _db() as c:
-                r = c.execute("SELECT email FROM users WHERE id = ?", (uid,)).fetchone()
-            if not r:
-                return
-            ONLINE[sid] = {
-                "uid": uid, "email": r["email"],
-                "point_id": (pt if pt is not None else session.get("point"))
-                or (STATE.get("points") or [{}])[0].get("id") or "",
-                "last": time.time()}
+    rec = ONLINE.get(sid)
+    if rec is None:
+        uid = session.get("uid")
+        if not uid:
             return
-        rec["last"] = time.time()
-        if pt is not None:
-            rec["point_id"] = pt
+        with _db_lock, _db() as c:  # чтение — вне ONLINE-блокировки
+            r = c.execute("SELECT email FROM users WHERE id = ?", (uid,)).fetchone()
+        if not r:
+            return
+        with _ONLINE_LOCK:
+            ONLINE[sid] = {"uid": uid, "email": r["email"],
+                 "point_id": pt or session.get("point")
+                 or (STATE.get("points") or [{}])[0].get("id") or "",
+                 "last": time.time()}
+        return
+    rec["last"] = time.time()
+    if pt is not None:
+        rec["point_id"] = pt
 
 
 def _drop_online():
@@ -1402,14 +1401,7 @@ def api_workpoint():
     if "sid" not in session:
         session["sid"] = uuid.uuid4().hex
     session["point"] = pid  # авторитетное значение — переживёт простой сессии
-    with _ONLINE_LOCK:
-        rec = ONLINE.get(session["sid"])
-        if rec is None:
-            ONLINE[session["sid"]] = {"uid": me["id"], "email": me["email"],
-                                      "point_id": pid, "last": time.time()}
-        else:
-            rec["point_id"] = pid
-    _touch_online(pid)
+    _touch_online(pid)  # и обновит, и восстановит запись в ONLINE, если стёрлась
     _bump()  # другие админы увидят обновлённые счётчики на карточках точек
     return jsonify(ok=True)
 

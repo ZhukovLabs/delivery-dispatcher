@@ -65,6 +65,8 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     depots: new Map<string, any>(),
     orders: new Map<string, any>(),
     couriers: new Map<string, any>(),
+    orderSig: new Map<string, string>(),   // сигнатуры вида маркера
+    courierSig: new Map<string, string>(),
     lines: [] as any[],
     routeLine: null as any | null,
     routeSig: "",
@@ -214,6 +216,19 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     const depotLayout = () => ym.templateLayoutFactory.createClass(
       `<div class="pin depot"><span><i>${WAREHOUSE_SVG}</i></span></div>`);
 
+    /* атомарная замена маркера в слое: удалить старый, добавить новый,
+       сохранить открытый балун (иначе плашка мигнёт при пересборке) */
+    const swap = (store: Map<string, any>, key: string, create: () => any) => {
+      const old = store.get(key);
+      const wasOpen = !!old && old.balloon.isOpen();
+      if (old) map.geoObjects.remove(old);
+      const pm = create();
+      map.geoObjects.add(pm);
+      if (wasOpen) pm.balloon.open();
+      store.set(key, pm);
+      return pm;
+    };
+
     /* 1) точки выдачи: склад, всегда поверх, крупнее (#9) */
     const seenP = new Set<string>();
     pickPts.forEach(p => {
@@ -249,26 +264,25 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         : `<b>${esc(o.address)}</b><br>(ещё не рассчитано)${dupOids?.has(o.id) ? "<br><span style=\"color:#d92d20\">дублирующийся адрес</span>" : ""}`;
       const sig = `${text}|${color}`;
       let pm = L.current.orders.get(o.id);
-      if (pm && pm._sig === sig) {
+      if (pm && L.current.orderSig.get(o.id) === sig) {
         pm.geometry.setCoordinates([o.lat, o.lng]);
         pm.properties.set("balloonContent", content);
         return;
       }
-      const wasOpen = !!pm && pm.balloon.isOpen();
-      if (pm) map.geoObjects.remove(pm);
-      pm = new ym.Placemark([o.lat, o.lng], { balloonContent: content },
+      const oid = o.id;
+      pm = swap(L.current.orders, o.id, () => new ym.Placemark([o.lat, o.lng], { balloonContent: content },
         { iconLayout: pinLayout(text, color),
           iconShape: { type: "Rectangle", coordinates: [[-16, -16], [16, 20]] },
-          zIndex: 500, cursor: "pointer" });
-      pm._sig = sig;
-      const oid = o.id;
+          zIndex: 500, cursor: "pointer" }));
       pm.events.add("click", () => { flyTo([o.lat, o.lng]); onMarkerClickRef.current(oid); });
-      map.geoObjects.add(pm);
-      if (wasOpen) pm.balloon.open();
-      L.current.orders.set(oid, pm);
+      L.current.orderSig.set(oid, sig);
     });
     for (const k of [...L.current.orders.keys()]) {
-      if (!seenO.has(k)) { map.geoObjects.remove(L.current.orders.get(k)!); L.current.orders.delete(k); }
+      if (!seenO.has(k)) {
+        map.geoObjects.remove(L.current.orders.get(k)!);
+        L.current.orders.delete(k);
+        L.current.orderSig.delete(k);
+      }
     }
 
     /* 3) курьеры: меньше (#12), свои — ярко, чужие — тускло (#14), плавный ход (#11) */
@@ -281,20 +295,17 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       const sig = [c.name, color, live ? "L" : "", foreign ? "F" : "", selCid.current === c.id ? "S" : ""].join("|");
       const to: [number, number] = [c.pos!.lat, c.pos!.lng];
       let pm = L.current.couriers.get(c.id);
-      if (!pm || pm._sig !== sig) {
-        const wasOpen = !!pm && pm.balloon.isOpen();
-        if (pm) map.geoObjects.remove(pm);
+      if (!pm || L.current.courierSig.get(c.id) !== sig) {
+        const cid = c.id;
         const html =
           `<div class="courier-marker${foreign ? " foreign" : ""}${selCid.current === c.id ? " sel" : ""}">` +
           `<div style="--c:${color}"><span class="cm-glow"></span>` +
           `${live && !foreign ? '<span class="cm-pulse"></span>' : ""}<span class="cm-body">${SCOOTER_SVG}</span>` +
           `<span class="cm-name">${esc(c.name)}</span></div></div>`;
-        pm = new ym.Placemark(to, { balloonContent: courierBalloon(c) },
+        pm = swap(L.current.couriers, cid, () => new ym.Placemark(to, { balloonContent: courierBalloon(c) },
           { iconLayout: ym.templateLayoutFactory.createClass(html),
             iconShape: { type: "Rectangle", coordinates: [[-14, -14], [14, 20]] },
-            zIndex: 1000, cursor: "pointer" });
-        pm._sig = sig;
-        const cid = c.id;
+            zIndex: 1000, cursor: "pointer" }));
         pm.events.add("click", () => {
           const was = selCid.current;
           selCid.current = was === cid ? null : cid;
@@ -304,11 +315,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
           if (cur) flyTo([cur[0], cur[1]]);
           if (m && selCid.current && !m.balloon.isOpen()) m.balloon.open();
           // сигнатура с «S» изменилась — пересоберём маркер на следующем такте
-          m && (m._sig = "");
+          if (m) L.current.courierSig.set(cid, "");
         });
-        map.geoObjects.add(pm);
-        if (wasOpen) pm.balloon.open();
-        L.current.couriers.set(cid, pm);
+        L.current.courierSig.set(cid, sig);
         anims.current.delete(c.id);
         return;
       }
@@ -329,6 +338,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         if (pm.balloon.isOpen()) pm.balloon.close();
         map.geoObjects.remove(pm);
         L.current.couriers.delete(k);
+        L.current.courierSig.delete(k);
         anims.current.delete(k);
       }
     }
