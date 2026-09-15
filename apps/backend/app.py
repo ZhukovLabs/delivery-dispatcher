@@ -14,6 +14,7 @@ import time
 import uuid
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 # Минск: UTC+3, без перехода на летнее время. Все «настенные» времена
@@ -256,15 +257,23 @@ _DB_MIGRATIONS = [
 ]
 
 
+@contextmanager
 def _db():
     conn = sqlite3.connect(_db_path, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.executescript(_DB_SCHEMA)  # идемпотентно; переживает удаление файла на ходу
-    for table, column, ddl in _DB_MIGRATIONS:
-        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
-        if column not in cols:
-            conn.execute(ddl)
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.executescript(_DB_SCHEMA)  # идемпотентно; переживает удаление файла на ходу
+        for table, column, ddl in _DB_MIGRATIONS:
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                conn.execute(ddl)
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _persist_meta():
@@ -1960,7 +1969,9 @@ def _payload():
     st["points"] = [dict(p,
                          couriers=sum(1 for c in STATE["couriers"]
                                       if _obj_point(c) == p["id"]),
-                         admins=[a["email"] for a in live if a["point_id"] == p["id"]])
+                         admins=list(dict.fromkeys(  # один человек в нескольких
+                             a["email"] for a in live  # сессиях = одна запись
+                             if a["point_id"] == p["id"])))
                     for p in st.get("points") or []]
     # скоуп депо: свои заказы, свой план и своя история; чужие — только курьеры
     st["orders"] = [o for o in st.get("orders") or [] if _obj_point(o) == myp]

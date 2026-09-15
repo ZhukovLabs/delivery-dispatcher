@@ -37,9 +37,9 @@ export default function LoginPage() {
         <h1>🛵 Диспетчер доставки</h1>
         <div className="sub">войдите, чтобы управлять развозкой</div>
         <label htmlFor="loginEmail">Email</label>
-        <input id="loginEmail" type="email" value={email} onChange={e => setEmail(e.target.value)} autoFocus autoComplete="username" />
+        <input id="loginEmail" name="email" type="email" value={email} onChange={e => setEmail(e.target.value)} autoFocus autoComplete="username" />
         <label htmlFor="loginPwd">Пароль</label>
-        <input id="loginPwd" type="password" value={pwd} onChange={e => setPwd(e.target.value)} autoComplete="current-password" />
+        <input id="loginPwd" name="password" type="password" value={pwd} onChange={e => setPwd(e.target.value)} autoComplete="current-password" />
         <button type="submit" disabled={busy}>{busy ? "Входим…" : "Войти"}</button>
         {err && <div className="err">{err}</div>}
       </form>

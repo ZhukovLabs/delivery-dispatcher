@@ -199,9 +199,11 @@ export default function Console() {
   // сообщаем серверу, где мы работаем: при первом входе и при смене селектора
   useEffect(() => {
     if (!workPoint || !st?.points?.length) return;
+    if (!st.points!.some(p => p.id === workPoint)) return; // сохранённая точка мертва — коррекция выше подменит id
     if (wpSynced.current) return;
     wpSynced.current = true;
-    void api("/api/workpoint", "POST", { point_id: workPoint }).catch(() => {});
+    void api("/api/workpoint", "POST", { point_id: workPoint })
+      .catch(() => { try { localStorage.removeItem("workPoint"); } catch {} });
   }, [workPoint, st?.points]);
   const onWorkPoint = (pid: string) => {
     setWorkPoint(pid);
@@ -627,7 +629,7 @@ export default function Console() {
             <div className="depot-edit">
               <div className="pp-form-title">{pointEdit === "new" ? "Новое место выдачи" : "Изменить место выдачи"}</div>
               <input
-                className="pp-name-input" type="text" placeholder="Название (например, ресторан)"
+                className="pp-name-input" type="text" name="point_name" placeholder="Название (например, ресторан)"
                 aria-label="Название места выдачи" value={pointName}
                 onChange={e => setPointName(e.target.value)} />
               <div className="addrow">
@@ -859,7 +861,7 @@ export default function Console() {
                 onClick={() => setOpenAcc(a => a === "couriers" ? null : "couriers")} />
               <div className="acc-body"><div className="acc-inner">
                 <div className="addrow">
-                  <input type="text" placeholder="Имя курьера (Enter)" aria-label="Имя нового курьера"
+                  <input type="text" name="new_courier_name" placeholder="Имя курьера (Enter)" aria-label="Имя нового курьера"
                     value={courierName} onChange={e => setCourierName(e.target.value)}
                     onKeyDown={async e => {
                       if (e.key !== "Enter") return;
@@ -920,7 +922,7 @@ export default function Console() {
                             <span className="seg" role="group" aria-label="Статус курьера">
                               {(["base", "away", "off"] as const).map(s => (
                                 <button key={s} className={c.status === s ? "on-" + s : ""}
-                                  title={SEG_TITLES[s]} aria-label={"Статус: " + SEG_TITLES[s]}
+                                  title={SEG_TITLES[s]} aria-label={"Статус: " + SEG_TITLES[s]} aria-pressed={c.status === s}
                                   onClick={() => { if (c.status !== s) void mutate("PATCH", "/api/couriers/" + c.id, { status: s }); }}>
                                   {SEG_ICONS[s]}
                                 </button>
@@ -979,7 +981,7 @@ export default function Console() {
                                  <Timer size={11} /> вернётся ≈{c.back_min ?? 15} мин
                                </div>
                            : <div className="c-row2 geo-row"><Timer size={11} /> вернётся через
-                            <input className="backMin" type="number" min={0} max={480} defaultValue={c.back_min ?? 15}
+                            <input className="backMin" type="number" name="back_min" min={0} max={480} defaultValue={c.back_min ?? 15}
                               title="Через сколько минут вернётся на базу (привяжите Telegram — будет считаться сам)" aria-label="Возврат на базу, минут"
                               onChange={e => void mutate("PATCH", "/api/couriers/" + c.id, { back_min: +e.target.value || 0 })} />
                             мин
@@ -1275,7 +1277,7 @@ function BindModal({ courier, bot, seen, onDone, onClose }: {
         {courier.tg_chat_id ? (<>
           <div className="bind-msg">
             <div className="bind-manual">
-              <input placeholder={`Сообщение для ${courier.tg_login ? "@" + courier.tg_login : "ID " + courier.tg_chat_id}`}
+              <input name="tg_message" placeholder={`Сообщение для ${courier.tg_login ? "@" + courier.tg_login : "ID " + courier.tg_chat_id}`}
                 value={msg} onChange={e => setMsg(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && msg.trim() && !busy) void send(); }} />
               <button className="btn btn-primary" disabled={busy || !msg.trim()} onClick={() => void send()}>
@@ -1312,7 +1314,7 @@ function BindModal({ courier, bot, seen, onDone, onClose }: {
 
           <div className="bind-divider">Курьер уже писал боту? Введите его ID</div>
           <div className="bind-manual">
-            <input placeholder="ID из сообщения бота" value={manual} inputMode="numeric"
+            <input name="tg_chat_id" placeholder="ID из сообщения бота" value={manual} inputMode="numeric"
               onChange={e => setManual(e.target.value.replace(/\D/g, ""))} />
             <button className="btn btn-primary" disabled={busy || !manual} onClick={() => void bind(manual)}>Привязать</button>
           </div>
@@ -1484,11 +1486,13 @@ function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOver
               <span title="Количество заказов в маршруте"><Package size={11} /> {r.count} {plural(r.count, ["заказ", "заказа", "заказов"])}</span>
               <span title="Ориентировочное время возврата на точку выдачи"><Timer size={11} /> вернётся ≈{clock(r.total_min)}</span>
               {r.distance_km ? <span title="Длина маршрута по дорогам"><RouteIcon size={11} /> {r.distance_km} км</span> : null}
-              {r.speed_src && r.speed_src !== "default" && (
+              {r.speed_src && (
                 <span title={r.speed_src === "geo"
                   ? "Замер по живой геолокации курьера — ETA пересчитаны под его скорость"
-                  : "Оценка по темпу доставок относительно других курьеров — ETA пересчитаны под его скорость"}>
-                  <Gauge size={11} /> ≈{r.speed_kmh} км/ч{r.speed_src === "geo" ? " (гео)" : " (темп)"}
+                  : r.speed_src === "delivery"
+                    ? "Оценка по темпу доставок относительно других курьеров — ETA пересчитаны под его скорость"
+                    : "Скорость курьера не замерена — ETA посчитаны по норме из параметров расчёта"}>
+                  <Gauge size={11} /> ≈{r.speed_kmh} км/ч{r.speed_src === "geo" ? " (гео)" : r.speed_src === "delivery" ? " (темп)" : " (норма)"}
                 </span>
               )}
             </div>
