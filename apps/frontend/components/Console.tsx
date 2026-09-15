@@ -543,6 +543,15 @@ export default function Console() {
       .toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   }, [st?.plan?.solved_at]);
 
+  // дубли адресов: два диспетчера могут добавить один адрес одновременно (#3)
+  // (хук обязан стоять до раннего return при !st — Rules of Hooks)
+  const dupOids = useMemo(() => {
+    const n = new Map<string, number>();
+    (st?.orders ?? []).forEach(o => { const k = addrKey(o.address); n.set(k, (n.get(k) || 0) + 1); });
+    return new Set((st?.orders ?? []).filter(o => (n.get(addrKey(o.address)) || 0) > 1).map(o => o.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [st?.orders]);
+
   if (!st) {
     const err = stateErr as Error | null;
     return <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#6d7688" }}>
@@ -558,13 +567,6 @@ export default function Console() {
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
   const readyOrders = st.orders.filter(o => (o.status || "ready") === "ready");
   const outOrders = st.orders.filter(o => o.status === "out");
-  // дубли адресов: два диспетчера могут добавить один адрес одновременно (#3)
-  const dupOids = useMemo(() => {
-    const n = new Map<string, number>();
-    st.orders.forEach(o => { const k = addrKey(o.address); n.set(k, (n.get(k) || 0) + 1); });
-    return new Set(st.orders.filter(o => (n.get(addrKey(o.address)) || 0) > 1).map(o => o.id));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [st.orders]);
   const carrying: Record<string, number> = {};
   st.orders.forEach(o => { if (o.status === "out" && o.assigned) carrying[o.assigned] = (carrying[o.assigned] || 0) + 1; });
   const courName = (id: string) => st.couriers.find(c => c.id === id)?.name || "";
