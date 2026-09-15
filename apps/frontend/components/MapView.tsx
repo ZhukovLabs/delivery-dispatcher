@@ -173,16 +173,23 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       (r ? `<br>Маршрут: ${r.count} зак. · ≈${Math.round(r.total_min)} мин · финиш ${endClk || "?"}` : "");
   };
 
+  // живые ссылки для обработчиков, привязанных к долгоживущим маркерам:
+  // их замыкания не должны ссылаться на протухший план
+  const planRef = useRef(plan); planRef.current = plan;
+  const pickPtsRef = useRef(pickPts); pickPtsRef.current = pickPts;
+
   /* маршрут выбранного курьера: жирная линия поверх остальных (#5) */
   const refreshSelRoute = () => {
     const ym = ymRef.current, map = mapRef.current;
     if (!ym || !map) return;
     if (L.current.routeLine) { map.geoObjects.remove(L.current.routeLine); L.current.routeLine = null; }
     const cid = selCid.current;
-    if (!cid || !plan) return;
-    const r = plan.routes.find(x => x.courier_id === cid);
-    if (!r || !pickPts.length) return;
-    const hp = r.home_point || pickPts[0];
+    const curPlan = planRef.current;
+    if (!cid || !curPlan) return;
+    const r = curPlan.routes.find(x => x.courier_id === cid);
+    const curPts = pickPtsRef.current;
+    if (!r || !curPts.length) return;
+    const hp = r.home_point || curPts[0];
     const depot: [number, number] = [hp.lat, hp.lng];
     const pts: [number, number][] = [depot];
     (r.trips || []).forEach(tr => {
@@ -218,7 +225,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         pm = new ym.Placemark([p.lat, p.lng], { balloonContent: balloon },
           { iconLayout: depotLayout(), iconShape: { type: "Rectangle", coordinates: [[-21, -21], [21, 24]] },
             zIndex: 2000, cursor: "pointer" });
-        const fx = () => flyTo([p.lat, p.lng]);
+        const fx = () => { flyTo([p.lat, p.lng]); pm!.balloon.open(); };
         pm.events.add("click", fx);
         map.geoObjects.add(pm);
         L.current.depots.set(key, pm);
@@ -247,6 +254,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         pm.properties.set("balloonContent", content);
         return;
       }
+      const wasOpen = !!pm && pm.balloon.isOpen();
       if (pm) map.geoObjects.remove(pm);
       pm = new ym.Placemark([o.lat, o.lng], { balloonContent: content },
         { iconLayout: pinLayout(text, color),
@@ -256,6 +264,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       const oid = o.id;
       pm.events.add("click", () => { flyTo([o.lat, o.lng]); onMarkerClickRef.current(oid); });
       map.geoObjects.add(pm);
+      if (wasOpen) pm.balloon.open();
       L.current.orders.set(oid, pm);
     });
     for (const k of [...L.current.orders.keys()]) {
@@ -266,13 +275,14 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     const seenC = new Set<string>();
     state.couriers.filter(c => c.pos).forEach(c => {
       seenC.add(c.id);
-      const foreign = !!state.my_point && (c.point_id || state.points?.[0]?.id) !== state.my_point;
+      const foreign = !!state.my_point && c.point_id !== state.my_point;
       const color = c.color || "#e8482b";
       const live = !!c.pos?.live;
       const sig = [c.name, color, live ? "L" : "", foreign ? "F" : "", selCid.current === c.id ? "S" : ""].join("|");
       const to: [number, number] = [c.pos!.lat, c.pos!.lng];
       let pm = L.current.couriers.get(c.id);
       if (!pm || pm._sig !== sig) {
+        const wasOpen = !!pm && pm.balloon.isOpen();
         if (pm) map.geoObjects.remove(pm);
         const html =
           `<div class="courier-marker${foreign ? " foreign" : ""}${selCid.current === c.id ? " sel" : ""}">` +
@@ -297,6 +307,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
           m && (m._sig = "");
         });
         map.geoObjects.add(pm);
+        if (wasOpen) pm.balloon.open();
         L.current.couriers.set(cid, pm);
         anims.current.delete(c.id);
         return;
@@ -322,9 +333,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       }
     }
 
-    /* 4) линии планов: пересобираем только при смене состава */
+    /* 4) линии планов: пересобираем при смене состава ИЛИ пересчёте (solved_at) */
     const lineSig = plan
-      ? plan.routes.map(r => [r.courier_id, r.color, (r.trips || [])
+      ? `${plan.solved_at}|` + plan.routes.map(r => [r.courier_id, r.color, (r.trips || [])
           .map(t => t.stops.map(s => s.order_id).join(",")).join(";")].join("|")).join("~")
       : "";
     if (lineSig !== L.current.routeSig) {
