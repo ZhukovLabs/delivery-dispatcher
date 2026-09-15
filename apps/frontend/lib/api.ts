@@ -47,6 +47,7 @@ export interface Plan {
 export interface AppState {
   rev?: number; // версия состояния (long-poll /api/rev)
   depot: Depot | null; points?: PickPoint[]; couriers: Courier[]; orders: Order[];
+  my_point?: string;
   settings: Record<string, number>;
   plan: Plan | null; me?: { id: string; email: string; is_admin?: number; name?: string; phone?: string };
   users?: { id: string; email: string; is_admin?: number; name?: string; phone?: string }[];

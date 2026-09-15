@@ -139,6 +139,10 @@ html.dark .fit-btn:hover{background:#283548}
 .crow:last-child{margin-bottom:0}
 .crow .c-row1{display:flex;align-items:center;gap:8px;min-width:0}
 .crow .cname{flex:1;min-width:0;white-space:normal;word-break:break-word;line-height:1.3;font-weight:600;font-size:13px}
+.c-depot{display:inline-flex;align-items:center;gap:3px;flex-shrink:0;font-size:10.5px;font-weight:600;color:#5d6a82;background:#eef1f6;border-radius:7px;padding:2px 7px;max-width:110px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.c-depot svg{color:#8794ab}
+html.dark .c-depot{background:#232d3f;color:#8fa0bd}
+html.dark .c-depot svg{color:#5c6b85}
 .seg{display:flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden;flex-shrink:0;background:var(--panel)}
 .seg button{border:0;background:transparent;padding:5px 0;width:34px;font-size:14px;line-height:1;cursor:pointer;color:#b6bec9;transition:.12s;display:inline-flex;align-items:center;justify-content:center}
 .seg button + button{border-left:1px solid var(--line2)}

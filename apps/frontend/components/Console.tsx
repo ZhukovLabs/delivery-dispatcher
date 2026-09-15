@@ -908,6 +908,11 @@ export default function Console() {
                         <div className="c-row1">
                           <span className="cdot" style={{ background: c.color || "#94a3b8" }} title="Цвет курьера на карте и в плане" />
                           <span className="cname">{c.name}</span>
+                          {(st.points || []).length > 1 && c.point_id !== st.my_point && (
+                            <span className="c-depot" title="Курьер другого депо: виден для отслеживания, работает со своей точкой">
+                              <MapPin size={10} />{(st.points || []).find(p => p.id === c.point_id)?.name || "—"}
+                            </span>
+                          )}
                           <span className="seg" role="group" aria-label="Статус курьера">
                             {(["base", "away", "off"] as const).map(s => (
                               <button key={s} className={c.status === s ? "on-" + s : ""}
