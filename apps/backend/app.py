@@ -1234,7 +1234,8 @@ def ensure_default_admin():
     with _db_lock, _db() as c:
         n = c.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
     if not n:
-        _create_user(CFG["admin_email"], CFG["admin_password"], is_admin=1)
+        _create_user(CFG["admin_email"], CFG["admin_password"], is_admin=1,
+                     name="Администратор", phone="+375000000000")
         log.info("created default admin %s — смените пароль после входа", CFG["admin_email"])
 
 
