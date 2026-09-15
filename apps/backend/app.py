@@ -1699,10 +1699,10 @@ _BACK_DWELL_S = 120    # простой у точки после закрыти�
 
 
 def _auto_status_apply(c, new_status):
-    """Перевод статуса курьера по гео: БД, сброс плана, пинок подписчикам."""
+    """Перевод статуса курьера по гео: БД, сброс его маршрутов, пинок подписчикам."""
     c["status"] = new_status
     _persist_couriers()
-    _invalidate_plan(drop_plan=True)
+    _invalidate_plan(courier_id=c["id"])
     _bump()
 
 
@@ -2099,7 +2099,11 @@ def set_courier_point(cid):
     if c.get("point_id") == pid:
         return _payload()
     c["point_id"] = pid
-    _points_changed(persist_couriers=True)
+    STATE["depot"] = _depot_view()
+    _persist_couriers()
+    # его маршруты убираем из планов точечно (мог быть помощником в чужом
+    # депо), планы остальных курьеров сохраняются с пометкой «устарел»
+    _invalidate_plan(courier_id=cid)
     return _payload()
 
 
@@ -2142,7 +2146,9 @@ def upd_courier(cid):
                     return jsonify({"error": "ID Telegram должен быть числом"}), 400
                 c["tg_chat_id"] = new_tg
             _persist_couriers()
-            _invalidate_plan(drop_plan=True)  # курьер может быть помощником в чужом плане
+            # курьер может быть помощником в чужом плане — но его маршрут
+            # убираем точечно, чужие маршруты остаются с пометкой «устарел»
+            _invalidate_plan(courier_id=cid)
             return _payload()
     return jsonify({"error": "Курьер не найден"}), 404
 
@@ -2235,7 +2241,7 @@ def del_courier(cid):
     STATE["couriers"] = [c for c in STATE["couriers"] if c["id"] != cid]
     _persist_orders()
     _persist_couriers()
-    _invalidate_plan(drop_plan=True)
+    _invalidate_plan(courier_id=cid)
     return _payload()
 
 
@@ -2547,7 +2553,7 @@ def courier_returned(cid):
     courier["back_min"] = 0
     _persist_orders()
     _persist_couriers()
-    _invalidate_plan(drop_plan=True, pid=_obj_point(courier))
+    _invalidate_plan(courier_id=cid)
     log.info("courier returned: %s, доставлено %d", courier["name"], delivered)
     return _payload()
 
@@ -2687,14 +2693,37 @@ def _compute_plan(mode="auto", advice=True, force=None, point_id=None):
 # ---------- инвалидация плана (расчёт — только вручную, по кнопке) ----------
 
 
-def _invalidate_plan(drop_plan=False, pid=None):
+def _invalidate_plan(drop_plan=False, pid=None, courier_id=None):
     """План не пересчитываем в фоне — только помечаем/сбрасываем.
 
     pid — депо, чей план инвалидируем (None = все депо: правка точек/настроек).
     drop_plan=True — старый план точно невалиден (удаление заказа/курьера,
     смена депо): сбрасываем сразу. Иначе план показывается с пометкой
     «устарел», пока администратор не нажмёт «Рассчитать».
+    courier_id — курьер-специфичная инвалидация (смена статуса, удаление,
+    возврат на базу, перевод в другое депо): из всех планов убираются только
+    маршруты этого курьера, маршруты остальных курьеров сохраняются
+    с пометкой «устарел» — диспетчер может выдать их без пересчёта.
     """
+    if courier_id is not None:
+        for key, plan in list(STATE["plans"].items()):
+            if plan is None:
+                continue
+            routes = plan.get("routes") or []
+            kept = [r for r in routes if r.get("courier_id") != courier_id]
+            if len(kept) == len(routes):
+                continue  # этого курьера в плане нет — чужие маршруты не трогаем
+            if kept:
+                plan["routes"] = kept
+                plan["stale"] = True
+            else:
+                STATE["plans"].pop(key, None)
+        try:
+            _persist_meta()
+        except sqlite3.Error:
+            pass
+        _bump()
+        return
     plans = STATE["plans"] if pid is None else {pid: STATE["plans"].get(pid)}
     for key, plan in list(plans.items()):
         if plan is None:
