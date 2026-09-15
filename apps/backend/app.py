@@ -1660,6 +1660,11 @@ def _tg_handle_update(u):
     courier = next((c for c in STATE["couriers"]
                     if (c.get("tg_chat_id") or "") == chat_id), None)
     loc = msg.get("location")
+    log.info("tg upd: chat=%s %s%s bound=%s", chat_id,
+             "edit " if u.get("edited_message") else "msg ",
+             ("live-geo" if loc.get("live_period") else
+              "static-geo" if loc else "text"),
+             courier["name"] if courier else "-")
     if loc:
         if courier:
             raw = {"lat": loc["latitude"], "lng": loc["longitude"],
