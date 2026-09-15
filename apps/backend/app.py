@@ -117,6 +117,9 @@ if CFG.get("tz"):
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
+# НЕ перезадавать cookie в каждом ответе: зависший long-poll со старой сессией
+# мог вернуться после смены места работы и затереть новую (my_point «застревал»)
+app.config["SESSION_REFRESH_EACH_REQUEST"] = False
 
 # ---------- логирование ----------
 
