@@ -565,7 +565,22 @@ export default function Console() {
   const clock = planClockFn();
   const autoP = +(st.settings.auto_prio_min || 0);
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
-  const readyOrders = st.orders.filter(o => (o.status || "ready") === "ready");
+  const readyRaw = st.orders.filter(o => (o.status || "ready") === "ready");
+  // дубли ставим рядом: группа встаёт на место первого вхождения адреса
+  const readyOrders = (() => {
+    const emitted = new Set<string>();
+    const res: Order[] = [];
+    for (const o of readyRaw) {
+      const k = addrKey(o.address);
+      if (!dupOids.has(o.id)) { res.push(o); continue; }
+      if (emitted.has(k)) continue;
+      for (const x of readyRaw) {
+        if (addrKey(x.address) === k) res.push(x);
+      }
+      emitted.add(k);
+    }
+    return res;
+  })();
   const outOrders = st.orders.filter(o => o.status === "out");
   const carrying: Record<string, number> = {};
   st.orders.forEach(o => { if (o.status === "out" && o.assigned) carrying[o.assigned] = (carrying[o.assigned] || 0) + 1; });
