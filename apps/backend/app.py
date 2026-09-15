@@ -150,6 +150,7 @@ STATE = {
     "tg_seen": {},       # chat_id -> {"chat_id", "login", "ts"}
     "tg_pos": {},        # chat_id -> {"lat", "lng", "ts", "live"}
     "tg_nagged": {},     # chat_id -> ts последнего «не привязан» (антиспам live-правок)
+    "tg_load": {},       # chat_id -> {"since", "loaded_at"} — трекер выдачи заказов
     "tg_offset": 0,
     "tg_bot": "",        # @username бота (для подсказок в интерфейсе)
 }
@@ -216,6 +217,11 @@ CREATE TABLE IF NOT EXISTS history(
 CREATE TABLE IF NOT EXISTS users(
     id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, pwd_hash TEXT NOT NULL,
     is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS speed_day(
+    courier_id TEXT NOT NULL, day TEXT NOT NULL,
+    geo_m REAL NOT NULL DEFAULT 0, geo_s REAL NOT NULL DEFAULT 0,
+    del_n INTEGER NOT NULL DEFAULT 0, del_min REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY(courier_id, day));
 """
 
 _DB_MIGRATIONS = [
@@ -233,6 +239,8 @@ _DB_MIGRATIONS = [
     ("couriers", "point_id", "ALTER TABLE couriers ADD COLUMN point_id TEXT NOT NULL DEFAULT ''"),
     ("orders", "point_id", "ALTER TABLE orders ADD COLUMN point_id TEXT NOT NULL DEFAULT ''"),
     ("orders", "pin", "ALTER TABLE orders ADD COLUMN pin TEXT NOT NULL DEFAULT ''"),
+    ("users", "name", "ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT ''"),
+    ("users", "phone", "ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -288,12 +296,21 @@ def _persist_orders():
              for x in STATE["orders"]])
 
 
-def _archive_order(order, outcome, courier=""):
+def _archive_order(order, outcome, courier="", courier_id=""):
+    closed = _now().isoformat(timespec="seconds")
+    if outcome == "delivered" and courier_id and order.get("out_at"):
+        try:  # темп доставок -> фоллбек-замер скорости
+            cycle_min = (_now() - datetime.fromisoformat(order["out_at"])
+                         ).total_seconds() / 60.0
+            if 1 <= cycle_min <= 180:
+                _speed_add(courier_id, del_n=1, del_min=cycle_min)
+        except ValueError:
+            pass
     with _db_lock, _db() as c:
         c.execute("INSERT OR REPLACE INTO history VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
                   (order["id"], order["address"], order["lat"], order["lng"],
                    order.get("created_at"),
-                   _now().isoformat(timespec="seconds"), outcome, courier,
+                   closed, outcome, courier,
                    order.get("deadline") or ""))
 
 
@@ -330,6 +347,127 @@ def _history_period(days=1):
 
 def _history_today():
     return _history_period(1)["summary"]
+
+
+# ---------- индивидуальная скорость курьера ----------
+# Замер по гео: пары СГЛАЖЕННЫХ (медиана) точек live-локации с dt >= 15 c,
+# отрезком >= 40 м и скоростью 3..80 км/ч добавляют метры/секунды в speed_day
+# за сегодня. Одиночный GPS-прыжок гасится медианой (не попадает в трек),
+# мелкая дрожь на месте — порогом дистанции, выброс «1000 км/ч» — потолком,
+# а дневная сумма усредняет остаточный шум.
+# Фоллбек по доставкам: средний цикл курьера против среднего по флоту
+# за тот же день — отношение масштабирует скорость по умолчанию.
+_SPEED_MIN_GEO_S = 180.0   # нужно >= 3 минут движения, чтобы доверять гео
+_SPEED_MIN_DEL_N = 2       # нужно >= 2 доставок, чтобы сравнивать темп
+_SPEED_KMH_BOUNDS = (5.0, 80.0)
+_SPEED_RATIO_BOUNDS = (0.6, 1.7)  # фоллбек не может уводить далеко от нормы
+_SPEED_SEG_MIN_M = 40.0    # короче 40 м — дрожь стояния, не движение
+_SPEED_MAX_ACC_M = 100.0   # точность хуже 100 м — точка мусорная
+
+
+def _speed_add(courier_id, day=None, geo_m=0.0, geo_s=0.0, del_n=0, del_min=0.0):
+    day = day or _now().strftime("%Y-%m-%d")
+    with _db_lock, _db() as c:
+        c.execute(
+            "INSERT INTO speed_day(courier_id, day, geo_m, geo_s, del_n, del_min) "
+            "VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(courier_id, day) DO UPDATE SET "
+            "geo_m = geo_m + excluded.geo_m, geo_s = geo_s + excluded.geo_s, "
+            "del_n = del_n + excluded.del_n, del_min = del_min + excluded.del_min",
+            (courier_id, day, geo_m, geo_s, del_n, del_min))
+
+
+def _speed_geo_sample(courier_id, prev, cur):
+    """Складывает отрезок между двумя гео-точками в дневной замер (или игнор)."""
+    dt = cur["ts"] - prev["ts"]
+    if not (15 <= dt <= 600):
+        return
+    if max(prev.get("acc") or 0, cur.get("acc") or 0) > _SPEED_MAX_ACC_M:
+        return  # точность хуже 100 м — верить отрезку нельзя
+    m = haversine_km(prev, cur) * ROAD_FACTOR * 1000.0
+    if m < _SPEED_SEG_MIN_M:
+        return  # дрожь на месте / шаг внутри погрешности GPS
+    kmh = m / 1000.0 / (dt / 3600.0)
+    if 3.0 <= kmh <= 80.0:
+        _speed_add(courier_id, geo_m=m, geo_s=dt)
+
+
+_SPEED_CUR_WINDOW = 240.0  # окно «текущей» скорости, секунды
+_SPEED_CUR_MAX_AGE = 300.0  # гео старше 5 минут — текущей скорости нет
+
+
+def _speed_current_kmh(pos, now):
+    """Скорость «прямо сейчас» по свежему гео-треку. None — гео нет/устарело,
+    0.0 — стоит на месте (точки есть, движения нет)."""
+    if not pos or now - pos["ts"] > _SPEED_CUR_MAX_AGE:
+        return None
+    hist = [h for h in pos.get("hist", []) if now - h["ts"] <= _SPEED_CUR_WINDOW]
+    if len(hist) < 2:
+        return None
+    m_sum = t_sum = 0.0
+    for a, b in zip(hist, hist[1:]):
+        dt = b["ts"] - a["ts"]
+        if dt < 5:
+            continue
+        if max(a.get("acc") or 0, b.get("acc") or 0) > _SPEED_MAX_ACC_M:
+            continue
+        m = haversine_km(a, b) * ROAD_FACTOR * 1000.0
+        if m < _SPEED_SEG_MIN_M:
+            continue  # дрожь — не движение, но и не выброс
+        kmh = m / 1000.0 / (dt / 3600.0)
+        if kmh > 90.0:
+            continue  # GPS-прыжок
+        m_sum += m
+        t_sum += dt
+    return round(m_sum / 1000.0 / (t_sum / 3600.0), 1) if t_sum else 0.0
+
+
+def _speed_rows(courier_id, limit=30):
+    with _db_lock, _db() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM speed_day WHERE courier_id = ? "
+            "ORDER BY day DESC LIMIT ?", (courier_id, limit))]
+
+
+def _speed_fleet_cycle_avg(day):
+    """Средний цикл доставок по всем курьерам за день (или None)."""
+    with _db_lock, _db() as c:
+        r = c.execute("SELECT SUM(del_min) AS s, SUM(del_n) AS n FROM speed_day "
+                      "WHERE day = ? AND del_n > 0", (day,)).fetchone()
+    return (r["s"] / r["n"]) if r and r["n"] else None
+
+
+def _speed_from_row(row, default_kmh):
+    """Скорость из строки дня: сначала гео, иначе темп доставок. None — нет данных."""
+    if row["geo_s"] >= _SPEED_MIN_GEO_S:
+        kmh = row["geo_m"] / row["geo_s"] * 3.6
+        if kmh > 0.5:
+            return min(_SPEED_KMH_BOUNDS[1], max(_SPEED_KMH_BOUNDS[0], kmh)), "geo"
+    if row["del_n"] >= _SPEED_MIN_DEL_N:
+        mine = row["del_min"] / row["del_n"]
+        fleet = _speed_fleet_cycle_avg(row["day"])
+        if fleet and mine > 0:
+            ratio = fleet / mine  # цикл длиннее среднего -> медленнее
+            ratio = min(_SPEED_RATIO_BOUNDS[1], max(_SPEED_RATIO_BOUNDS[0], ratio))
+            return min(_SPEED_KMH_BOUNDS[1],
+                       max(_SPEED_KMH_BOUNDS[0], default_kmh * ratio)), "delivery"
+    return None
+
+
+def _courier_speed(courier, settings=None):
+    """(км/ч, источник) индивидуальной скорости курьера.
+
+    Лестница: сегодня (гео -> доставки) -> вчера -> самый свежий день с замером
+    -> настройка speed_kmh (источник "default").
+    """
+    default_kmh = max(5.0, float((settings or STATE["settings"])
+                                 .get("speed_kmh", 60)))
+    if not courier or not courier.get("id"):
+        return default_kmh, "default"
+    for row in _speed_rows(courier["id"]):
+        got = _speed_from_row(row, default_kmh)
+        if got:
+            return got
+    return default_kmh, "default"
 
 
 def load_state():
@@ -671,11 +809,13 @@ def _approach_map(points, home, k_orders, settings):
     return out
 
 
-def _eta_pass(stop_nodes, delay, matrix, settings, solved_dt, appr=None, home=0):
+def _eta_pass(stop_nodes, delay, matrix, settings, solved_dt, appr=None, home=0,
+              spd_factor=1.0):
     """ETA остановок поездки (минуты от solved_dt) с почасовыми коэффициентами.
 
     Матрица построена с базовым коэффициентом traffic: дуга очищается от него
     и домножается на коэффициент часа фактического выезда на дугу.
+    spd_factor — индивидуальный множитель курьера (замедленная/быстрая езда).
     Возвращает (список ETA остановок, полная длительность поездки).
     """
     hourly = int(settings.get("hour_traffic", 1))
@@ -687,13 +827,13 @@ def _eta_pass(stop_nodes, delay, matrix, settings, solved_dt, appr=None, home=0)
     for g in stop_nodes:
         hour = (solved_dt + timedelta(minutes=t)).hour
         factor = _HOURLY_TRAFFIC.get(hour, 1.0) if hourly else 1.0
-        travel = (matrix[node][g] - handover) / base_traffic * factor
+        travel = (matrix[node][g] - handover) / base_traffic * factor * spd_factor
         t += travel + handover + (appr.get(g, 0) if appr else 0)
         etas.append(int(round(t)))
         node = g
     hour = (solved_dt + timedelta(minutes=t)).hour
     factor = _HOURLY_TRAFFIC.get(hour, 1.0) if hourly else 1.0
-    t += matrix[node][home] / base_traffic * factor
+    t += matrix[node][home] / base_traffic * factor * spd_factor
     return etas, int(round(t))
 
 
@@ -754,6 +894,12 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None):
     max_orders = int(settings["max_orders"])
     reload_min = max(0, int(settings.get("reload_min", 10)))
 
+    # Индивидуальная скорость: дорожное время масштабируется на default/замер.
+    default_kmh = max(5.0, float(settings.get("speed_kmh", 60)))
+    speeds = {c["id"]: _courier_speed(c, settings) for c in couriers}
+    spd_factor = {cid: max(0.25, min(4.0, default_kmh / kmh))
+                  for cid, (kmh, _src) in speeds.items()}
+
     deadline_rel, eff_prio, auto_flag = {}, {}, {}
     for i, o in enumerate(orders):
         g = K + i
@@ -773,6 +919,9 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None):
             return 0
         g = _courier_geo(c, _home_point(c))
         if g:  # живая гео точнее ручной оценки
+            if g.get("to_point_min") is not None:
+                # заказы прежней партии ещё не забраны: доехать + погрузиться
+                return min(480, g["to_point_min"] + reload_min)
             return g["back_min"]
         return max(0, int(c.get("back_min", 15)))
 
@@ -801,10 +950,15 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None):
         manager = pywrapcp.RoutingIndexManager(len(sub), n_veh, starts, starts)
         routing = pywrapcp.RoutingModel(manager)
 
-        def make_cb(delay, hpos, appr, allowed):
+        def make_cb(delay, hpos, appr, allowed, factor):
             def cb(from_index, to_index):
                 i, j = sub[manager.IndexToNode(from_index)], sub[manager.IndexToNode(to_index)]
-                cost = matrix[i][j] + (delay if i == sub[hpos] else 0)
+                arc = matrix[i][j]
+                if j != 0 and arc > handover:
+                    # дуга прибытия в заказ содержит вручение — его не масштабируем
+                    # (arc == 0 — петля непосещённого узла, её не трогаем)
+                    arc = int(round((arc - handover) * factor)) + handover
+                cost = arc + (delay if i == sub[hpos] else 0)
                 if j >= K:
                     cost += appr.get(j, 0)
                     if j not in allowed:      # чужая точка выдачи — везти нельзя
@@ -817,7 +971,8 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None):
                                appr_home[home_of[c["id"]]],
                                {K + i for i, o in enumerate(orders)
                                 if order_pid[K + i] == home_pid[c["id"]]
-                                and (not o.get("pin") or o["pin"] == c["id"])}))
+                                and (not o.get("pin") or o["pin"] == c["id"])},
+                               spd_factor.get(c["id"], 1.0)))
                    for c in round_couriers]
         for v, cb_idx in enumerate(cb_idxs):
             routing.SetArcCostEvaluatorOfVehicle(cb_idx, v)
@@ -865,6 +1020,8 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None):
         params.time_limit.FromSeconds(4 if round_no == 0 else 2)
         solution = routing.SolveWithParameters(params)
         if solution is None:
+            log.warning("solve round %d: no solution (status=%s, veh=%d, nodes=%d)",
+                        round_no, routing.status(), n_veh, len(sub))
             if round_no == 0:
                 raise RuntimeError("OR-Tools не нашёл решение, попробуйте ещё раз")
             break
@@ -897,7 +1054,8 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None):
         trips, flat = [], []
         for tr in trips_raw:
             etas, total = _eta_pass(tr["stops"], tr["delay"], matrix, settings,
-                                    solved_dt, appr_home[h], home=h)
+                                    solved_dt, appr_home[h], home=h,
+                                    spd_factor=spd_factor.get(c["id"], 1.0))
             stops = []
             for g, eta in zip(tr["stops"], etas):
                 o = orders[g - K]
@@ -930,7 +1088,9 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None):
             "distance_km": (round(sum(t["distance_km"] for t in trips), 1)
                             if all(t["distance_km"] is not None for t in trips) else None),
             "tg_chat_id": c.get("tg_chat_id") or "",
-            "home_point": home_view})
+            "home_point": home_view,
+            "speed_kmh": round(speeds[c["id"]][0], 1),
+            "speed_src": speeds[c["id"]][1]})
 
     # Сначала «отдать сейчас» (на базе), потом «следующим»
     routes.sort(key=lambda r: 0 if r["status"] == "base" else 1)
@@ -982,19 +1142,37 @@ def _verify_pwd(pwd, stored):
         return False
 
 
-def _create_user(email, password, is_admin=0):
-    email = email.strip().lower()
+def _check_user_email(email):
+    """Нормализует и валидирует email; бросает ValueError с текстом для 400."""
+    email = (email or "").strip().lower()
     if not re.match(r"^[^@\s]{1,64}@[^@\s]{1,190}$", email):
         raise ValueError("Некорректный email")
+    return email
+
+
+def _check_user_contact(name, phone):
+    """Нормализует и валидирует имя/телефон диспетчера; бросает ValueError."""
+    name = (name or "").strip()
+    phone = (phone or "").strip()
+    if len(name) < 2:
+        raise ValueError("Укажите имя диспетчера (минимум 2 символа)")
+    if not re.match(r"^\+?[\d\s()-]{7,20}$", phone):
+        raise ValueError("Укажите телефон для связи (например, +375291234567)")
+    return name, phone
+
+
+def _create_user(email, password, is_admin=0, name="", phone=""):
+    email = _check_user_email(email)
     if len(password or "") < 4:
-        raise ValueError("Пароль: минимум 4 символа")
+        raise ValueError("Пароль: минимум 4 символов")
+    name, phone = _check_user_contact(name, phone)
     uid = uuid.uuid4().hex[:8]
     with _db_lock, _db() as c:
         try:
-            c.execute("INSERT INTO users(id, email, pwd_hash, is_admin, created_at) "
-                      "VALUES(?, ?, ?, ?, ?)",
+            c.execute("INSERT INTO users(id, email, pwd_hash, is_admin, created_at, name, phone) "
+                      "VALUES(?, ?, ?, ?, ?, ?, ?)",
                       (uid, email, _hash_pwd(password), int(bool(is_admin)),
-                       _now().isoformat(timespec="seconds")))
+                       _now().isoformat(timespec="seconds"), name, phone))
         except sqlite3.IntegrityError:
             raise ValueError(f"Пользователь {email} уже существует") from None
     return uid
@@ -1014,14 +1192,14 @@ def _me():
     if not uid:
         return None
     with _db_lock, _db() as c:
-        r = c.execute("SELECT id, email, is_admin FROM users WHERE id = ?", (uid,)).fetchone()
+        r = c.execute("SELECT id, email, is_admin, name, phone FROM users WHERE id = ?", (uid,)).fetchone()
     return dict(r) if r else None
 
 
 def _admin_users():
     with _db_lock, _db() as c:
         return [dict(r) for r in c.execute(
-            "SELECT id, email, is_admin, created_at FROM users ORDER BY created_at")]
+            "SELECT id, email, is_admin, created_at, name, phone FROM users ORDER BY created_at")]
 
 
 _LOGIN_FAILS = {}  # ip -> [число ошибок, залочено_до_epoch]
@@ -1208,7 +1386,8 @@ def api_add_user():
     data = _json()
     try:
         _create_user(data.get("email") or "", data.get("password") or "",
-                     is_admin=data.get("is_admin"))
+                     is_admin=data.get("is_admin"),
+                     name=data.get("name") or "", phone=data.get("phone") or "")
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     log.info("user added by %s: %s", me["email"], data.get("email"))
@@ -1234,6 +1413,52 @@ def api_del_user(uid):
     log.info("user removed by %s: %s", me["email"], victim["email"])
     _bump()
     return _payload()
+
+
+@app.put("/api/users/<uid>")
+def api_upd_user(uid):
+    me = _me()
+    if not me or not me["is_admin"]:
+        return jsonify({"error": "Только администратор может изменять пользователей"}), 403
+    data = _json()
+    try:
+        email = _check_user_email(data.get("email"))
+        name, phone = _check_user_contact(data.get("name"), data.get("phone"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    is_admin = int(bool(data.get("is_admin")))
+    with _db_lock, _db() as c:
+        victim = c.execute("SELECT id, email, is_admin FROM users WHERE id = ?", (uid,)).fetchone()
+        if not victim:
+            return jsonify({"error": "Пользователь не найден"}), 404
+        admins = c.execute("SELECT COUNT(*) AS n FROM users WHERE is_admin = 1").fetchone()["n"]
+        if victim["is_admin"] and not is_admin and admins <= 1:
+            return jsonify({"error": "Нельзя снять права с последнего администратора"}), 400
+        try:
+            c.execute("UPDATE users SET email = ?, name = ?, phone = ?, is_admin = ? WHERE id = ?",
+                      (email, name, phone, is_admin, uid))
+        except sqlite3.IntegrityError:
+            return jsonify({"error": f"Пользователь {email} уже существует"}), 400
+    log.info("user updated by %s: %s", me["email"], victim["email"])
+    _bump()
+    return _payload()
+
+
+@app.put("/api/users/<uid>/password")
+def api_reset_user_pwd(uid):
+    me = _me()
+    if not me or not me["is_admin"]:
+        return jsonify({"error": "Только администратор может сбрасывать пароли"}), 403
+    new = _json().get("new") or ""
+    if len(new) < 4:
+        return jsonify({"error": "Пароль: минимум 4 символа"}), 400
+    with _db_lock, _db() as c:
+        victim = c.execute("SELECT email FROM users WHERE id = ?", (uid,)).fetchone()
+        if not victim:
+            return jsonify({"error": "Пользователь не найден"}), 404
+        c.execute("UPDATE users SET pwd_hash = ? WHERE id = ?", (_hash_pwd(new), uid))
+    log.info("user password reset by %s: %s", me["email"], victim["email"])
+    return jsonify({"ok": True})
 
 
 @app.post("/api/password")
@@ -1301,17 +1526,67 @@ def _tg_api(method):
     return f"https://api.telegram.org/bot{CFG['tg_bot_token']}/{method}"
 
 
+def _esc(s):
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _plural(n, forms):
+    """Русское склонение: _plural(3, ("заказ", "заказа", "заказов")) -> "заказа"."""
+    n = abs(n)
+    if n % 100 in (11, 12, 13, 14):
+        return forms[2]
+    if n % 10 == 1:
+        return forms[0]
+    if n % 10 in (2, 3, 4):
+        return forms[1]
+    return forms[2]
+
+
 def _tg_send(chat_id, text):
     """Исходящее сообщение курьеру (ошибки не критичны — молча в лог)."""
     try:
         requests.post(_tg_api("sendMessage"),
-                      json={"chat_id": chat_id, "text": text}, timeout=5)
+                      json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=5)
     except requests.RequestException as e:
         log.warning("tg sendMessage: %s", e)
 
 
 TG_GEO_FRESH = 600      # гео свежая для расчётов <= 10 мин
 TG_GEO_AT_PLACE = 0.15  # ближе 150 м = «на месте» (депо/заказ)
+_LOAD_DWELL_S = 120     # столько нужно простоя у точки, чтобы считать выдачу состоявшейся
+
+
+def _courier_has_out(c):
+    return any(o.get("assigned") == c.get("id") and (o.get("status") or "ready") == "out"
+               for o in STATE["orders"])
+
+
+def _load_track(c, pos, now=None):
+    """Трекер «заказы отдали»: курьер обязан реально постоять у своей точки.
+
+    Ложные срабатывания отсекаются тремя способами: позиция сглажена медианой
+    (GPS-прыжок не доезжает до точки), нужен непрерывный простой _LOAD_DWELL_S
+    (заезд мимо не считается), и у курьера должны быть выданные заказы.
+    """
+    chat = c.get("tg_chat_id") or ""
+    home = _home_point(c)
+    if not chat or not home:
+        return
+    if not _courier_has_out(c):
+        STATE["tg_load"].pop(chat, None)  # партия закрыта — готовимся к следующей
+        return
+    now = now or time.time()
+    rec = STATE["tg_load"].setdefault(chat, {"since": None, "loaded_at": None})
+    if rec["loaded_at"]:
+        return
+    if haversine_km(pos, home) <= TG_GEO_AT_PLACE:
+        rec["since"] = rec["since"] or now
+        if now - rec["since"] >= _LOAD_DWELL_S:
+            rec["loaded_at"] = now
+            log.info("load tracked: %s получил заказы у точки «%s»", c.get("name"), home.get("name"))
+            _bump()
+    else:
+        rec["since"] = None  # отошёл, не дождавшись выдачи — отсчёт заново
 
 
 def _courier_geo(c, depot, now=None):
@@ -1335,10 +1610,22 @@ def _courier_geo(c, depot, now=None):
         g["at_depot"] = True
         g["back_min"] = 0
     else:
-        speed = max(5.0, float(STATE["settings"].get("speed_kmh", 60)))
+        kmh, _src = _courier_speed(c)
         g["at_depot"] = False
         g["back_min"] = int(min(480, max(1, round(
-            km * ROAD_FACTOR / speed * 60))))
+            km * ROAD_FACTOR / kmh * 60))))
+    # фаза развозки: заказы выданы? загрузка у точки зафиксирована?
+    has_out = _courier_has_out(c)
+    load = STATE["tg_load"].get(c.get("tg_chat_id") or "") or {}
+    g["has_out"] = has_out
+    g["loaded"] = bool(load.get("loaded_at"))
+    if has_out and not g["at_depot"]:
+        g["delivering"] = True   # выданы и не у точки — значит, едет с заказами
+    if not has_out and not g["at_depot"]:
+        # заказы ещё не в машине: честный ETA — сначала доехать до точки
+        kmh2, _ = _courier_speed(c)
+        g["to_point_min"] = int(min(240, max(1, round(
+            km * ROAD_FACTOR / kmh2 * 60))))
     # стоит ли курьер прямо сейчас у одного из своих выданных заказов
     best, best_km = None, None
     for o in STATE["orders"]:
@@ -1385,10 +1672,18 @@ def _tg_handle_update(u):
             recent = [h for h in hist if raw["ts"] - h["ts"] <= 600][-3:]
             lats = sorted(h["lat"] for h in recent)
             lngs = sorted(h["lng"] for h in recent)
+            smoothed = {"lat": lats[len(lats) // 2], "lng": lngs[len(lngs) // 2],
+                        "ts": raw["ts"], "acc": raw["acc"]}
+            # замер скорости — по сглаженному треку: одиночный GPS-прыжок
+            # гасится медианой и в отрезок не попадает
+            prev_s = STATE["tg_pos"].get(chat_id, {}).get("sprev")
+            if prev_s:
+                _speed_geo_sample(courier["id"], prev_s, smoothed)
             STATE["tg_pos"][chat_id] = {
-                "lat": lats[len(lats) // 2], "lng": lngs[len(lngs) // 2],
+                "lat": smoothed["lat"], "lng": smoothed["lng"],
                 "ts": raw["ts"], "live": raw["live"], "acc": raw["acc"],
-                "hist": hist}
+                "hist": hist, "sprev": smoothed}
+            _load_track(courier, smoothed, raw["ts"])
             _bump()  # курьер двигается — карта обновится у всех
         else:
             # live-локация шлёт правки каждые несколько секунд — «не привязан»
@@ -1397,13 +1692,17 @@ def _tg_handle_update(u):
             if now_ts - STATE["tg_nagged"].get(chat_id, 0) > 1800:
                 STATE["tg_nagged"][chat_id] = now_ts
                 _tg_send(chat_id,
-                         f"Вас ещё не привязали к курьеру. Сообщите администратору "
-                         f"ваш ID: {chat_id}")
+                          f"Похоже, вас ещё не привязали к курьеру. Отправьте этот ID "
+                          f"администратору: <code>{chat_id}</code>")
     elif (msg.get("text") or "").strip().startswith("/start"):
         _tg_send(chat_id,
-                 "Привет! Отправьте геолокацию (скрепка → «Геолокация») или "
-                 "запустите трансляцию live-локации — диспетчер увидит вас "
-                 f"на карте.\nВаш ID для привязки: {chat_id}")
+                 "Привет! Это бот развозки.\n\n"
+                 "Нужна <b>живая геолокация</b>:\n"
+                 "скрепка → «Геолокация» → «Поделиться моей геолокацией» → "
+                 "время <b>«Пока не отключу»</b>.\n\n"
+                 "Тогда диспетчер видит вас на карте всю смену.\n\n"
+                 f"Ваш ID: <code>{chat_id}</code>\n"
+                 "Скажите его администратору, и вас подключат к курьеру.")
 
 
 def _tg_poll_loop():
@@ -1441,16 +1740,16 @@ def _tg_start_polling():
     """Запуск поллера при старте, если задан токен бота."""
     if not CFG["tg_bot_token"]:
         return
+    try:
+        me = requests.get(_tg_api("getMe"), timeout=10).json().get("result") or {}
+        STATE["tg_bot"] = "@" + me.get("username", "")
+        log.info("tg bot: %s", STATE["tg_bot"])
+    except requests.RequestException as e:
+        log.warning("tg getMe failed: %s", e)
     if not CFG["tg_poll"]:
         log.info("tg bot: поллер выключен (tg_poll=0) — геолокации слушает "
                  "другой сервер")
         return
-    try:
-        me = requests.get(_tg_api("getMe"), timeout=10).json().get("result") or {}
-        STATE["tg_bot"] = "@" + me.get("username", "")
-        log.info("tg bot: %s — слушаю геолокации", STATE["tg_bot"])
-    except requests.RequestException as e:
-        log.warning("tg getMe failed: %s", e)
     threading.Thread(target=_tg_poll_loop, daemon=True).start()
 
 
@@ -1464,12 +1763,18 @@ def _payload():
         pos = STATE["tg_pos"].get(c.get("tg_chat_id") or "")
         if pos and now - pos["ts"] < TG_POS_TTL:
             cc["pos"] = {k: v for k, v in pos.items() if k != "hist"}
+        cur = _speed_current_kmh(pos, now)
+        if cur is not None:
+            cc["cur_kmh"] = cur
+        avg_kmh, avg_src = _courier_speed(c)
+        cc["avg_kmh"] = round(avg_kmh, 1)
+        cc["speed_src"] = avg_src
         geo = _courier_geo(c, _home_point(c), now)
         if geo:
             cc["geo"] = geo
         couriers.append(cc)
     st = {k: v for k, v in STATE.items()
-          if k not in ("tg_seen", "tg_pos", "tg_offset", "tg_nagged")}
+          if k not in ("tg_seen", "tg_pos", "tg_offset", "tg_nagged", "tg_load")}
     seen = sorted(STATE["tg_seen"].values(), key=lambda x: -x["ts"])[:20]
     # живые счётчики по точкам: курьеры + админы онлайн
     now2 = time.time()
@@ -1671,9 +1976,11 @@ def bind_courier(cid):
                              or "").strip()[:64]
             _persist_couriers()
             _tg_send(chat_id,
-                     f"Привязано к курьеру «{c['name']}». Отправьте геолокацию "
-                     "(скрепка → «Геолокация» или live-трансляция) — вы появитесь "
-                     "на карте диспетчера.")
+                     f"Готово! Вы привязаны: курьер «{_esc(c['name'])}».\n\n"
+                     "Включите <b>живую геолокацию</b>:\n"
+                     "скрепка → «Геолокация» → «Поделиться моей геолокацией» → "
+                     "время <b>«Пока не отключу»</b>.\n\n"
+                     "Диспетчер увидит вас на карте.")
             _bump()
             return _payload()
     return jsonify({"error": "Курьер не найден"}), 404
@@ -1767,7 +2074,7 @@ def del_order(oid):
         else "cancelled"
     order = next((o for o in STATE["orders"] if o["id"] == oid), None)
     if order:
-        courier_name = ""
+        courier_name, courier_id = "", order.get("assigned") or ""
         if order.get("assigned"):
             c = next((c for c in STATE["couriers"] if c["id"] == order["assigned"]), None)
             courier_name = c["name"] if c else order["assigned"]
@@ -1775,8 +2082,9 @@ def del_order(oid):
             for r in STATE["plan"].get("routes", []):
                 if any(s["order_id"] == oid for s in r["stops"]):
                     courier_name = r["courier_name"]
+                    courier_id = courier_id or r.get("courier_id") or ""
                     break
-        _archive_order(order, outcome, courier_name)
+        _archive_order(order, outcome, courier_name, courier_id)
     STATE["orders"] = [o for o in STATE["orders"] if o["id"] != oid]
     _persist_orders()
     _invalidate_plan(drop_plan=True)
@@ -1992,7 +2300,7 @@ def courier_returned(cid):
     delivered = 0
     for o in STATE["orders"]:
         if o.get("assigned") == cid and o.get("status") == "out":
-            _archive_order(o, "delivered", courier["name"])
+            _archive_order(o, "delivered", courier["name"], courier_id=cid)
             delivered += 1
     STATE["orders"] = [o for o in STATE["orders"]
                        if not (o.get("assigned") == cid and o.get("status") == "out")]
@@ -2302,10 +2610,17 @@ def plan_move():
 def _retime_route(route, matrix, node, settings, now_dt, appr=None, home=0):
     """Пересчёт ETA всех заездов курьера от now_dt. Меняет route на месте."""
     now_hm = now_dt.hour * 60 + now_dt.minute
+    courier = next((c for c in STATE["couriers"]
+                    if c["id"] == route.get("courier_id")), None)
+    default_kmh = max(5.0, float(settings.get("speed_kmh", 60)))
+    kmh, _src = _courier_speed(courier, settings) if courier else (default_kmh, "default")
+    spd_factor = max(0.25, min(4.0, default_kmh / kmh))
+    route["speed_kmh"] = round(kmh, 1)
+    route["speed_src"] = _src
     for tr in route.get("trips", []):
         seq = [node[s["order_id"]] for s in tr["stops"]]
         etas, total = _eta_pass(seq, tr["start_delay_min"], matrix, settings,
-                                now_dt, appr, home)
+                                now_dt, appr, home, spd_factor=spd_factor)
         for s, eta in zip(tr["stops"], etas):
             s["eta_min"] = eta
             s["eta_clock"] = (now_dt + timedelta(minutes=eta)).strftime("%H:%M")
@@ -2326,6 +2641,7 @@ def _retime_route(route, matrix, node, settings, now_dt, appr=None, home=0):
 @app.post("/api/notify/courier/<cid>")
 def notify_courier(cid):
     """Отправка маршрута курьеру в Telegram (нужны токен бота и chat_id)."""
+    me = _me()
     if not CFG["tg_bot_token"]:
         return jsonify({"error": "tg_bot_token не задан в config.ini"}), 400
     courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
@@ -2336,22 +2652,77 @@ def notify_courier(cid):
     chat = (courier.get("tg_chat_id") or "").strip()
     if not chat:
         return jsonify({"error": f"У курьера {courier['name']} не указан Telegram chat_id"}), 400
-    lines = [f"🛵 Маршрут: {route['courier_name']} ({route['count']} заказ.)"]
+    z_word = _plural(route["count"], ("заказ", "заказа", "заказов"))
+    lines = [f"🛵 <b>{_esc(route['courier_name'])}, маршрут на смену</b>: "
+             f"{route['count']} {z_word}"]
     for ti, tr in enumerate(route["trips"], start=1):
         if len(route["trips"]) > 1:
-            lines.append(f"Заезд {ti} (старт ≈{tr['start_clock']})")
+            lines.append(f"Заезд {ti}: старт ≈{tr['start_clock']}")
         for i, s in enumerate(tr["stops"], start=1):
-            lines.append(f"{i}. {s['address']} · ≈{s['eta_clock']}")
+            lines.append(f"{i}. {_esc(s['address'])} · ≈{s['eta_clock']}")
+    lines.append("Время приблизительное, следите за сообщениями.")
+    if (me or {}).get("name") and (me or {}).get("phone"):
+        lines.append(f"\nЕсть вопросы? - {_esc(me['name'])}, {me['phone']}")
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{CFG['tg_bot_token']}/sendMessage",
-            json={"chat_id": chat, "text": "\n".join(lines)}, timeout=10)
+            json={"chat_id": chat, "text": "\n".join(lines), "parse_mode": "HTML"}, timeout=10)
         data = resp.json()
     except requests.RequestException as e:
         return jsonify({"error": f"Telegram недоступен: {e}"}), 502
     if not data.get("ok"):
         return jsonify({"error": f"Telegram: {data.get('description', 'ошибка')}"}), 400
     log.info("telegram sent: %s (%s)", courier["name"], cid)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/profile")
+def api_profile():
+    """Имя и телефон текущего диспетчера (для подписи в сообщениях курьерам)."""
+    me = _me()
+    if not me:
+        return jsonify({"error": "Требуется вход"}), 401
+    data = _json()
+    try:
+        name, phone = _check_user_contact(data.get("name"), data.get("phone"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    with _db_lock, _db() as c:
+        c.execute("UPDATE users SET name = ?, phone = ? WHERE id = ?", (name, phone, me["id"]))
+    log.info("profile updated: %s -> %s / %s", me["email"], name, phone)
+    _bump()
+    return _payload()
+
+
+@app.post("/api/notify/tg")
+def notify_tg():
+    """Произвольное сообщение от имени бота привязанному пользователю (админ)."""
+    me = _me()
+    if not me:
+        return jsonify({"error": "Требуется вход"}), 401
+    if not me["is_admin"]:
+        return jsonify({"error": "Только администратор может отправлять сообщения"}), 403
+    if not CFG["tg_bot_token"]:
+        return jsonify({"error": "tg_bot_token не задан в config.ini"}), 400
+    data = request.get_json(silent=True) or {}
+    chat = str(data.get("chat_id") or "").strip()
+    text = str(data.get("text") or "").strip()
+    if not chat or not text:
+        return jsonify({"error": "Нужны chat_id и текст"}), 400
+    if len(text) > 3500:
+        return jsonify({"error": "Сообщение слишком длинное (макс. 3500 символов)"}), 400
+    if not me.get("name") or not me.get("phone"):
+        return jsonify({"error": "Заполните имя и телефон в профиле: шестерёнка → Профиль"}), 400
+    text = f"{text}\n\nЕсть вопросы? - {me['name']}, {me['phone']}"
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{CFG['tg_bot_token']}/sendMessage",
+            json={"chat_id": chat, "text": text}, timeout=10)
+        data = resp.json()
+    except requests.RequestException as e:
+        return jsonify({"error": f"Telegram недоступен: {e}"}), 502
+    if not data.get("ok"):
+        return jsonify({"error": f"Telegram: {data.get('description', 'ошибка')}"}), 400
     return jsonify({"ok": True})
 
 
