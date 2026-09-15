@@ -151,6 +151,8 @@ STATE = {
     "tg_pos": {},        # chat_id -> {"lat", "lng", "ts", "live"}
     "tg_nagged": {},     # chat_id -> ts последнего «не привязан» (антиспам live-правок)
     "tg_load": {},       # chat_id -> {"since", "loaded_at"} — трекер выдачи заказов
+    "tg_deliv": {},      # chat_id -> {order_id: {"since", "at"}} — вывод «доставлен»
+                         # ТОЛЬКО для расчёта возврата; статус заказа не меняет
     "tg_offset": 0,
     "tg_bot": "",        # @username бота (для подсказок в интерфейсе)
 }
@@ -1566,6 +1568,47 @@ def _load_track(c, pos, now=None):
         rec["since"] = None  # отошёл, не дождавшись выдачи — отсчёт заново
 
 
+_DELIVER_DWELL_S = 90  # сколько стоять у адреса, чтобы расчёт счёл заказ доставленным
+
+
+def _deliver_track(c, pos, now=None):
+    """Вывод «курьер отвёз заказ» ПО ГЕО — только для расчёта возврата.
+
+    Заказ считается развезённым в расчёте, когда курьер непрерывно простоял
+    _DELIVER_DWELL_S в радиусе TG_GEO_AT_PLACE от адреса. Статус заказа при
+    этом НЕ меняется — его по-прежнему закрывает диспетчер вручную.
+    Заезд мимо без остановки не считается (счётчик простоя сбрасывается).
+    """
+    chat = c.get("tg_chat_id") or ""
+    if not chat:
+        return
+    out_orders = [o for o in STATE["orders"]
+                  if o.get("assigned") == c.get("id")
+                  and (o.get("status") or "ready") == "out"]
+    st = STATE["tg_deliv"].setdefault(chat, {})
+    alive = {o["id"] for o in out_orders}
+    for k in list(st):  # закрытые диспетчером записи чистим
+        if k not in alive:
+            st.pop(k, None)
+    if not out_orders:
+        STATE["tg_deliv"].pop(chat, None)
+        return
+    now = now or time.time()
+    for o in out_orders:
+        rec = st.setdefault(o["id"], {})
+        if rec.get("at"):
+            continue
+        if haversine_km(pos, o) <= TG_GEO_AT_PLACE:
+            rec["since"] = rec.get("since") or now
+            if now - rec["since"] >= _DELIVER_DWELL_S:
+                rec["at"] = now
+                log.info("deliver tracked: %s был у адреса «%s» — из расчёта возврата",
+                         c.get("name"), o.get("address"))
+                _bump()
+        else:
+            rec.pop("since", None)  # проехал мимо — не считается
+
+
 def _courier_geo(c, depot, now=None):
     """Гео-данные курьера для расчётов: сглаженная позиция + оценка возврата на депо.
 
@@ -1598,10 +1641,15 @@ def _courier_geo(c, depot, now=None):
     g["loaded"] = bool(load.get("loaded_at"))
     if has_out and not g["at_depot"]:
         g["delivering"] = True   # выданы и не у точки — значит, едет с заказами
-        # честный возврат: дорога до точки + развоз невыданных-недоставленных
+        # честный возврат: дорога до точки + развоз невыданных-недоставленных.
+        # «доставленные» выводим по гео (долго стоял у адреса) — для расчёта
+        # их считаем развезёнными; статус заказа не трогаем
+        chat = c.get("tg_chat_id") or ""
+        dst = STATE["tg_deliv"].get(chat) or {}
         rem = sum(1 for o in STATE["orders"]
                   if (o.get("status") or "ready") == "out"
-                  and (o.get("assigned") or "") == c.get("id"))
+                  and (o.get("assigned") or "") == c.get("id")
+                  and not dst.get(o["id"], {}).get("at"))
         per = _courier_del_avg_min(c)
         g["back_min"] = int(min(480, g["back_min"] + rem * per))
     if not has_out and not g["at_depot"]:
@@ -1672,6 +1720,7 @@ def _tg_handle_update(u):
                 "ts": raw["ts"], "live": raw["live"], "acc": raw["acc"],
                 "hist": hist, "sprev": smoothed}
             _load_track(courier, smoothed, raw["ts"])
+            _deliver_track(courier, smoothed, raw["ts"])
             _bump()  # курьер двигается — карта обновится у всех
         else:
             # live-локация шлёт правки каждые несколько секунд — «не привязан»
