@@ -1267,13 +1267,20 @@ ONLINE_WINDOW = 90
 
 
 def _my_point():
-    """Рабочая точка текущей сессии (селектор «Место работы» в шапке)."""
-    sid = session.get("sid")
-    if sid:
-        with _ONLINE_LOCK:
-            pt = (ONLINE.get(sid) or {}).get("point_id")
-        if pt:
-            return pt
+    """Рабочая точка текущей сессии (селектор «Место работы» в шапке).
+
+    Авторитетное значение — session["point"]: переживает простой,
+    ONLINE-запись держит лишь живое зеркало для счётчиков «онлайн у точки».
+    """
+    pt = session.get("point") or ""
+    if pt and any(p["id"] == pt for p in STATE.get("points") or []):
+        sid = session.get("sid")
+        if sid:
+            with _ONLINE_LOCK:
+                rec = ONLINE.get(sid)
+                if rec is not None and rec.get("point_id") != pt:
+                    rec["point_id"] = pt  # зеркало догоняет сессию
+        return pt
     return (STATE.get("points") or [{}])[0].get("id") or ""
 
 
@@ -1368,9 +1375,14 @@ def api_workpoint():
         return jsonify({"error": "Неизвестная точка выдачи"}), 400
     if "sid" not in session:
         session["sid"] = uuid.uuid4().hex
-        with _ONLINE_LOCK:
+    session["point"] = pid  # авторитетное значение — переживёт простой сессии
+    with _ONLINE_LOCK:
+        rec = ONLINE.get(session["sid"])
+        if rec is None:
             ONLINE[session["sid"]] = {"uid": me["id"], "email": me["email"],
                                       "point_id": pid, "last": time.time()}
+        else:
+            rec["point_id"] = pid
     _touch_online(pid)
     _bump()  # другие админы увидят обновлённые счётчики на карточках точек
     return jsonify(ok=True)
@@ -2100,6 +2112,9 @@ def upd_courier(cid):
     data = _json()
     for c in STATE["couriers"]:
         if c["id"] == cid:
+            if _home_point(c)["id"] != _my_point():
+                return jsonify({"error": "Курьер другого депо — управлять может "
+                                         "только диспетчер его точки"}), 403
             if "name" in data and data["name"].strip():
                 c["name"] = data["name"].strip()
             if data.get("status") in STATUSES:
@@ -2115,7 +2130,7 @@ def upd_courier(cid):
                     return jsonify({"error": "ID Telegram должен быть числом"}), 400
                 c["tg_chat_id"] = new_tg
             _persist_couriers()
-            _invalidate_plan(drop_plan=True)
+            _invalidate_plan(drop_plan=True)  # курьер может быть помощником в чужом плане
             return _payload()
     return jsonify({"error": "Курьер не найден"}), 404
 
@@ -2165,6 +2180,10 @@ def unbind_courier(cid):
 
 @app.delete("/api/couriers/<cid>")
 def del_courier(cid):
+    courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
+    if courier and _home_point(courier)["id"] != _my_point():
+        return jsonify({"error": "Курьер другого депо — управлять может "
+                                 "только диспетчер его точки"}), 403
     # его развозимые заказы возвращаются в очередь, чтобы не зависли
     for o in STATE["orders"]:
         if o.get("assigned") == cid and o.get("status") == "out":
@@ -2635,7 +2654,7 @@ def _invalidate_plan(drop_plan=False, pid=None):
     «устарел», пока администратор не нажмёт «Рассчитать».
     """
     plans = STATE["plans"] if pid is None else {pid: STATE["plans"].get(pid)}
-    for key, plan in plans.items():
+    for key, plan in list(plans.items()):
         if plan is None:
             continue
         if drop_plan:
