@@ -1621,7 +1621,15 @@ _AWAY_DWELL_S = 60     # непрерывно, столько секунд (гл
 _BACK_DWELL_S = 120    # простой у точки после закрытия всех заказов — «на базе»
 
 
-def _away_track(c, pos, now=None):
+def _auto_status_apply(c, new_status):
+    """Перевод статуса курьера по гео: БД, сброс плана, пинок подписчикам."""
+    c["status"] = new_status
+    _persist_couriers()
+    _invalidate_plan(drop_plan=True)
+    _bump()
+
+
+def _auto_status_track(c, pos, now=None):
     """Авто-статусы по гео (в обе стороны, только с живым гео):
 
     «база» -> «в пути»: уехал дальше _AWAY_AUTO_KM и держится _AWAY_DWELL_S.
@@ -1648,13 +1656,10 @@ def _away_track(c, pos, now=None):
         if d > _AWAY_AUTO_KM:
             rec["since"] = rec["since"] or now
             if now - rec["since"] >= _AWAY_DWELL_S:
-                c["status"] = "away"
                 rec["since"], rec["went_out"] = None, False
-                _persist_couriers()
-                _invalidate_plan(drop_plan=True)
                 log.info("auto-away: %s уехал от точки «%s» (%.0f м) — статус «в пути»",
                          c.get("name"), home.get("name"), d * 1000)
-                _bump()
+                _auto_status_apply(c, "away")
         elif d <= TG_GEO_AT_PLACE:
             rec["since"] = None  # у точки — отсчёт заново
             rec["went_out"] = False
@@ -1665,12 +1670,9 @@ def _away_track(c, pos, now=None):
             rec["since"] = rec["since"] or now
             if now - rec["since"] >= _BACK_DWELL_S:
                 STATE["tg_away"].pop(chat, None)
-                c["status"] = "base"
-                _persist_couriers()
-                _invalidate_plan(drop_plan=True)
                 log.info("auto-return: %s вернулся к точке «%s» — статус «на базе»",
                          c.get("name"), home.get("name"))
-                _bump()
+                _auto_status_apply(c, "base")
         else:
             rec["since"] = None  # ждёт выдачи или ещё развозит — не возврат
     else:
@@ -1784,7 +1786,7 @@ def _tg_handle_update(u):
                 "hist": hist, "sprev": smoothed}
             _load_track(courier, smoothed, raw["ts"])
             _deliver_track(courier, smoothed, raw["ts"])
-            _away_track(courier, smoothed, raw["ts"])
+            _auto_status_track(courier, smoothed, raw["ts"])
             _bump()  # курьер двигается — карта обновится у всех
         else:
             # live-локация шлёт правки каждые несколько секунд — «не привязан»
