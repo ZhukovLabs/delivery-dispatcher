@@ -153,6 +153,7 @@ STATE = {
     "tg_load": {},       # chat_id -> {"since", "loaded_at"} — трекер выдачи заказов
     "tg_deliv": {},      # chat_id -> {order_id: {"since", "at"}} — вывод «доставлен»
                          # ТОЛЬКО для расчёта возврата; статус заказа не меняет
+    "tg_away": {},       # chat_id -> {"since"} — авто-«в пути» при отъезде от точки
     "tg_offset": 0,
     "tg_bot": "",        # @username бота (для подсказок в интерфейсе)
 }
@@ -1615,6 +1616,41 @@ def _deliver_track(c, pos, now=None):
             rec.pop("since", None)  # проехал мимо — не считается
 
 
+_AWAY_AUTO_KM = 0.5   # дальше этого от своей точки курьер «уехал»
+_AWAY_DWELL_S = 60    # непрерывно, столько секунд (глушит GPS-прыжок и «отошёл к машине»)
+
+
+def _away_track(c, pos, now=None):
+    """Авто-статус «в пути»: курьер с гео уехал дальше _AWAY_AUTO_KM от своей
+    точки и держится там _AWAY_DWELL_S — переводим с «базы» на «в пути».
+
+    Возврат на базу автоматом НЕ делается (диспетчер подтверждает руками).
+    Зона 150 м..500 м — гистерезис: счётчик не тикает и не сбрасывается.
+    """
+    home = _home_point(c)
+    chat = c.get("tg_chat_id") or ""
+    if not home or not chat:
+        return
+    if c.get("status") != "base":
+        STATE["tg_away"].pop(chat, None)  # уже не на базе — трекер не нужен
+        return
+    now = now or time.time()
+    rec = STATE["tg_away"].setdefault(chat, {"since": None})
+    d = haversine_km(pos, home)
+    if d > _AWAY_AUTO_KM:
+        rec["since"] = rec["since"] or now
+        if now - rec["since"] >= _AWAY_DWELL_S:
+            c["status"] = "away"
+            STATE["tg_away"].pop(chat, None)
+            _persist_couriers()
+            _invalidate_plan(drop_plan=True)
+            log.info("auto-away: %s уехал от точки «%s» (%.0f м) — статус «в пути»",
+                     c.get("name"), home.get("name"), d * 1000)
+            _bump()
+    elif d <= TG_GEO_AT_PLACE:
+        rec["since"] = None  # у точки — отсчёт заново
+
+
 def _courier_geo(c, depot, now=None):
     """Гео-данные курьера для расчётов: сглаженная позиция + оценка возврата на депо.
 
@@ -1722,6 +1758,7 @@ def _tg_handle_update(u):
                 "hist": hist, "sprev": smoothed}
             _load_track(courier, smoothed, raw["ts"])
             _deliver_track(courier, smoothed, raw["ts"])
+            _away_track(courier, smoothed, raw["ts"])
             _bump()  # курьер двигается — карта обновится у всех
         else:
             # live-локация шлёт правки каждые несколько секунд — «не привязан»
