@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, fmtCoords, type AppState, type Courier, type Order, type Route, type Advice } from "@/lib/api";
 import GeoInput, { type GeoItem } from "./GeoInput";
-import { Bike, Check, ChevronDown, CircleHelp, Flame, History, Hourglass, House, Link2, Loader2, LogOut, MapPin, Moon, Package, PackageOpen, Pause, Pencil, Plus, Route as RouteIcon, Settings, ShieldCheck, SlidersHorizontal, Sun, Timer, Trash2, Undo2, User, Users, X, Zap } from "lucide-react";
+import { ArrowRight, Bike, ChartColumn, Check, ChevronDown, CircleHelp, ClipboardCopy, Clock, Download, FileSpreadsheet, FileText, Flame, Gauge, Hand, Hourglass, House, Link2, Loader2, LogOut, MapPin, Moon, Package, PackageOpen, Paperclip, Pause, Pencil, Plus, RefreshCw, Route as RouteIcon, Scale, Send, Settings, ShieldCheck, SlidersHorizontal, Sun, Timer, Trash2, TriangleAlert, Undo2, Unlink, User, Users, X, Zap } from "lucide-react";
 
 const MapView = dynamic(() => import("./MapView"), {
   ssr: false,
@@ -13,12 +13,51 @@ const MapView = dynamic(() => import("./MapView"), {
 });
 
 /* ---------- утилиты ---------- */
+const AVAS: [string, string][] = [
+  ["#dbe7fb", "#2c5a9e"], ["#e9e2fb", "#5f47a5"], ["#fbe3f0", "#a33a75"], ["#dcf3f0", "#13756c"],
+  ["#fbeed3", "#8f5d0a"], ["#e2f4ea", "#0d7041"], ["#fbe3e0", "#a04233"], ["#e3e7fb", "#474ca3"],
+  ["#eef6d8", "#5a741e"], ["#ddf1fa", "#1a6784"],
+];
+
+/** Данные /api/stats/week — недельная статистика для вкладки «Статистика». */
+type WeekStats = {
+  days: { day: string; delivered: number; cancelled?: number; avg_cycle_min: number | null }[];
+  couriers: { courier: string; delivered: number; avg_cycle_min: number | null }[];
+  on_time?: number; on_time_total?: number;
+};
+/** Строка истории заказов из /api/history. */
+type HistRow = { closed_at?: string; address?: string; courier?: string; outcome?: string; cycle_min?: number | null };
+type HistData = { rows?: HistRow[]; summary?: Record<string, number | null> } | null;
+
+/** Инициалы для аватара: «Настя» -> «Н», «Анна Петрова» -> «АП», fallback — первая буква email. */
+function initialsOf(name: string, email: string) {
+  const n = (name || "").trim();
+  if (!n) return (email[0] || "?").toUpperCase();
+  const w = n.split(/\s+/);
+  return (w[0][0] + (w[1] ? w[1][0] : "")).toUpperCase();
+}
+
+/** Стабильный пастельный цвет аватара по email. */
+function avaOf(email: string): [string, string] {
+  let h = 0;
+  for (let i = 0; i < email.length; i++) h = (h * 31 + email.charCodeAt(i)) >>> 0;
+  return AVAS[h % AVAS.length];
+}
 const SEG_ICONS = { base: <House size={14} strokeWidth={2.2} />, away: <Bike size={14} strokeWidth={2.2} />, off: <Pause size={14} strokeWidth={2.2} /> };
 const SEG_TITLES: Record<string, string> = {
   base: "На базе: отдать сейчас",
   away: "В пути: следующим заездом",
   off: "Не участвует в расчёте",
 };
+
+/** Русское склонение: plural(3, ["заказ", "заказа", "заказов"]) -> "заказа". */
+function plural(n: number, forms: [string, string, string]) {
+  const a = Math.abs(n) % 100, d = a % 10;
+  if (a > 10 && a < 20) return forms[2];
+  if (d > 1 && d < 5) return forms[1];
+  if (d === 1) return forms[0];
+  return forms[2];
+}
 
 /** Заголовок секции-аккордеона: иконка, название, счётчик, шеврон. */
 function AccHead({ icon, label, count, open, onClick }: {
@@ -126,17 +165,21 @@ export default function Console() {
   const [pinning, setPinning] = useState<string | null>(null); // заказ в фазе «в маршрут…»
   const [busyMode, setBusyMode] = useState(false); // клик по сценарию совета
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [sheetTab, setSheetTab] = useState<"params" | "hist" | "users">("params");
+  const [sheetTab, setSheetTab] = useState<"params" | "hist" | "prof" | "team">("prof");
   const [helpOpen, setHelpOpen] = useState(false);
   const [openAcc, setOpenAcc] = useState<"points" | "orders" | "couriers" | null>("orders");
   const [histDays, setHistDays] = useState("1");
-  const [hist, setHist] = useState<{ rows?: unknown[]; summary?: Record<string, number | null> } | null>(null);
-  const [week, setWeek] = useState<string>("");
+  const [hist, setHist] = useState<HistData>(null);
+  const [weekStats, setWeekStats] = useState<WeekStats | null>(null);
   const [courierName, setCourierName] = useState("");
   const [bindFor, setBindFor] = useState<Courier | null>(null); // привязка Telegram
   const [pwOld, setPwOld] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  const [userName, setUserName] = useState("");
+  const [userPhone, setUserPhone] = useState("");
+  const [profName, setProfName] = useState("");
+  const [profPhone, setProfPhone] = useState("");
   const [userPwd, setUserPwd] = useState("");
   const [userIsAdmin, setUserIsAdmin] = useState(false);
   const [dragOverCourier, setDragOverCourier] = useState<string | null>(null);
@@ -463,21 +506,8 @@ export default function Console() {
 
   const loadWeek = useCallback(async () => {
     try {
-      const s = await api<{ days: { day: string; delivered: number; cancelled?: number; avg_cycle_min: number | null }[]; couriers: { courier: string; delivered: number; avg_cycle_min: number | null }[]; on_time?: number; on_time_total?: number }>("/api/stats/week");
-      const max = Math.max(1, ...s.days.map(d => d.delivered));
-      const days = s.days.length ? s.days.map(d => `
-        <div class="wk-row">
-          <span class="wk-day">${d.day.slice(5).replace("-", ".")}</span>
-          <span class="wk-bar"><i style="width:${Math.round(d.delivered / max * 100)}%"></i></span>
-          <span class="wk-num">${d.delivered}</span>
-          <span class="wk-cyc">${d.avg_cycle_min != null ? d.avg_cycle_min + " мин" : d.cancelled ? d.cancelled + " отмен" : "–"}</span>
-        </div>`).join("") : "";
-      const cour = s.couriers.length
-        ? `<div style='margin-top:10px;font-size:12px'>` + s.couriers.map(c =>
-          `• ${c.courier}: выдано ${c.delivered}${c.avg_cycle_min != null ? ` · цикл ${c.avg_cycle_min} мин` : ""}`).join("<br>") + `</div>` : "";
-      const onTime = s.on_time_total ? `<div class="wk-note" style="margin-top:8px">По обещанному времени: ${s.on_time} из ${s.on_time_total}</div>` : "";
-      setWeek(days || cour || onTime ? days + cour + onTime : "Пока нет закрытых заказов");
-    } catch (e) { setWeek("Не загрузилось: " + (e as Error).message); }
+      setWeekStats(await api<WeekStats>("/api/stats/week"));
+    } catch { setWeekStats(null); }
   }, []);
 
   useEffect(() => {
@@ -564,8 +594,9 @@ export default function Console() {
           onClick={() => applyTheme(!dark)}>{dark ? <Sun size={16} /> : <Moon size={16} />}</button>
         <button className="iconbtn" title="Как пользоваться" aria-label="Справка"
           onClick={() => setHelpOpen(true)}><CircleHelp size={16} /></button>
-        <button className="iconbtn gear" title="Параметры расчёта" aria-label="Параметры расчёта"
-          onClick={() => { setSheetTab("params"); setSheetOpen(true); }}><Settings size={16} /></button>
+        <button className="iconbtn gear" title="Профиль" aria-label="Профиль"
+          onClick={() => { setSheetTab("prof"); setSheetOpen(true); }}>
+          <Settings size={16} /></button>
         <span className="vdiv" />
         <span className="me" title={me.email || ""}>
           <User size={13} />
@@ -912,11 +943,25 @@ export default function Console() {
                           </div>
                         )}
                         {c.status === "away" && (c.geo
-                          ? <div className="c-row2 geo-row" title="Возврат рассчитан по живой геолокации курьера (обновляется автоматически)">
-                              {c.geo.at_depot
-                                ? <><MapPin size={11} /> у своей точки — готов грузиться</>
-                                : <><Timer size={11} /> вернётся ≈{c.geo.back_min} мин (по гео)</>}
-                            </div>
+                          ? (c.geo.delivering
+                              ? <div className="c-row2 geo-row" title="В развозке: заказы у курьера, возврат — по живой геолокации">
+                                  <Bike size={11} /> в развозке · вернётся ≈{c.geo.back_min} мин
+                                </div>
+                              : c.geo.has_out && c.geo.at_depot
+                                ? <div className="c-row2 geo-row" title="У своей точки выдачи с заказами — фиксируем загрузку (нужен простой пару минут)">
+                                    <Hourglass size={11} /> у точки — выдача заказов…
+                                  </div>
+                                : !c.geo.has_out && c.geo.at_depot
+                                  ? <div className="c-row2 geo-row" title="На месте, ждёт когда диспетчер отдаст заказы">
+                                      <House size={11} /> на точке — ждёт выдачи заказов
+                                    </div>
+                                  : c.geo.to_point_min !== undefined
+                                    ? <div className="c-row2 geo-row" title="Заказы ещё не отданы: сначала курьер доедет до своей точки выдачи">
+                                        <House size={11} /> едет за заказами · до точки ≈{c.geo.to_point_min} мин
+                                      </div>
+                                    : <div className="c-row2 geo-row" title="Возврат рассчитан по живой геолокации курьера">
+                                        <Timer size={11} /> вернётся ≈{c.geo.back_min} мин (по гео)
+                                      </div>)
                           : <div className="c-row2 geo-row"><Timer size={11} /> вернётся через
                             <input className="backMin" type="number" min={0} max={480} defaultValue={c.back_min ?? 15}
                               title="Через сколько минут вернётся на базу (привяжите Telegram — будет считаться сам)" aria-label="Возврат на базу, минут"
@@ -926,6 +971,24 @@ export default function Console() {
                         {c.geo?.at_order && (
                           <div className="c-row2 geo-row" title="Курьер сейчас стоит у этого заказа">
                             <Bike size={11} /> у заказа: {c.geo.at_order}
+                          </div>
+                        )}
+                        {(c.cur_kmh !== undefined || c.avg_kmh !== undefined) && (
+                          <div className="c-row2 spd-row">
+                            {c.cur_kmh !== undefined && (
+                              <span className={"spd-cur" + (c.cur_kmh > 0 ? " go" : "")}
+                                title="Скорость прямо сейчас, по живой геолокации (за последние минуты)">
+                                <Gauge size={11} /> {c.cur_kmh > 0 ? `${c.cur_kmh} км/ч` : "стоит"}
+                              </span>
+                            )}
+                            <span className="spd-avg"
+                              title={c.speed_src === "geo"
+                                ? "Средняя скорость за сегодня — замер по геолокации, участвует в расчёте маршрутов"
+                                : c.speed_src === "delivery"
+                                  ? "Средняя по темпу доставок за сегодня относительно других курьеров, участвует в расчёте"
+                                  : "Расчётная норма из настроек: замер по этому курьеру ещё не собран"}>
+                              ср {(c.avg_kmh ?? 0)} км/ч{c.speed_src === "geo" ? " (гео)" : c.speed_src === "delivery" ? " (темп)" : " (норма)"}
+                            </span>
                           </div>
                         )}
                         {st.cfg?.tg && (
@@ -953,9 +1016,9 @@ export default function Console() {
                     );
                   })}
                 </div></div>
-              </div>
             </div>
           </div>
+        </div>
 
           <div className="solvebox">
             <button className="solve" disabled={!!miss || solving} onClick={() => void solve()}>
@@ -1026,7 +1089,7 @@ export default function Console() {
           setTab={setSheetTab}
           hist={hist} histDays={histDays}
           onHistDays={d => { setHistDays(d); void loadHistory(d); }}
-          week={week}
+          weekStats={weekStats}
           pwOld={pwOld} pwNew={pwNew} setPwOld={setPwOld} setPwNew={setPwNew}
           onChangePw={async () => {
             try {
@@ -1037,11 +1100,20 @@ export default function Console() {
           }}
           userEmail={userEmail} userPwd={userPwd} userIsAdmin={userIsAdmin}
           setUserEmail={setUserEmail} setUserPwd={setUserPwd} setUserIsAdmin={setUserIsAdmin}
+          userName={userName} userPhone={userPhone} setUserName={setUserName} setUserPhone={setUserPhone}
+          profName={profName} profPhone={profPhone} setProfName={setProfName} setProfPhone={setProfPhone}
+          onSyncProfile={() => { setProfName(st?.me?.name || ""); setProfPhone(st?.me?.phone || ""); }}
+          onSaveProfile={async () => {
+            try {
+              setSt(await api<AppState>("/api/profile", "POST", { name: profName, phone: profPhone }));
+              showToast("Профиль сохранён");
+            } catch (e) { showToast((e as Error).message, true); }
+          }}
           onAddUser={async () => {
             try {
-              const s = await api<AppState>("/api/users", "POST", { email: userEmail, password: userPwd, is_admin: userIsAdmin });
+              const s = await api<AppState>("/api/users", "POST", { email: userEmail, password: userPwd, is_admin: userIsAdmin, name: userName, phone: userPhone });
               setSt(s);
-              setUserEmail(""); setUserPwd(""); setUserIsAdmin(false);
+              setUserEmail(""); setUserPwd(""); setUserIsAdmin(false); setUserName(""); setUserPhone("");
               showToast("Пользователь добавлен");
             } catch (e) { showToast((e as Error).message, true); }
           }}
@@ -1049,6 +1121,20 @@ export default function Console() {
             if (!(await askConfirm(`Удалить пользователя «${email}»?`, { ok: "Удалить", danger: true }))) return;
             try { setSt(await api<AppState>("/api/users/" + uid, "DELETE")); }
             catch (e) { showToast((e as Error).message, true); }
+          }}
+          onUpdUser={async (uid, data) => {
+            try {
+              setSt(await api<AppState>("/api/users/" + uid, "PUT", data));
+              showToast("Изменения сохранены");
+              return true;
+            } catch (e) { showToast((e as Error).message, true); return false; }
+          }}
+          onResetPwd={async (uid, newPwd) => {
+            try {
+              await api("/api/users/" + uid + "/password", "PUT", { new: newPwd });
+              showToast("Пароль обновлён");
+              return true;
+            } catch (e) { showToast((e as Error).message, true); return false; }
           }}
           onSaveSettings={async (s: Record<string, number | boolean>) => {
             try {
@@ -1073,7 +1159,7 @@ export default function Console() {
               <li>Занесите <b>готовые заказы</b>: адресом с подсказками или кликом по карте.</li>
               <li>Нажмите <b>«Рассчитать развозку»</b>. Карточка «отдать сейчас» и есть задание курьеру на базе.</li>
             </ol>
-            <p className="note">План пересчитывается сам после изменений. Редкие настройки, история и доступ — шестерёнка в шапке.</p>
+            <p className="note">План пересчитывается сам после изменений. Настройки, история и профиль — шестерёнка в шапке.</p>
           </div>
         </div>
       )}
@@ -1124,6 +1210,19 @@ function BindModal({ courier, bot, seen, onDone, onClose }: {
   const [manual, setManual] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [sent, setSent] = useState(false);
+
+  const send = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await api<{ ok?: boolean }>("/api/notify/tg", "POST",
+        { chat_id: courier.tg_chat_id, text: msg.trim() });
+      if (r.ok) { setMsg(""); setSent(true); setTimeout(onClose, 900); }
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally { setBusy(false); }
+  };
 
   const bind = async (chat_id: string, login?: string) => {
     if (!/^\d+$/.test(chat_id)) { setErr("ID должен быть числом"); return; }
@@ -1145,38 +1244,64 @@ function BindModal({ courier, bot, seen, onDone, onClose }: {
     <div className="help-overlay" role="dialog" aria-modal="true"
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="help-card bind-card">
-        <button className="close" style={{ float: "right", border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#6d7688" }}
-          aria-label="Закрыть" onClick={onClose}>✕</button>
-        <h3>🔗 Telegram · {courier.name}</h3>
-        {courier.tg_chat_id && (
-          <p className="note">Привязан: <b>{courier.tg_login || "ID " + courier.tg_chat_id}</b></p>
-        )}
-        <p className="note">
-          Курьер пишет боту {bot || "(бот не отвечает, проверьте токен)"} команду{" "}
-          <b>/start</b> и нажимает «Геолокация» (или включает live-трансляцию).
-          Его ID появится в списке ниже — привяжите его к курьеру.
-        </p>
-        {seen.length > 0 && (
-          <div className="bind-list">
-            {seen.map(u => (
-              <button key={u.chat_id} disabled={busy} className="bind-user"
-                title={u.chat_id}
-                onClick={() => void bind(u.chat_id, u.login)}>
-                <span>@{u.login}</span>
-                <small>ID {u.chat_id} · {posAgeMin(u.ts) < 1 ? "только что" : posAgeMin(u.ts) + " мин назад"}</small>
-              </button>
-            ))}
+        <button className="bind-close" aria-label="Закрыть" onClick={onClose}><X size={16} /></button>
+        <div className="bind-head">
+          <span className="bind-ico"><Send size={15} /></span>
+          <div>
+            <h3 style={{ margin: 0 }}>Telegram</h3>
+            <span className="bind-sub">{courier.name}</span>
           </div>
-        )}
-        <div className="bind-manual">
-          <input placeholder="ID вручную (число)" value={manual} inputMode="numeric"
-            onChange={e => setManual(e.target.value.replace(/\D/g, ""))} />
-          <button className="btn btn-primary" disabled={busy || !manual} onClick={() => void bind(manual)}>Привязать</button>
+          {courier.tg_chat_id
+            ? <span className="bind-chip ok" title={`ID ${courier.tg_chat_id}`}><Check size={11} /> {courier.tg_login ? "@" + courier.tg_login : "ID " + courier.tg_chat_id}</span>
+            : <span className="bind-chip">не привязан</span>}
         </div>
-        {err && <p className="note" style={{ color: "#b3261e" }}>{err}</p>}
-        {courier.tg_chat_id && (
-          <button className="btn danger" disabled={busy} onClick={() => void unbind()}>Отвязать</button>
-        )}
+
+        {courier.tg_chat_id ? (<>
+          <div className="bind-msg">
+            <div className="bind-manual">
+              <input placeholder={`Сообщение для ${courier.tg_login ? "@" + courier.tg_login : "ID " + courier.tg_chat_id}`}
+                value={msg} onChange={e => setMsg(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && msg.trim() && !busy) void send(); }} />
+              <button className="btn btn-primary" disabled={busy || !msg.trim()} onClick={() => void send()}>
+                <Send size={13} /> Отправить
+              </button>
+            </div>
+            <small className="bind-msg-note">{sent ? <><Check size={11} /> отправлено</> : "Сообщение придёт от имени бота в личный чат"}</small>
+          </div>
+          {err && <p className="bind-err" role="alert">{err}</p>}
+          <button className="bind-unlink" disabled={busy} onClick={() => void unbind()}><Unlink size={13} /> Отвязать Telegram</button>
+        </>) : (<>
+          <div className="bind-steps">
+            <span className="bind-step"><i>1</i><span>Курьер открывает бота{" "}
+              {bot ? <a className="bind-bot" href={`https://t.me/${bot.replace(/^@/, "")}`}
+                target="_blank" rel="noreferrer">{bot}</a> : <b>развозки</b>} и&nbsp;нажимает&nbsp;«Запустить»</span></span>
+            <span className="bind-step"><i>2</i><span>Он появится в списке ниже — нажмите на него</span></span>
+          </div>
+
+          {seen.length > 0 && (
+            <div className="bind-list">
+              {seen.map(u => (
+                <button key={u.chat_id} disabled={busy} className="bind-user"
+                  title="Привязать этого пользователя к курьеру"
+                  onClick={() => void bind(u.chat_id, u.login)}>
+                  <span className="bind-user-l">
+                    <b>@{u.login}</b>
+                    <small>ID {u.chat_id} · {posAgeMin(u.ts) < 1 ? "только что" : posAgeMin(u.ts) + " мин назад"}</small>
+                  </span>
+                  <ArrowRight size={14} />
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="bind-divider">Курьер уже писал боту? Введите его ID</div>
+          <div className="bind-manual">
+            <input placeholder="ID из сообщения бота" value={manual} inputMode="numeric"
+              onChange={e => setManual(e.target.value.replace(/\D/g, ""))} />
+            <button className="btn btn-primary" disabled={busy || !manual} onClick={() => void bind(manual)}>Привязать</button>
+          </div>
+          {err && <p className="bind-err" role="alert">{err}</p>}
+        </>)}
       </div>
     </div>
   );
@@ -1252,20 +1377,38 @@ function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOver
   onPin: (oid: string, cid: string) => Promise<void>;
 }) {
   const plan = st.plan!;
-  let prov = plan.routing === "roads" ? "по дорогам · " + (({ ORS: "ORS", OSRM: "OSRM" } as Record<string, string>)[plan.provider || ""] || "") : "оценка по прямой";
-  const ors = st.ors || {};
-  if (plan.provider === "ORS") prov += ors.paused ? " · пауза" : ` · квота ${ors.used ?? "?"}/${ors.soft_limit ?? "?"}`;
-  if (plan.unassigned) prov += ` · без маршрута: ${plan.unassigned}`;
+  const byRoads = plan.routing === "roads";
 
   return (
     <>
       <div className="plan-top">
         <div className="pt-label">Последняя доставка</div>
         <div className="pt-clock">≈{plan.last_delivery_clock || "?"} <small>+{plan.last_delivery_min} мин</small></div>
-        <div className="pt-sub">
-          {prov} · рассчитано {(plan.solved_at || "").replace("T", " ").slice(11, 16)}
-          {plan.stale && " · ⟳ устарел — нажмите «Рассчитать»"}
-          {plan.moved && " · ✋ правка вручную"}
+        <div className="pt-meta">
+          {!byRoads && (
+            <span className="pm-chip warn" title="Сервисы дорог (ORS/OSRM) недоступны — время и километры оценены по прямой, с запасом">
+              <TriangleAlert size={11} /> расчёт по прямой
+            </span>
+          )}
+          <span className="pm-chip" title="Время последнего расчёта плана">
+            <Clock size={11} />
+            рассчитано {(plan.solved_at || "").replace("T", " ").slice(11, 16)}
+          </span>
+          {plan.stale && (
+            <span className="pm-chip warn" title="Данные менялись после расчёта">
+              <RefreshCw size={11} /> устарел — нажмите «Рассчитать»
+            </span>
+          )}
+          {plan.moved && (
+            <span className="pm-chip" title="Порядок объезда правили перетаскиванием">
+              <Hand size={11} /> правка вручную
+            </span>
+          )}
+          {!!plan.unassigned && (
+            <span className="pm-chip warn" title="Заказы, не поместившиеся ни в один маршрут (лимит заказов на курьера)">
+              <TriangleAlert size={11} /> без маршрута: {plan.unassigned}
+            </span>
+          )}
         </div>
       </div>
 
@@ -1298,27 +1441,40 @@ function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOver
             <div className="r-head">
               <span className="r-dot" style={{ background: r.color }} />
               <b>{r.courier_name}</b>
+              <span className="r-acts">
+                {st.cfg?.tg && r.tg_chat_id && (
+                  <button className="r-tg" title="Отправить маршрут курьеру в Telegram" onClick={() => onTg(r.courier_id)}><Send size={14} /></button>
+                )}
+                <button className="r-copy" title="Скопировать маршрут текстом, чтобы отправить курьеру" onClick={() => onCopy(r)}><ClipboardCopy size={14} /></button>
+              </span>
+              {giveIds.length > 0 && (
+                <button className="r-give" onClick={() => onGive(r)}
+                  title={`Отметить выданным: ${giveIds.length} ${plural(giveIds.length, ["заказ уйдёт", "заказа уйдут", "заказов уйдут"])} в развозку, остальные маршруты останутся как есть`}>
+                  <Check size={13} /> Выдать ({giveIds.length})
+                </button>
+              )}
+            </div>
+            <div className="r-bar">
               {r.status === "base"
-                ? <span className="chip chip-green">ОТДАТЬ СЕЙЧАС</span>
-                : <span className="chip chip-amber">следующим</span>}
+                ? <span className="chip chip-green">отдать сейчас</span>
+                : <span className="chip chip-amber">следующим заездом</span>}
               {r.start_delay_min > 0 && (
                 <span className="chip chip-amber" title="Курьер ещё в пути, маршрут сдвинут на время возврата">
                   старт +{r.start_delay_min} мин
                 </span>
               )}
-              {giveIds.length > 0 && (
-                <button className="r-give" onClick={() => onGive(r)}
-                  title={`Отметить выданным: ${giveIds.length} заказ(ов) уйдут в развозку, остальные маршруты останутся как есть`}>
-                  ✓ Выдать ({giveIds.length})
-                </button>
-              )}
-              {st.cfg?.tg && r.tg_chat_id && (
-                <button className="r-tg" title="Отправить маршрут курьеру в Telegram" onClick={() => onTg(r.courier_id)}>📤</button>
-              )}
-              <button className="r-copy" title="Скопировать маршрут текстом, чтобы отправить курьеру" onClick={() => onCopy(r)}>📋</button>
             </div>
             <div className="r-sub">
-              {r.count} заказ(ов) · вернётся ≈{clock(r.total_min)}{r.distance_km ? ` · ${r.distance_km} км` : ""}
+              <span title="Количество заказов в маршруте"><Package size={11} /> {r.count} {plural(r.count, ["заказ", "заказа", "заказов"])}</span>
+              <span title="Ориентировочное время возврата на точку выдачи"><Timer size={11} /> вернётся ≈{clock(r.total_min)}</span>
+              {r.distance_km ? <span title="Длина маршрута по дорогам"><RouteIcon size={11} /> {r.distance_km} км</span> : null}
+              {r.speed_src && r.speed_src !== "default" && (
+                <span title={r.speed_src === "geo"
+                  ? "Замер по живой геолокации курьера — ETA пересчитаны под его скорость"
+                  : "Оценка по темпу доставок относительно других курьеров — ETA пересчитаны под его скорость"}>
+                  <Gauge size={11} /> ≈{r.speed_kmh} км/ч{r.speed_src === "geo" ? " (гео)" : " (темп)"}
+                </span>
+              )}
             </div>
             {r.trips.map((tr, ti) => (
               <div key={ti}>
@@ -1341,8 +1497,8 @@ function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOver
                         <span className="s-n" style={{ background: r.color }}>{stopNo}</span>
                         <span className="s-a">
                           {s.prio && (
-                            <span className="s-prio" title={`Приоритетный${s.auto ? ", поднялся сам по возрасту" : ""}`}>⚡</span>
-                          )} {s.address} {s.deadline && <span className="s-dl">⏱{s.deadline}</span>}
+                            <span className="s-prio" title={`Приоритетный${s.auto ? ", поднялся сам по возрасту" : ""}`}><Zap size={11} /></span>
+                          )} {s.address} {s.deadline && <span className="s-dl" title="Обещанное время доставки"><Timer size={11} />{s.deadline}</span>}
                           {!!s.late_min && s.late_min > 0 && (
                             <span className="late-chip" title="Успеть к обещанному времени не получится">
                               опоздание ~{s.late_min} мин
@@ -1374,30 +1530,41 @@ function AdviceCard({ a, busy, onMode }: { a: Advice; busy: boolean; onMode: (m:
   const lastBack = a.wait_couriers.map(w => w.back_clock).sort().pop();
   const backTxt = a.wait_couriers.length === 1 ? `вернётся ≈${lastBack}` : `до ≈${lastBack}`;
   const delta = a.gain_last_min | 0;
-  const rel = a.chosen === "split" ? -delta : delta;
-  const good = rel < 0;
-  const verdict = rel === 0 ? "разницы нет" : good ? `выгодно: −${Math.abs(rel)} мин` : `дороже: +${rel} мин`;
+  const rel = a.chosen === "split" ? -delta : delta; // >0 — выбранный сценарий хуже второго
+  const badge = rel === 0 ? null : (
+    <span className={"adv-badge " + (rel < 0 ? "ok" : "no")}
+      title="Разница выбранного сценария по времени последней доставки">
+      {rel < 0 ? `−${Math.abs(rel)}` : `+${rel}`} мин
+    </span>
+  );
   const list = a.held.map(h => shortAddr(h.address));
   const row = (id: string, title: string, side: { counts: string; last_clock?: string; avg_min: number }) => (
-    <button className={"adv-row" + (a.chosen === id ? " chosen" : "")} title="Применить этот сценарий" onClick={() => onMode(id)}>
-      <span className="adv-dot" />
-      <span className="adv-t">{title}{a.chosen === id && <span className="adv-done">✓</span>}</span>
-      <span className="adv-meta">{side.counts}</span>
-      <span className="adv-nums">≈{side.last_clock || "?"} · ср {side.avg_min}</span>
+    <button className={"adv-opt" + (a.chosen === id ? " chosen" : "")} title="Применить этот сценарий" onClick={() => onMode(id)}>
+      <span className="adv-opt-t">
+        <span className="adv-dot" aria-hidden="true" />
+        {title}
+        {a.chosen === id && <Check size={13} className="adv-done" />}
+        {a.chosen === id && badge}
+      </span>
+      <span className="adv-opt-meta"><Users size={11} />{side.counts}</span>
+      <span className="adv-opt-nums"><Clock size={11} />≈{side.last_clock || "?"} · ср {side.avg_min} мин</span>
     </button>
   );
   return (
     <div className={"advice" + (busy ? " busy" : "")} title="Сравнение сценариев: всё курьерам на базе сейчас или разделить с возвращающимся">
       <div className="adv-head">
-        <span className="adv-q">⚖ Ждать {nm}? <span className="adv-back">{backTxt}</span></span>
-        <span className={"adv-verdict " + (rel === 0 ? "no" : good ? "ok" : "no")}
-          title="Разница со вторым сценарием по времени последней доставки">{verdict}</span>
+        <Scale size={14} />
+        <span className="adv-q">Ждать {nm}?</span>
+        <span className="adv-back">{backTxt}</span>
       </div>
-      {row("now", "Не ждать", a.now)}
-      {row("split", "Ждать", a.split)}
+      <div className="adv-opts">
+        {row("now", "Не ждать", a.now)}
+        {row("split", "Ждать", a.split)}
+      </div>
       {list.length > 0 && (
         <div className="adv-held" title={list.join("\n")}>
-          📎 {declName(a.held[0].courier)}: {list.slice(0, 3).join(" · ")}{list.length > 3 ? ` …ещё ${list.length - 3}` : ""}
+          <Paperclip size={11} />
+          <span>{declName(a.held[0].courier)}: {list.slice(0, 3).join(" · ")}{list.length > 3 ? ` …ещё ${list.length - 3}` : ""}</span>
         </div>
       )}
     </div>
@@ -1405,32 +1572,67 @@ function AdviceCard({ a, busy, onMode }: { a: Advice; busy: boolean; onMode: (m:
 }
 
 /* ---------- «Ещё» ---------- */
-const SET_FIELDS: { key: string; label: string; min: number; max: number; step?: number; title?: string }[] = [
-  { key: "speed_kmh", label: "Скорость, км/ч", min: 5, max: 120 },
-  { key: "handover_min", label: "Вручение, мин", min: 0, max: 60 },
-  { key: "max_orders", label: "Макс. заказов", min: 1, max: 50 },
-  { key: "traffic", label: "Пробки, ×", min: 1, max: 3, step: 0.05, title: "Надбавка к дорожному времени: 1 = свободно, 1.25 = средняя загрузка, 1.5–2 = час пик" },
-  { key: "lights_sec_per_km", label: "Светофоры, с/км", min: 0, max: 60, title: "Средняя задержка на светофорах: секунд на километр пути" },
-  { key: "auto_prio_min", label: "Авто-приоритет, мин (0 = выкл)", min: 0, max: 240, title: "Заказ ждёт в очереди дольше этого времени — он сам становится приоритетным" },
-  { key: "reload_min", label: "Перезагрузка, мин", min: 0, max: 120, title: "Время на базе между заездами: принять заказы, погрузиться" },
-  { key: "approach_center_min", label: "Подъезд: центр, мин", min: 0, max: 15, title: "Добавка на парковку и подъём к двери: в радиусе 2.5 км от места выдачи" },
-  { key: "approach_far_min", label: "Подъезд: окраины, мин", min: 0, max: 15, title: "Добавка на парковку и подъём к двери за пределами 2.5 км от места выдачи" },
+const SET_SECTIONS: { id: string; title: string }[] = [
+  { id: "move", title: "Время в пути" },
+  { id: "addr", title: "У адреса" },
+  { id: "trip", title: "Заезды и приоритет" },
 ];
+const SET_FIELDS: { key: string; label: string; unit?: string; min: number; max: number; step?: number; sec: string; tip: string }[] = [
+  { key: "speed_kmh", label: "Скорость", unit: "км/ч", min: 5, max: 120, sec: "move",
+    tip: "Средняя скорость курьера между адресами. Это запасной расчёт на случай, когда дорожная матрица не ответила. В расчёте: время пути = расстояние ÷ эта скорость." },
+  { key: "traffic", label: "Пробки", unit: "коэф.", min: 1, max: 3, step: 0.05, sec: "move",
+    tip: "Общая надбавка к дорожному времени: 1 — свободно, 1.25 — обычный день, 1.5–2 — час пик. В расчёте: каждое время в пути из матрицы умножается на этот коэффициент." },
+  { key: "lights_sec_per_km", label: "Светофоры", unit: "с/км", min: 0, max: 60, sec: "move",
+    tip: "Средняя задержка на светофорах и перекрёстках. В расчёте: секунды добавляются к каждому километру пути; 15 с/км — это примерно +20–25% городского времени." },
+  { key: "handover_min", label: "Вручение", unit: "мин", min: 0, max: 60, sec: "addr",
+    tip: "Само вручение: позвонить, дождаться клиента, отдать заказ. В расчёте: добавляется к каждому адресу и сдвигает все последующие времена маршрута." },
+  { key: "approach_center_min", label: "Подъезд: центр", unit: "мин", min: 0, max: 15, sec: "addr",
+    tip: "Запас на парковку и путь до двери клиента для адресов ближе 2.5 км от точки выдачи. В расчёте: фиксированная добавка к каждому такому адресу." },
+  { key: "approach_far_min", label: "Подъезд: окраины", unit: "мин", min: 0, max: 15, sec: "addr",
+    tip: "То же для адресов дальше 2.5 км. Обычно меньше: на окраинах проще припарковаться. В расчёте: добавка к каждому дальнему адресу." },
+  { key: "max_orders", label: "Заказов в заезде", unit: "шт", min: 1, max: 50, sec: "trip",
+    tip: "Сколько заказов курьер уносит за один выезд — объём сумки. В расчёте: после этого числа курьер возвращается на точку, и начинается новый заезд." },
+  { key: "reload_min", label: "Перезагрузка", unit: "мин", min: 0, max: 120, sec: "trip",
+    tip: "Время на точке между заездами: сдать выполненное, принять новую партию, погрузиться. В расчёте: старт следующего заезда = финиш предыдущего + это время." },
+  { key: "auto_prio_min", label: "Авто-приоритет", unit: "мин", min: 0, max: 240, sec: "trip",
+    tip: "Заказ ждёт в очереди дольше этого времени — сам становится приоритетным. 0 — выключено. В расчёте: возраст заказа повышает его вес, решатель ставит его в маршрут раньше." },
+];
+const HOUR_TRAFFIC_TIP = "Пробки не постоянны: утром и вечером дороги медленнее, днём свободнее. В расчёте: коэффициент пробок берётся по часу выезда, а не один на весь день.";
+const TIP_W = 290; // ширина .ptip-pop из globals.css
+
+/** Строка «Права администратора» с тумблером — общая для добавления и редактирования диспетчера. */
+function RoleSwitch({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="t-role">
+      <span className="t-role-l">Права администратора
+        <small>Параметры расчёта, участники и точки выдачи</small>
+      </span>
+      <button type="button" role="switch" aria-checked={on} aria-label="Права администратора"
+        className={"pswitch" + (on ? " on" : "")}
+        onClick={() => onChange(!on)}><i /></button>
+    </div>
+  );
+}
 
 function Sheet(p: {
   st: AppState;
-  tab: "params" | "hist" | "users";
-  setTab: (t: "params" | "hist" | "users") => void;
-  hist: { rows?: any[]; summary?: Record<string, number | null> } | null;
+  tab: "params" | "hist" | "prof" | "team";
+  setTab: (t: "params" | "hist" | "prof" | "team") => void;
+  hist: HistData;
   histDays: string;
   onHistDays: (d: string) => void;
-  week: string;
+  weekStats: WeekStats | null;
   pwOld: string; pwNew: string; setPwOld: (v: string) => void; setPwNew: (v: string) => void;
   onChangePw: () => Promise<void>;
   userEmail: string; userPwd: string; userIsAdmin: boolean;
   setUserEmail: (v: string) => void; setUserPwd: (v: string) => void; setUserIsAdmin: (v: boolean) => void;
+  userName: string; userPhone: string; setUserName: (v: string) => void; setUserPhone: (v: string) => void;
+  profName: string; profPhone: string; setProfName: (v: string) => void; setProfPhone: (v: string) => void;
+  onSyncProfile: () => void; onSaveProfile: () => Promise<void>;
   onAddUser: () => Promise<void>;
   onDelUser: (uid: string, email: string) => Promise<void>;
+  onUpdUser: (uid: string, data: { email: string; name: string; phone: string; is_admin: boolean }) => Promise<boolean>;
+  onResetPwd: (uid: string, newPwd: string) => Promise<boolean>;
   onSaveSettings: (s: Record<string, number | boolean>) => Promise<void>;
   onClose: () => void;
 }) {
@@ -1447,117 +1649,317 @@ function Sheet(p: {
     await p.onSaveSettings(full);
   };
   const summ = p.hist?.summary || {};
-  const TITLES = { params: "Параметры расчёта", hist: "Неделя и история", users: "Доступ" } as const;
+  const WD = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+  const _now0 = new Date();
+  const wkCols = Array.from({ length: 7 }, (_, i) => {
+    const dt = new Date(_now0.getFullYear(), _now0.getMonth(), _now0.getDate() - (6 - i));
+    const day = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+    const rec = p.weekStats?.days.find(d => d.day === day);
+    return { day, date: day, wd: WD[dt.getDay()], delivered: rec?.delivered || 0,
+      cancelled: rec?.cancelled || 0, avg_cycle_min: rec?.avg_cycle_min ?? null };
+  });
+  const wkMax = Math.max(1, ...wkCols.map(d => d.delivered));
+  const wkTotal = wkCols.reduce((a, d) => a + d.delivered, 0);
+  const wkCour = p.weekStats?.couriers || [];
+  useEffect(() => { if (p.tab === "prof") p.onSyncProfile(); }, [p.tab]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [profOpen, setProfOpen] = useState(true);
+  const [addOpen, setAddOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [eMail, setEMail] = useState(""); const [eName, setEName] = useState("");
+  const [ePhone, setEPhone] = useState(""); const [eAdmin, setEAdmin] = useState(false);
+  const [ePwd, setEPwd] = useState("");
+  const [pwOpen, setPwOpen] = useState(false);
+  type TipState = { f: { key: string; label: string; tip: string }; left: number; top: number; below: boolean };
+  const [tip, setTip] = useState<TipState | null>(null);
+  const showTip = (f: TipState["f"], el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    const below = r.top < 420; // над кнопкой места может не быть — показываем снизу
+    setTip({
+      f,
+      left: Math.max(12, Math.min(r.left - 14, window.innerWidth - (TIP_W + 16))),
+      top: below ? r.bottom + 7 : r.top - 8,
+      below,
+    });
+  };
+  const hideTip = () => setTip(null);
+  const TITLES = { params: "Параметры расчёта", hist: "Статистика", prof: "Профиль", team: "Участники" } as const;
   return (
     <div className="sheet-bg" onClick={e => { if (e.target === e.currentTarget) p.onClose(); }}>
-      <div className="sheet">
+      <div className="sheet" aria-label={TITLES[p.tab]}>
         <button className="close" aria-label="Закрыть" onClick={p.onClose}>✕</button>
-        <h3>{TITLES[p.tab]}</h3>
         <div className="sheet-tabs" role="tablist">
-          <button role="tab" aria-selected={p.tab === "params"} className={p.tab === "params" ? "on" : ""}
-            onClick={() => p.setTab("params")}><SlidersHorizontal size={14} />Параметры</button>
+          <button role="tab" aria-selected={p.tab === "prof"} className={p.tab === "prof" ? "on" : ""}
+            onClick={() => p.setTab("prof")}><User size={14} />Профиль</button>
           <button role="tab" aria-selected={p.tab === "hist"} className={p.tab === "hist" ? "on" : ""}
-            onClick={() => p.setTab("hist")}><History size={14} />Неделя и история</button>
-          <button role="tab" aria-selected={p.tab === "users"} className={p.tab === "users" ? "on" : ""}
-            onClick={() => p.setTab("users")}><Users size={14} />Доступ</button>
+            onClick={() => p.setTab("hist")}><ChartColumn size={14} />Статистика</button>
+          {!!p.st.me?.is_admin && (
+            <button role="tab" aria-selected={p.tab === "params"} className={p.tab === "params" ? "on" : ""}
+              onClick={() => p.setTab("params")}><SlidersHorizontal size={14} />Параметры расчёта</button>
+          )}
+          {!!p.st.me?.is_admin && (
+            <button role="tab" aria-selected={p.tab === "team"} className={p.tab === "team" ? "on" : ""}
+              onClick={() => p.setTab("team")}><Users size={14} />Участники</button>
+          )}
         </div>
 
-        {p.tab === "params" && (<>
-        <div className="settings-grid">
-          {SET_FIELDS.map(f => (
-            <label key={f.key} title={f.title}>{f.label}
-              <input type="number" min={f.min} max={f.max} step={f.step || 1}
-                defaultValue={s[f.key] as number}
-                key={f.key + String(s[f.key])}
-                onChange={e => void set({ [f.key]: +e.target.value })} />
-            </label>
+        {p.tab === "params" && !!p.st.me?.is_admin && (<>
+          {SET_SECTIONS.map(sec => (
+            <div className="psec" key={sec.id}>
+              <h4>{sec.title}</h4>
+              {SET_FIELDS.filter(f => f.sec === sec.id).map(f => (
+                <div className="prow" key={f.key}>
+                  <span className="plabel">{f.label}
+                    <button type="button" className="ptip" aria-label={"Подсказка: " + f.label}
+                      onMouseEnter={e => showTip(f, e.currentTarget)} onMouseLeave={hideTip}
+                      onFocus={e => showTip(f, e.currentTarget)} onBlur={hideTip}
+                      onClick={e => { e.preventDefault(); showTip(f, e.currentTarget); }}>
+                      <CircleHelp size={14} /></button>
+                  </span>
+                  <span className="pval">
+                    <span className="pfield">
+                      <input type="number" min={f.min} max={f.max} step={f.step || 1}
+                        defaultValue={s[f.key] as number}
+                        key={f.key + String(s[f.key])}
+                        onChange={e => void set({ [f.key]: +e.target.value })} />
+                      <i className="punit">{f.unit}</i>
+                    </span>
+                  </span>
+                </div>
+              ))}
+              {sec.id === "move" && (
+                <div className="prow">
+                  <span className="plabel">Почасовые пробки
+                    <button type="button" className="ptip" aria-label="Подсказка: почасовые пробки"
+                      onMouseEnter={e => showTip({ key: "hour_traffic", label: "Почасовые пробки", tip: HOUR_TRAFFIC_TIP }, e.currentTarget)} onMouseLeave={hideTip}
+                      onFocus={e => showTip({ key: "hour_traffic", label: "Почасовые пробки", tip: HOUR_TRAFFIC_TIP }, e.currentTarget)} onBlur={hideTip}
+                      onClick={e => { e.preventDefault(); showTip({ key: "hour_traffic", label: "Почасовые пробки", tip: HOUR_TRAFFIC_TIP }, e.currentTarget); }}>
+                      <CircleHelp size={14} /></button>
+                  </span>
+                  <span className="pval">
+                    <button type="button" role="switch" aria-checked={!!s.hour_traffic} aria-label="Почасовые пробки"
+                      className={"pswitch" + (s.hour_traffic ? " on" : "")}
+                      onClick={() => void set({ hour_traffic: s.hour_traffic ? 0 : 1 })}><i /></button>
+                  </span>
+                </div>
+              )}
+            </div>
           ))}
-          <label title="Коэффициент пробок по часам суток (утренний и вечерний пик)"
-            style={{ gridColumn: "1/-1", flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <input type="checkbox" style={{ width: "auto" }} checked={!!s.hour_traffic}
-              onChange={e => void set({ hour_traffic: e.target.checked ? 1 : 0 })} />
-          учитывать час пик (утро/вечер)
-        </label>
-        </div>
+          {tip && (
+            <div className={"ptip-pop" + (tip.below ? " below" : "")} role="tooltip" style={{ left: tip.left, top: tip.top }}>
+              <b>{tip.f.label}.</b> {tip.f.tip}
+            </div>
+          )}
         </>)}
 
         {p.tab === "hist" && (<>
-        <h4>Неделя</h4>
-        <div className="wk-note" dangerouslySetInnerHTML={{ __html: p.week || "Загрузка…" }} />
-        <div style={{ marginTop: 8 }}>
-          <a href="/report/day" target="_blank" rel="noopener" className="btn"
-            style={{ fontSize: "12.5px" }} title="Печатная версия: Ctrl+P позволяет сохранить в PDF">Отчёт дня (PDF)</a>
+        <div className="stat-cards">
+          <div className="scard"><small>Выдано</small><b>{summ.delivered || 0}</b></div>
+          <div className="scard"><small>Отменено</small><b>{summ.cancelled || 0}</b></div>
+          <div className="scard"><small>Средний цикл</small><b>{summ.avg_cycle_min != null ? summ.avg_cycle_min : "–"}{summ.avg_cycle_min != null && <i>мин</i>}</b></div>
+          <div className="scard" title="Заказы, выданные не позже обещанного времени, за 7 дней">
+            <small>Вовремя · 7 дней</small>
+            <b>{p.weekStats?.on_time_total ? p.weekStats.on_time + " из " + p.weekStats.on_time_total : "–"}</b>
+          </div>
         </div>
 
-        <h4>История</h4>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-          <select style={{ border: "1px solid var(--line2)", borderRadius: 7, padding: "6px 8px", background: "var(--panel)", color: "var(--ink)" }}
-            value={p.histDays} onChange={e => p.onHistDays(e.target.value)}>
-            <option value="1">сегодня</option>
-            <option value="2">2 дня</option>
-            <option value="7">7 дней</option>
-            <option value="31">31 день</option>
-          </select>
-          <a href={"/api/history/export?days=" + p.histDays} className="btn" style={{ fontSize: "12.5px" }}
-            title="Скачать CSV (открывается в Excel)">CSV</a>
+        <h4>Выдачи за 7 дней</h4>
+        <div className="wk-chart" role="img" aria-label="Выдачи по дням за неделю">
+          {wkCols.map(d => (
+            <div className={"wk-col" + (d.delivered ? "" : " z")} key={d.day}
+              title={`${d.date}: выдано ${d.delivered}${d.cancelled ? `, отменено ${d.cancelled}` : ""}${d.avg_cycle_min != null ? `, цикл ${d.avg_cycle_min} мин` : ""}`}>
+              <span className="wk-num">{d.delivered || ""}</span>
+              <span className="wk-bar"><i style={d.delivered ? { height: Math.max(8, Math.round(d.delivered / wkMax * 100)) + "%" } : undefined} /></span>
+              <span className="wk-day">{d.wd}</span>
+              <span className="wk-date">{d.date.slice(8, 10)}.{d.date.slice(5, 7)}</span>
+            </div>
+          ))}
         </div>
-        <div style={{ color: "var(--mut)", fontSize: "12.5px" }}>
-          Выдано: <b>{summ.delivered || 0}</b> · Отменено: <b>{summ.cancelled || 0}</b>
-          {summ.avg_cycle_min != null && <> · Средний цикл: <b>{summ.avg_cycle_min} мин</b></>}
+        {wkTotal === 0 && <div className="empty-list">На этой неделе пока нет закрытых заказов</div>}
+
+        {wkCour.length > 0 && (<>
+        <h4>Курьеры за неделю</h4>
+        <div className="wk-cour">
+          {wkCour.map(c => (
+            <div className="wk-cour-row" key={c.courier}>
+              <Bike size={14} />
+              <span className="wk-cour-name">{c.courier}</span>
+              <span className="wk-cour-n">{c.delivered} выдано</span>
+              {c.avg_cycle_min != null && <span className="wk-cour-cyc">цикл {c.avg_cycle_min} мин</span>}
+            </div>
+          ))}
+        </div>
+        </>)}
+
+        <h4>История заказов</h4>
+        <div className="hist-bar">
+          <div className="pseg" role="group" aria-label="Период истории">
+            {[["1", "Сегодня"], ["2", "2 дня"], ["7", "7 дней"], ["31", "31 день"]].map(([v, label]) => (
+              <button type="button" key={v} className={p.histDays === v ? "on" : ""}
+                onClick={() => p.onHistDays(v)}>{label}</button>
+            ))}
+          </div>
+          <span className="hist-links">
+            <a href="/report/day" target="_blank" rel="noopener" className="btn btn-primary"
+              title="Отчёт дня для печати: Ctrl+P позволяет сохранить в PDF"><FileText size={14} />PDF</a>
+            <a href={"/api/history/export?days=" + p.histDays} className="btn"
+              title="Выгрузить историю в CSV (открывается в Excel)"><FileSpreadsheet size={14} />Excel</a>
+          </span>
         </div>
         <div className="hist-list">
-          {p.hist?.rows?.length
-            ? p.hist.rows.map((r: any, i: number) => (
-              <div className="hrow" key={i}>
-                <span className="h-time">{(r.closed_at || "").replace("T", " ").slice(5, 16)}</span>
-                <span className="h-addr" title={r.address}>{r.address || ""}</span>
-                <span className="h-cour">{r.courier || ""}</span>
-                <span className={r.outcome === "delivered" ? "h-ok" : "h-no"}>{r.outcome === "delivered" ? "✓" : "✕"}</span>
-                <span className="h-cyc">{r.cycle_min != null ? r.cycle_min + " мин" : ""}</span>
-              </div>
-            ))
+          {p.hist?.rows?.length ? (<>
+          <div className="hrow hhead">
+            <span>Время</span><span>Адрес</span><span>Курьер</span><span>Цикл</span>
+          </div>
+          {p.hist.rows.map((r, i) => (
+            <div className={"hrow " + (r.outcome === "delivered" ? "ok" : "no")} key={i}>
+              <span className="h-time"><b>{(r.closed_at || "").slice(11, 16)}</b><small>{(r.closed_at || "").slice(8, 10)}.{(r.closed_at || "").slice(5, 7)}</small></span>
+              <span className="h-addr" title={r.address}>{r.address || ""}</span>
+              <span className="h-cour">{r.courier || "–"}</span>
+              <span className="h-res"><span className="h-badge">{r.outcome === "delivered" ? "✓" : "✕"}</span>{r.cycle_min != null ? <span className="h-cyc">{r.cycle_min + " мин"}</span> : null}</span>
+            </div>
+          ))}
+          </>)
             : <div className="empty-list">Пока пусто</div>}
         </div>
         </>)}
 
-        {p.tab === "users" && (<>
-        <div className="col">
-          <label style={{ fontSize: "11.5px", color: "var(--mut)" }}>Смена своего пароля</label>
-          <input type="password" placeholder="старый пароль" aria-label="Старый пароль"
-            value={p.pwOld} onChange={e => p.setPwOld(e.target.value)} />
-          <input type="password" placeholder="новый (мин. 4 символа)" aria-label="Новый пароль"
-            value={p.pwNew} onChange={e => p.setPwNew(e.target.value)} />
-          <button className="btn" onClick={() => void p.onChangePw()}>Сменить пароль</button>
+        {p.tab === "prof" && (<>
+        <div className={"sacc" + (profOpen ? " open" : "")}>
+          <button type="button" className="sacc-h" aria-expanded={profOpen}
+            onClick={() => setProfOpen(v => !v)}>Подпись курьерам<ChevronDown size={16} className="chev" /></button>
+          <div className="sacc-b"><div className={"sacc-c col prof-col" + (p.st.me && !(p.st.me.name && p.st.me.phone) ? " need" : "")}>
+            <label className="pf-note">Имя и телефон автоматически добавляются под каждым сообщением</label>
+            <div className="prof-grid">
+              <label className="pf-l">Имя
+                <input type="text" placeholder="Настя" aria-label="Ваше имя" value={p.profName}
+                  onChange={e => p.setProfName(e.target.value)} /></label>
+              <label className="pf-l">Телефон
+                <input type="tel" placeholder="+375 29 123-45-67" aria-label="Ваш телефон" value={p.profPhone}
+                  inputMode="tel" onChange={e => p.setProfPhone(e.target.value)} /></label>
+            </div>
+            <div className="prof-sign" aria-live="polite">
+              <small>Так придёт курьеру:</small>
+              <div className="prof-sign-bubble">
+                Есть вопросы? - {p.profName.trim() || <i>имя</i>}, {p.profPhone.trim() || <i>телефон</i>}
+              </div>
+            </div>
+            <div className="prof-actions">
+              <button className="btn btn-primary" disabled={!(p.profName.trim() && p.profPhone.trim())}
+                onClick={() => void p.onSaveProfile()}>Сохранить</button>
+              {p.st.me && !(p.st.me.name && p.st.me.phone) && (
+                <small className="prof-warn">Пока без подписи — отправка сообщений курьерам недоступна</small>
+              )}
+             </div>
+          </div></div>
         </div>
-        {!!p.st.me?.is_admin && (
-          <div className="col" style={{ marginTop: 14 }}>
-            <label style={{ fontSize: "11.5px", color: "var(--mut)" }}>Новый пользователь (только администратор)</label>
-            <input type="email" placeholder="email, напр. ivan@cafe.by" aria-label="Email нового пользователя"
-              value={p.userEmail} onChange={e => p.setUserEmail(e.target.value)} />
-            <input type="password" placeholder="начальный пароль" aria-label="Начальный пароль"
-              value={p.userPwd} onChange={e => p.setUserPwd(e.target.value)} />
-            <label style={{ fontSize: 12, color: "var(--mut)", display: "flex", gap: 6, alignItems: "center" }}>
-              <input type="checkbox" style={{ width: "auto" }} checked={p.userIsAdmin}
-                onChange={e => p.setUserIsAdmin(e.target.checked)} /> администратор
-            </label>
-            <button className="btn btn-primary" onClick={() => void p.onAddUser()}>Добавить пользователя</button>
-            <div style={{ marginTop: 10 }}>
-              {(p.st.users || []).map(u => (
-                <div className="user-row" key={u.id}>
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }} title={u.email}>{u.email}</span>
-                  {!!u.is_admin && <span className="chip chip-green">админ</span>}
-                  <button style={{ opacity: 1, border: "none", background: "transparent", color: "#c02626", cursor: "pointer", fontSize: 12 }}
-                    disabled={u.id === p.st.me?.id}
-                    title={u.id === p.st.me?.id ? "себя удалить нельзя" : "Удалить пользователя"}
-                    onClick={() => void p.onDelUser(u.id, u.email)}>✕</button>
+
+        <div className={"sacc" + (pwOpen ? " open" : "")}>
+          <button type="button" className="sacc-h" aria-expanded={pwOpen}
+            onClick={() => setPwOpen(v => !v)}>Смена пароля<ChevronDown size={16} className="chev" /></button>
+          <div className="sacc-b"><div className="sacc-c col">
+            <div className="prof-grid">
+              <label className="pf-l">Старый пароль
+                <input type="password" placeholder="••••" aria-label="Старый пароль"
+                  value={p.pwOld} onChange={e => p.setPwOld(e.target.value)} /></label>
+              <label className="pf-l">Новый пароль
+                <input type="password" placeholder="минимум 4 символа" aria-label="Новый пароль"
+                  value={p.pwNew} onChange={e => p.setPwNew(e.target.value)} /></label>
+            </div>
+            <button className="btn" disabled={!(p.pwOld && p.pwNew.length >= 4)}
+              onClick={() => void p.onChangePw()}>Сменить пароль</button>
+          </div></div>
+        </div>
+        </>)}
+
+        {p.tab === "team" && !!p.st.me?.is_admin && (<>
+          <div className="psec">
+            <h4>Диспетчеры · {(p.st.users || []).length}</h4>
+            {(p.st.users || []).map(u => {
+              const [abg, afg] = avaOf(u.email);
+              const ini = initialsOf(u.name || "", u.email);
+              const isSelf = u.id === p.st.me?.id;
+              const editing = editId === u.id;
+              const startEdit = () => { setEditId(u.id); setEMail(u.email); setEName(u.name || ""); setEPhone(u.phone || ""); setEAdmin(!!u.is_admin); setEPwd(""); };
+              return (
+                <div key={u.id}>
+                  <div className="trow">
+                    <span className="t-ava" aria-hidden="true" style={{ background: abg, color: afg }}>{ini}</span>
+                    <span className="t-who">
+                      <b>{u.name || u.email.split("@")[0]}</b>
+                      <small>{u.email}{u.phone ? " · " + u.phone : ""}</small>
+                    </span>
+                    {!!u.is_admin && <span className="chip chip-green">админ</span>}
+                    {isSelf && <span className="chip">это вы</span>}
+                    <button type="button" className={"ticon" + (editing ? " on" : "")} title="Изменить"
+                      aria-label={"Изменить " + u.email} aria-expanded={editing}
+                      onClick={() => (editing ? setEditId(null) : startEdit())}><Pencil size={15} /></button>
+                    <button type="button" className="tdel" disabled={isSelf}
+                      title={isSelf ? "Себя удалить нельзя" : "Удалить пользователя"}
+                      aria-label={"Удалить " + u.email}
+                      onClick={() => void p.onDelUser(u.id, u.email)}><Trash2 size={15} /></button>
+                  </div>
+                  {editing && (
+                    <div className="tedit">
+                      <div className="team-grid">
+                        <label className="pf-l">Имя
+                          <input type="text" aria-label="Имя пользователя" value={eName}
+                            onChange={e => setEName(e.target.value)} /></label>
+                        <label className="pf-l">Телефон
+                          <input type="tel" placeholder="+375 29 123-45-67" aria-label="Телефон пользователя"
+                            inputMode="tel" value={ePhone} onChange={e => setEPhone(e.target.value)} /></label>
+                        <label className="pf-l">Email
+                          <input type="email" aria-label="Email пользователя" value={eMail}
+                            onChange={e => setEMail(e.target.value)} /></label>
+                        <label className="pf-l">Новый пароль
+                          <input type="password" placeholder="оставьте пустым, чтобы не менять"
+                            aria-label="Новый пароль пользователя" value={ePwd}
+                            onChange={e => setEPwd(e.target.value)} /></label>
+                      </div>
+                      {!isSelf && <RoleSwitch on={eAdmin} onChange={setEAdmin} />}
+                      <div className="tedit-actions">
+                        <button className="btn btn-primary"
+                          disabled={!(eMail.trim() && eName.trim().length >= 2 && ePhone.trim())}
+                          onClick={async () => {
+                            const ok = await p.onUpdUser(u.id, { email: eMail.trim(), name: eName.trim(), phone: ePhone.trim(), is_admin: isSelf ? true : eAdmin });
+                            const pwdOk = !ePwd || await p.onResetPwd(u.id, ePwd);
+                            if (ok && pwdOk) setEditId(null);
+                          }}>Сохранить</button>
+                        <button className="btn" onClick={() => setEditId(null)}>Отмена</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <a href="/api/backup" className="btn" title="Скачать снимок базы данных">Бэкап БД</a>
-            </div>
+              );
+            })}
           </div>
-        )}
+
+          <div className={"sacc" + (addOpen ? " open" : "")} style={{ marginTop: 12 }}>
+            <button type="button" className="sacc-h" aria-expanded={addOpen}
+              onClick={() => setAddOpen(v => !v)}>Добавить диспетчера<ChevronDown size={16} className="chev" /></button>
+            <div className="sacc-b"><div className="sacc-c col team-col">
+              <div className="team-grid">
+                <label className="pf-l">Имя
+                  <input type="text" placeholder="Иван" aria-label="Имя нового пользователя"
+                    value={p.userName} onChange={e => p.setUserName(e.target.value)} /></label>
+                <label className="pf-l">Телефон
+                  <input type="tel" placeholder="+375 29 123-45-67" aria-label="Телефон нового пользователя"
+                    inputMode="tel" value={p.userPhone} onChange={e => p.setUserPhone(e.target.value)} /></label>
+                <label className="pf-l">Email
+                  <input type="email" placeholder="ivan@cafe.by" aria-label="Email нового пользователя"
+                    value={p.userEmail} onChange={e => p.setUserEmail(e.target.value)} /></label>
+                <label className="pf-l">Начальный пароль
+                  <input type="password" placeholder="минимум 4 символа" aria-label="Начальный пароль"
+                    value={p.userPwd} onChange={e => p.setUserPwd(e.target.value)} /></label>
+              </div>
+              <RoleSwitch on={p.userIsAdmin} onChange={p.setUserIsAdmin} />
+              <button className="btn btn-primary" disabled={!(p.userEmail.trim() && p.userPwd.length >= 4)}
+                onClick={() => void p.onAddUser()}>Добавить</button>
+            </div></div>
+          </div>
+
+          <a href="/api/backup" className="t-back" title="Скачать снимок базы данных">
+            <Download size={14} />Бэкап базы
+          </a>
         </>)}
       </div>
     </div>
