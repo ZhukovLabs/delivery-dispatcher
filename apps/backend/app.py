@@ -1,4 +1,4 @@
-﻿"""Диспетчер доставки: админ-интерфейс + оптимизация развозки (OR-Tools)."""
+"""Диспетчер доставки: админ-интерфейс + оптимизация развозки (OR-Tools)."""
 import configparser
 import hashlib
 import hmac
@@ -15,6 +15,16 @@ import uuid
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta, timezone
+
+# Минск: UTC+3, без перехода на летнее время. Все «настенные» времена
+# (часы плана, история, дедлайны, сообщения) пишем по Минску независимо
+# от часового пояса сервера. Значения остаются наивными (без оффсета),
+# чтобы не ломать сравнения с уже записанными данными.
+_MN = timezone(timedelta(hours=3))
+
+
+def _now() -> datetime:
+    return datetime.now(_MN).replace(tzinfo=None)
 from logging.handlers import RotatingFileHandler
 
 import requests
@@ -125,9 +135,10 @@ log = logging.getLogger("dispatcher")
 DEFAULT_DEPOT = {"address": "ул. Подгорная 12/1, Гомель", "lat": 52.44146, "lng": 31.01476}
 
 STATE = {
-    "rev": 0,            # версия состояния для long-poll /api/rev
-    "depot": dict(DEFAULT_DEPOT),  # {"address", "lat", "lng"}
-    "couriers": [],      # {"id", "name", "status": base|away|off, "color", "back_min"}
+    "rev": 0,            # счетчик изменений для long-poll /api/rev
+    "depot": dict(DEFAULT_DEPOT),  # совместимый вид первой точки {address, lat, lng}
+    "points": [],        # места выдачи: {"id", "name", "address", "lat", "lng"}
+    "couriers": [],      # {"id", "name", "status": base|away|off, "color", "back_min", "point_id"}
     "orders": [],        # {"id", "address", "lat", "lng"}
     "settings": {"speed_kmh": 60, "handover_min": 5, "max_orders": 5, "traffic": 1.25,
                  "lights_sec_per_km": 15, "auto_prio_min": 0, "reload_min": 10,
@@ -145,6 +156,25 @@ STATE = {
 
 ROAD_FACTOR = 1.4  # запасной расчёт (если OSRM недоступен): прямая -> дорога
 _PRIO_WEIGHT = 60  # вес минуты доставки приоритетного заказа (против 1 у обычного)
+MAX_POINTS = 10    # максимум мест выдачи
+
+
+def _depot_view():
+    """Совместимый со старым API вид первой точки выдачи ({"address","lat","lng"})."""
+    p = (STATE.get("points") or [None])[0]
+    if not p:
+        return dict(DEFAULT_DEPOT)
+    return {"address": p["address"], "lat": p["lat"], "lng": p["lng"]}
+
+
+def _home_point(courier):
+    """Точка выдачи курьера (или первая, если привязка не задана/битая)."""
+    pid = (courier.get("point_id") or "").strip()
+    for p in STATE.get("points") or []:
+        if p["id"] == pid:
+            return p
+    return (STATE.get("points") or [None])[0]
+
 OSRM_URLS = [
     "https://routing.openstreetmap.de/routed-car",  # серверы сообщества OSM (FOSSGIS) — надёжнее
     "http://router.project-osrm.org",               # официальный демо-сервер — запасной
@@ -172,6 +202,9 @@ _db_path = CFG["db_path"]
 
 _DB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS points(
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, address TEXT NOT NULL,
+    lat REAL NOT NULL, lng REAL NOT NULL, pos INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS couriers(
     id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, color TEXT);
 CREATE TABLE IF NOT EXISTS orders(
@@ -197,6 +230,9 @@ _DB_MIGRATIONS = [
     ("orders", "status", "ALTER TABLE orders ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'"),
     ("orders", "assigned", "ALTER TABLE orders ADD COLUMN assigned TEXT NOT NULL DEFAULT ''"),
     ("orders", "out_at", "ALTER TABLE orders ADD COLUMN out_at TEXT NOT NULL DEFAULT ''"),
+    ("couriers", "point_id", "ALTER TABLE couriers ADD COLUMN point_id TEXT NOT NULL DEFAULT ''"),
+    ("orders", "point_id", "ALTER TABLE orders ADD COLUMN point_id TEXT NOT NULL DEFAULT ''"),
+    ("orders", "pin", "ALTER TABLE orders ADD COLUMN pin TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -219,17 +255,22 @@ def _persist_meta():
             ("color_seq", str(STATE["color_seq"])),
             ("plan", json.dumps(STATE["plan"], ensure_ascii=False)
              if STATE.get("plan") else "")])
+        c.execute("DELETE FROM points")
+        c.executemany(
+            "INSERT INTO points(id, name, address, lat, lng, pos) VALUES(?, ?, ?, ?, ?, ?)",
+            [(p["id"], p["name"], p["address"], float(p["lat"]), float(p["lng"]), i)
+             for i, p in enumerate(STATE.get("points") or [])])
 
 
 def _persist_couriers():
     with _db_lock, _db() as c:
         c.execute("DELETE FROM couriers")
         c.executemany(
-            "INSERT INTO couriers(id, name, status, color, back_min, tg_chat_id, tg_login) "
-            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO couriers(id, name, status, color, back_min, tg_chat_id, tg_login, point_id) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
             [(x["id"], x["name"], x["status"], x.get("color") or "",
               int(x.get("back_min", 15)), x.get("tg_chat_id") or "",
-              x.get("tg_login") or "")
+              x.get("tg_login") or "", x.get("point_id") or "")
              for x in STATE["couriers"]])
 
 
@@ -238,12 +279,12 @@ def _persist_orders():
         c.execute("DELETE FROM orders")
         c.executemany(
             "INSERT INTO orders(id, address, lat, lng, created_at, prio, deadline, "
-            "status, assigned, out_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "status, assigned, out_at, point_id, pin) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(x["id"], x["address"], x["lat"], x["lng"],
-              x.get("created_at") or datetime.now().isoformat(timespec="seconds"),
+              x.get("created_at") or _now().isoformat(timespec="seconds"),
               int(x.get("prio") or 0), x.get("deadline") or "",
               x.get("status") or "ready", x.get("assigned") or "",
-              x.get("out_at") or "")
+              x.get("out_at") or "", x.get("point_id") or "", x.get("pin") or "")
              for x in STATE["orders"]])
 
 
@@ -252,13 +293,13 @@ def _archive_order(order, outcome, courier=""):
         c.execute("INSERT OR REPLACE INTO history VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
                   (order["id"], order["address"], order["lat"], order["lng"],
                    order.get("created_at"),
-                   datetime.now().isoformat(timespec="seconds"), outcome, courier,
+                   _now().isoformat(timespec="seconds"), outcome, courier,
                    order.get("deadline") or ""))
 
 
 def _history_period(days=1):
     """Строки истории за последние `days` дней + сводка (новые — первыми)."""
-    since = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    since = (_now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
     try:
         with _db_lock, _db() as c:
             rows = c.execute(
@@ -297,16 +338,36 @@ def load_state():
         c.executescript(_DB_SCHEMA)
         meta = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM meta")}
         couriers = [dict(r) for r in c.execute(
-            "SELECT id, name, status, color, back_min, tg_chat_id, tg_login "
+            "SELECT id, name, status, color, back_min, tg_chat_id, tg_login, point_id "
             "FROM couriers ORDER BY rowid")]
         orders = [dict(r) for r in c.execute(
             "SELECT id, address, lat, lng, created_at, prio, deadline, "
-            "status, assigned, out_at FROM orders ORDER BY rowid")]
-    if meta.get("depot"):
+            "status, assigned, out_at, point_id, pin FROM orders ORDER BY rowid")]
+        pts = [dict(r) for r in c.execute(
+            "SELECT id, name, address, lat, lng FROM points ORDER BY pos, rowid")]
+    if pts:
+        STATE["points"] = [{"id": p["id"], "name": p["name"], "address": p["address"],
+                            "lat": float(p["lat"]), "lng": float(p["lng"])} for p in pts]
+    elif meta.get("points"):
         try:
-            STATE["depot"] = json.loads(meta["depot"])
+            saved_pts = json.loads(meta["points"])
+            if isinstance(saved_pts, list) and saved_pts:
+                STATE["points"] = saved_pts
         except ValueError:
             pass
+    if not STATE.get("points"):
+        # миграция: единственное депо -> первая точка выдачи
+        base = STATE.get("depot") or dict(DEFAULT_DEPOT)
+        STATE["points"] = [{"id": uuid.uuid4().hex[:8], "name": "Основная",
+                            "address": base.get("address") or "",
+                            "lat": float(base.get("lat") or 0),
+                            "lng": float(base.get("lng") or 0)}]
+    STATE["depot"] = _depot_view()
+    _pt_ids = {p["id"] for p in STATE["points"]}
+    _first = STATE["points"][0]["id"]
+    for r_c in couriers:
+        if r_c.get("point_id") not in _pt_ids:
+            r_c["point_id"] = _first
     if meta.get("settings"):
         try:
             saved = json.loads(meta["settings"])
@@ -322,7 +383,8 @@ def load_state():
                           "color": r["color"] or None,
                           "back_min": int(r["back_min"] if r["back_min"] is not None else 15),
                           "tg_chat_id": r["tg_chat_id"] or "",
-                          "tg_login": r.get("tg_login") or ""}
+                          "tg_login": r.get("tg_login") or "",
+                          "point_id": r.get("point_id") or _first}
                          for r in couriers]
     STATE["orders"] = [{**r, "prio": int(r.get("prio") or 0),
                         "deadline": r.get("deadline") or "",
@@ -595,18 +657,21 @@ def _deadline_rel_min(hhmm, now_hm):
 _APPROACH_RADIUS_KM = 2.5  # ближе к центру — плотная застройка, парковка дольше
 
 
-def _approach_for(points, depot, settings):
-    """Добавка на парковку/подъём по узлам: [0] = 0 (депо), дальше центр/пригород."""
+def _approach_map(points, home, k_orders, settings):
+    """Добавка на парковку/подъезд для заказов (узлы k_orders..) от точки home.
+
+    Возвращает {узел_заказа: минуты}; центру ближе _APPROACH_RADIUS_KM - «центр».
+    """
     near = max(0, int(settings.get("approach_center_min", 4)))
     far = max(0, int(settings.get("approach_far_min", 2)))
-    out = [0]
-    for p in points[1:]:
-        km = haversine_km(depot, p)
-        out.append(near if km <= _APPROACH_RADIUS_KM else far)
+    out = {}
+    for j in range(k_orders, len(points)):
+        km = haversine_km(home, points[j])
+        out[j] = near if km <= _APPROACH_RADIUS_KM else far
     return out
 
 
-def _eta_pass(stop_nodes, delay, matrix, settings, solved_dt, appr=None):
+def _eta_pass(stop_nodes, delay, matrix, settings, solved_dt, appr=None, home=0):
     """ETA остановок поездки (минуты от solved_dt) с почасовыми коэффициентами.
 
     Матрица построена с базовым коэффициентом traffic: дуга очищается от него
@@ -617,43 +682,72 @@ def _eta_pass(stop_nodes, delay, matrix, settings, solved_dt, appr=None):
     base_traffic = max(1.0, float(settings.get("traffic", 1.3)))
     handover = max(0, int(settings["handover_min"]))
     t = float(delay)
-    node = 0
+    node = home
     etas = []
     for g in stop_nodes:
         hour = (solved_dt + timedelta(minutes=t)).hour
         factor = _HOURLY_TRAFFIC.get(hour, 1.0) if hourly else 1.0
         travel = (matrix[node][g] - handover) / base_traffic * factor
-        t += travel + handover + (appr[g] if appr else 0)
+        t += travel + handover + (appr.get(g, 0) if appr else 0)
         etas.append(int(round(t)))
         node = g
     hour = (solved_dt + timedelta(minutes=t)).hour
     factor = _HOURLY_TRAFFIC.get(hour, 1.0) if hourly else 1.0
-    t += matrix[node][0] / base_traffic * factor
+    t += matrix[node][home] / base_traffic * factor
     return etas, int(round(t))
 
 
-def solve_plan(include_away=True, with_geometry=True):
+def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None):
     """Развозка. include_away=False — сценарий «не ждать»: только курьеры на базе.
 
     Заказов больше, чем влезает в один заезд (вместимость x курьеры), решается
     несколькими раундами: курьер вернётся на базу и поедет вторым заездом
     (задержка старта = длительность первого заезда + перезагрузка).
+
+    helpers: {courier_id: point_id} — разовая «помощь»: курьер в этом расчёте
+    стартует с чужой точки выдачи и берёт максимум один заказ. Его собственная
+    точка и статус не меняются.
     """
-    depot, settings = STATE["depot"], STATE["settings"]
+    helpers = helpers or {}
+    force_ids = {cid for cid in (force or [])
+                 if any(c["id"] == cid for c in STATE["couriers"])}
+    settings = STATE["settings"]
     orders = [o for o in STATE["orders"] if (o.get("status") or "ready") == "ready"]
-    couriers = [c for c in STATE["couriers"]
-                if c["status"] == "base" or (include_away and c["status"] == "away")]
-    if not depot:
-        raise ValueError("Сначала задайте точку доставки (депо) на карте")
+    active = [c for c in STATE["couriers"]
+              if c["status"] == "base" or (include_away and c["status"] == "away")]
+    helper_ids = {cid for cid in helpers
+                  if any(c["id"] == cid for c in STATE["couriers"])}
+    couriers = active + [c for c in STATE["couriers"]
+                         if c["id"] in helper_ids and c not in active]
+    if not STATE.get("points"):
+        raise ValueError("Сначала задайте место выдачи заказов (точку на карте)")
     if not orders:
         raise ValueError("Нет готовых заказов, добавьте хотя бы один")
     if not couriers:
         raise ValueError("Нет активных курьеров, добавьте курьера")
 
-    points = [depot] + orders
+    def _eff_home(c):
+        """Точка старта курьера в этом расчёте (помощник едет с чужой точки)."""
+        hp = helpers.get(c["id"])
+        if hp:
+            p = next((p for p in STATE["points"] if p["id"] == hp), None)
+            if p:
+                return p
+        return _home_point(c)
+
+    # Узлы матрицы: 0..K-1 - уникальные точки выдачи активных курьеров, дальше заказы.
+    # Каждый курьер стартует и финиширует в СВОЕЙ точке (RoutingIndexManager starts).
+    homes, home_idx = [], {}
+    for c in couriers:
+        hp = _eff_home(c)
+        if hp["id"] not in home_idx:
+            home_idx[hp["id"]] = len(homes)
+            homes.append(hp)
+    K = len(homes)
+    points = homes + orders
     matrix, by_roads, distances, provider = build_time_matrix(points, settings)
-    appr = _approach_for(points, depot, settings)
-    solved_dt = datetime.now()
+    appr_home = [_approach_map(points, h, K, settings) for h in homes]
+    solved_dt = _now()
     now_hm = solved_dt.hour * 60 + solved_dt.minute
     handover = max(0, int(settings["handover_min"]))
     auto_prio = int(settings.get("auto_prio_min", 0) or 0)
@@ -661,58 +755,91 @@ def solve_plan(include_away=True, with_geometry=True):
     reload_min = max(0, int(settings.get("reload_min", 10)))
 
     deadline_rel, eff_prio, auto_flag = {}, {}, {}
-    for i, o in enumerate(orders, start=1):
-        deadline_rel[i] = _deadline_rel_min(o.get("deadline"), now_hm)
+    for i, o in enumerate(orders):
+        g = K + i
+        deadline_rel[g] = _deadline_rel_min(o.get("deadline"), now_hm)
         age_min = 0
         try:
             age_min = int((solved_dt - datetime.fromisoformat(o["created_at"])
                            ).total_seconds() // 60)
         except (KeyError, ValueError, TypeError):
             pass
-        auto_flag[i] = bool(auto_prio > 0 and age_min >= auto_prio)
-        eff_prio[i] = bool(o.get("prio") or auto_flag[i])
+        auto_flag[g] = bool(auto_prio > 0 and age_min >= auto_prio)
+        eff_prio[g] = bool(o.get("prio") or auto_flag[g])
 
     def _start_delay(c):
-        """Когда курьер сможет выехать с депо с новой партией заказов."""
+        """Когда курьер сможет выехать со своей точки выдачи с новой партией."""
         if c["status"] != "away":
             return 0
-        g = _courier_geo(c, depot)
+        g = _courier_geo(c, _home_point(c))
         if g:  # живая гео точнее ручной оценки
             return g["back_min"]
         return max(0, int(c.get("back_min", 15)))
 
     avail = {c["id"]: _start_delay(c) for c in couriers}
+    home_of = {c["id"]: home_idx[_eff_home(c)["id"]] for c in couriers}
+    # Точка выдачи каждого заказа: везти его могут только курьеры этой точки.
+    first_pid = STATE["points"][0]["id"]
+    order_pid = {K + i: (o.get("point_id") or first_pid) for i, o in enumerate(orders)}
+    home_pid = {c["id"]: _eff_home(c)["id"] for c in couriers}
     trips_by_cid = {}
-    remaining = list(range(1, len(points)))
+    remaining = list(range(K, len(points)))
 
     for round_no in range(_MAX_ROUNDS):
         if not remaining:
             break
-        sub = [0] + remaining            # узлы раунда: 0 = депо
-        n_veh = min(len(couriers), len(remaining))
-        round_couriers = couriers[:n_veh]
-        manager = pywrapcp.RoutingIndexManager(len(sub), n_veh, 0)
+        pool = [c for c in couriers if c["id"] not in helper_ids or round_no == 0]
+        n_veh = min(len(pool), len(remaining))
+        round_couriers = pool[:n_veh]
+        round_homes = []
+        for c in round_couriers:
+            if home_of[c["id"]] not in round_homes:
+                round_homes.append(home_of[c["id"]])
+        sub = round_homes + remaining        # узлы раунда: дома, потом заказы
+        pos_of = {a: i for i, a in enumerate(sub)}
+        starts = [pos_of[home_of[c["id"]]] for c in round_couriers]
+        manager = pywrapcp.RoutingIndexManager(len(sub), n_veh, starts, starts)
         routing = pywrapcp.RoutingModel(manager)
 
-        def make_cb(delay):
+        def make_cb(delay, hpos, appr, allowed):
             def cb(from_index, to_index):
                 i, j = sub[manager.IndexToNode(from_index)], sub[manager.IndexToNode(to_index)]
-                return matrix[i][j] + (delay if i == 0 else 0) + (appr[j] if j else 0)
+                cost = matrix[i][j] + (delay if i == sub[hpos] else 0)
+                if j >= K:
+                    cost += appr.get(j, 0)
+                    if j not in allowed:      # чужая точка выдачи — везти нельзя
+                        cost += 1_000_000_000
+                return cost
             return cb
 
-        cb_idxs = [routing.RegisterTransitCallback(make_cb(avail[c["id"]]))
+        cb_idxs = [routing.RegisterTransitCallback(
+                       make_cb(avail[c["id"]], pos_of[home_of[c["id"]]],
+                               appr_home[home_of[c["id"]]],
+                               {K + i for i, o in enumerate(orders)
+                                if order_pid[K + i] == home_pid[c["id"]]
+                                and (not o.get("pin") or o["pin"] == c["id"])}))
                    for c in round_couriers]
         for v, cb_idx in enumerate(cb_idxs):
             routing.SetArcCostEvaluatorOfVehicle(cb_idx, v)
         routing.AddConstantDimension(1, max_orders + 1, True, "Orders")
+        orders_dim = routing.GetDimensionOrDie("Orders")
+        for v, c in enumerate(round_couriers):
+            if c["id"] in helper_ids:
+                # размерность считает дуги: простой = 1, ровно один заказ = 2
+                orders_dim.CumulVar(routing.End(v)).SetRange(2, 2)
+            elif round_no == 0 and c["id"] in force_ids:
+                # перетащен в план вручную: обязан взять хотя бы один заказ
+                orders_dim.CumulVar(routing.End(v)).SetMin(2)
         routing.AddDimensionWithVehicleTransits(cb_idxs, 0, 24 * 60, True, "Time")
         time_dim = routing.GetDimensionOrDie("Time")
         time_dim.SetGlobalSpanCostCoefficient(200)
 
         # Штраф за ожидание доставки: обычный заказ 1 мин, приоритетный 60,
         # просрочка дедлайна 25 (дедлайн сильнее приоритета).
-        for ln in range(1, len(sub)):
+        for ln in range(len(sub)):
             g = sub[ln]
+            if g < K:
+                continue  # точки выдачи - не остановки
             idx = manager.NodeToIndex(ln)
             if deadline_rel[g] is not None:
                 time_dim.SetCumulVarSoftUpperBound(idx, max(0, deadline_rel[g]),
@@ -724,8 +851,11 @@ def solve_plan(include_away=True, with_geometry=True):
 
         # Разрешаем оставить заказ на следующий заезд: дроп-визит с подавляющим
         # штрафом. Без этого раунд без полной вместимости был бы неосуществим.
-        for ln in range(1, len(sub)):
-            routing.AddDisjunction([manager.NodeToIndex(ln)], 1_000_000)
+        # (Привязка заказа к точке выдачи уже в колбэке стоимости: чужой заказ
+        # стоит миллиард и никогда не попадёт к курьеру другой точки.)
+        for ln in range(len(sub)):
+            if sub[ln] >= K:
+                routing.AddDisjunction([manager.NodeToIndex(ln)], 1_000_000)
 
         params = pywrapcp.DefaultRoutingSearchParameters()
         params.first_solution_strategy = (
@@ -742,9 +872,9 @@ def solve_plan(include_away=True, with_geometry=True):
         for v in range(n_veh):
             idx, stops = routing.Start(v), []
             while not routing.IsEnd(idx):
-                node = manager.IndexToNode(idx)
-                if node != 0:
-                    stops.append(sub[node])
+                p = manager.IndexToNode(idx)
+                if sub[p] >= K:  # пропускаем свою точку выдачи (старт)
+                    stops.append(sub[p])
                 idx = solution.Value(routing.NextVar(idx))
             if not stops:
                 continue
@@ -762,13 +892,15 @@ def solve_plan(include_away=True, with_geometry=True):
         trips_raw = trips_by_cid.get(c["id"])
         if not trips_raw:
             continue
+        h = home_of[c["id"]]
+        home_view = {k: homes[h][k] for k in ("id", "name", "address", "lat", "lng")}
         trips, flat = [], []
         for tr in trips_raw:
             etas, total = _eta_pass(tr["stops"], tr["delay"], matrix, settings,
-                                    solved_dt, appr)
+                                    solved_dt, appr_home[h], home=h)
             stops = []
             for g, eta in zip(tr["stops"], etas):
-                o = orders[g - 1]
+                o = orders[g - K]
                 late = max(0, eta - deadline_rel[g]) if deadline_rel[g] is not None else 0
                 stops.append({
                     "order_id": o["id"], "address": o["address"],
@@ -779,7 +911,7 @@ def solve_plan(include_away=True, with_geometry=True):
             dist_m = None
             if distances:
                 dist_m = 0
-                seq = [0] + tr["stops"] + [0]
+                seq = [h] + tr["stops"] + [h]
                 for a, b in zip(seq, seq[1:]):
                     dist_m += distances[a][b] or 0
             trips.append({
@@ -797,7 +929,8 @@ def solve_plan(include_away=True, with_geometry=True):
             "start_delay_min": trips[0]["start_delay_min"],
             "distance_km": (round(sum(t["distance_km"] for t in trips), 1)
                             if all(t["distance_km"] is not None for t in trips) else None),
-            "tg_chat_id": c.get("tg_chat_id") or ""})
+            "tg_chat_id": c.get("tg_chat_id") or "",
+            "home_point": home_view})
 
     # Сначала «отдать сейчас» (на базе), потом «следующим»
     routes.sort(key=lambda r: 0 if r["status"] == "base" else 1)
@@ -822,12 +955,12 @@ def solve_plan(include_away=True, with_geometry=True):
 
 
 def _attach_geometry(plan):
-    """Геометрия маршрутов по дорогам (для отрисовки на карте), по заездам."""
-    depot = STATE["depot"]
+    """Геометрия маршрутов (для линий на карте), по точке выдачи курьера."""
     for r in plan["routes"]:
+        home = r.get("home_point") or STATE["depot"]
         for t in r.get("trips", []):
-            seq = [depot] + [{"lat": s["lat"], "lng": s["lng"]}
-                             for s in t["stops"]] + [depot]
+            seq = [home] + [{"lat": s["lat"], "lng": s["lng"]}
+                            for s in t["stops"]] + [home]
             t["geometry"] = routing_geometry(seq) if plan["routing"] == "roads" else None
 
 
@@ -861,7 +994,7 @@ def _create_user(email, password, is_admin=0):
             c.execute("INSERT INTO users(id, email, pwd_hash, is_admin, created_at) "
                       "VALUES(?, ?, ?, ?, ?)",
                       (uid, email, _hash_pwd(password), int(bool(is_admin)),
-                       datetime.now().isoformat(timespec="seconds")))
+                       _now().isoformat(timespec="seconds")))
         except sqlite3.IntegrityError:
             raise ValueError(f"Пользователь {email} уже существует") from None
     return uid
@@ -895,6 +1028,35 @@ _LOGIN_FAILS = {}  # ip -> [число ошибок, залочено_до_epoch
 _LOGIN_MAX_FAILS = 5
 _LOGIN_LOCK_SEC = 60
 
+# ---------- кто из админов онлайн и на какой точке работает ----------
+# sid (из cookie-сессии) -> {"uid", "email", "point_id", "last"}.
+# «Онлайн» = был любой запрос за ONLINE_WINDOW секунд (long-poll /api/rev
+# висит до 25 с, поэтому окно с запасом).
+ONLINE: dict = {}
+_ONLINE_LOCK = threading.Lock()
+ONLINE_WINDOW = 90
+
+
+def _touch_online(pt=None):
+    """Отметить активность текущей сессии; pt задаёт её рабочую точку."""
+    sid = session.get("sid")
+    if not sid:
+        return
+    with _ONLINE_LOCK:
+        rec = ONLINE.get(sid)
+        if rec is None:
+            return
+        rec["last"] = time.time()
+        if pt is not None:
+            rec["point_id"] = pt
+
+
+def _drop_online():
+    sid = session.get("sid")
+    if sid:
+        with _ONLINE_LOCK:
+            ONLINE.pop(sid, None)
+
 
 @app.post("/login")
 def login():
@@ -918,7 +1080,12 @@ def login():
         r = c.execute("SELECT id, pwd_hash FROM users WHERE email = ?", (email,)).fetchone()
     if r and _verify_pwd(pwd, r["pwd_hash"]):
         session["uid"] = r["id"]
+        session["sid"] = uuid.uuid4().hex  # метка онлайн-присутствия
         session.permanent = True  # сессия живёт 12 ч, а не до закрытия браузера
+        with _ONLINE_LOCK:
+            ONLINE[session["sid"]] = {"uid": r["id"], "email": email,
+                                      "point_id": (STATE.get("points") or [{}])[0].get("id"),
+                                      "last": time.time()}
         _LOGIN_FAILS.pop(ip, None)
         log.info("login ok: %s", email)
         if wants_json:
@@ -942,6 +1109,7 @@ def login_page():
 
 @app.get("/logout")
 def logout():
+    _drop_online()
     session.clear()
     if request.accept_mimetypes.best == "application/json":
         return jsonify(ok=True)
@@ -956,7 +1124,28 @@ def login_api():
 
 @app.get("/api/logout")
 def logout_api():
+    _drop_online()
     session.clear()
+    return jsonify(ok=True)
+
+
+@app.post("/api/workpoint")
+def api_workpoint():
+    """Рабочая точка выдачи текущего администратора (селектор в шапке)."""
+    me = _me()
+    if not me:
+        return jsonify({"error": "Требуется вход"}), 401
+    data = request.get_json(silent=True) or {}
+    pid = str(data.get("point_id") or "")
+    if pid not in {p["id"] for p in STATE.get("points") or []}:
+        return jsonify({"error": "Неизвестная точка выдачи"}), 400
+    if "sid" not in session:
+        session["sid"] = uuid.uuid4().hex
+        with _ONLINE_LOCK:
+            ONLINE[session["sid"]] = {"uid": me["id"], "email": me["email"],
+                                      "point_id": pid, "last": time.time()}
+    _touch_online(pid)
+    _bump()  # другие админы увидят обновлённые счётчики на карточках точек
     return jsonify(ok=True)
 
 
@@ -1002,6 +1191,7 @@ def _guard():
             or request.path.startswith("/static/"):
         return None
     if _me():
+        _touch_online()  # любое действие админа продлевает его «онлайн»
         return None
     if request.path.startswith("/api/"):
         return jsonify({"error": "Требуется вход"}), 401
@@ -1069,7 +1259,7 @@ def api_change_password():
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok", "time": datetime.now().isoformat(timespec="seconds")})
+    return jsonify({"status": "ok", "time": _now().isoformat(timespec="seconds")})
 
 
 @app.errorhandler(Exception)
@@ -1274,13 +1464,25 @@ def _payload():
         pos = STATE["tg_pos"].get(c.get("tg_chat_id") or "")
         if pos and now - pos["ts"] < TG_POS_TTL:
             cc["pos"] = {k: v for k, v in pos.items() if k != "hist"}
-        geo = _courier_geo(c, STATE.get("depot"), now)
+        geo = _courier_geo(c, _home_point(c), now)
         if geo:
             cc["geo"] = geo
         couriers.append(cc)
     st = {k: v for k, v in STATE.items()
           if k not in ("tg_seen", "tg_pos", "tg_offset", "tg_nagged")}
     seen = sorted(STATE["tg_seen"].values(), key=lambda x: -x["ts"])[:20]
+    # живые счётчики по точкам: курьеры + админы онлайн
+    now2 = time.time()
+    with _ONLINE_LOCK:
+        for sid in [s for s, r in ONLINE.items() if now2 - r["last"] > ONLINE_WINDOW * 4]:
+            ONLINE.pop(sid, None)  # подчистили давно ушедших
+        live = [r for r in ONLINE.values() if now2 - r["last"] < ONLINE_WINDOW]
+    st["points"] = [dict(p,
+                         couriers=sum(1 for c in STATE["couriers"]
+                                      if (c.get("point_id") or
+                                          (STATE.get("points") or [{}])[0].get("id")) == p["id"]),
+                         admins=[a["email"] for a in live if a["point_id"] == p["id"]])
+                    for p in st.get("points") or []]
     return jsonify({**st, "couriers": couriers,
                     "tg": {"bot": STATE["tg_bot"], "seen": seen},
                     "ors": ors_status(), "today": _history_today(),
@@ -1298,19 +1500,113 @@ def _valid_latlng(lat, lng):
     return (-90 <= lat <= 90) and (-180 <= lng <= 180) and (lat != 0 or lng != 0)
 
 
+def _points_changed(persist_couriers=False):
+    """После любой правки точек выдачи: обновить совместимый вид депо,
+    сохранить мета (или курьеров) и сбросить рассчитанный план."""
+    STATE["depot"] = _depot_view()
+    if persist_couriers:
+        _persist_couriers()
+    else:
+        _persist_meta()
+    _invalidate_plan(drop_plan=True)
+
+
 @app.post("/api/depot")
 def set_depot():
+    """Совместимость со старым фронтом: двигает ПЕРВУЮ точку выдачи."""
     data = _json()
     try:
         lat, lng = float(data["lat"]), float(data["lng"])
     except (KeyError, TypeError, ValueError):
-        return jsonify({"error": "Нужны координаты депо (lat, lng)"}), 400
+        return jsonify({"error": "Нужны координаты точки (lat, lng)"}), 400
     if not _valid_latlng(lat, lng):
         return jsonify({"error": "Координаты вне диапазона"}), 400
-    address = (data.get("address") or "").strip() or reverse_geocode(lat, lng) or "Точка доставки"
-    STATE["depot"] = {"address": address, "lat": lat, "lng": lng}
-    _persist_meta()
-    _invalidate_plan(drop_plan=True)
+    if not STATE.get("points"):
+        return jsonify({"error": "Список точек пуст"}), 400
+    address = (data.get("address") or "").strip() or reverse_geocode(lat, lng) or "Точка выдачи"
+    STATE["points"][0].update({"address": address, "lat": lat, "lng": lng})
+    _points_changed()
+    return _payload()
+
+
+@app.post("/api/points")
+def add_point():
+    """Добавить место выдачи заказов (точка, откуда курьеры забирают заказы)."""
+    data = _json()
+    try:
+        lat, lng = float(data["lat"]), float(data["lng"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "Нужны координаты точки (lat, lng)"}), 400
+    if not _valid_latlng(lat, lng):
+        return jsonify({"error": "Координаты вне диапазона"}), 400
+    if len(STATE.get("points") or []) >= MAX_POINTS:
+        return jsonify({"error": f"Максимум {MAX_POINTS} точек выдачи"}), 400
+    address = (data.get("address") or "").strip() or reverse_geocode(lat, lng) or "Точка выдачи"
+    name = (data.get("name") or "").strip() or f"Точка {len(STATE['points']) + 1}"
+    STATE["points"].append({"id": uuid.uuid4().hex[:8], "name": name[:40],
+                            "address": address, "lat": lat, "lng": lng})
+    _points_changed()
+    return _payload()
+
+
+@app.post("/api/points/<pid>")
+def upd_point(pid):
+    """Переименовать ({name}) или передвинуть ({address,lat,lng}) точку выдачи."""
+    data = _json()
+    p = next((x for x in STATE.get("points") or [] if x["id"] == pid), None)
+    if not p:
+        return jsonify({"error": "Точка не найдена"}), 404
+    if "name" in data:
+        name = (data.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "Имя точки не может быть пустым"}), 400
+        p["name"] = name[:40]
+    if data.get("lat") is not None or data.get("lng") is not None:
+        try:
+            lat, lng = float(data["lat"]), float(data["lng"])
+        except (KeyError, TypeError, ValueError):
+            return jsonify({"error": "Нужны обе координаты (lat, lng)"}), 400
+        if not _valid_latlng(lat, lng):
+            return jsonify({"error": "Координаты вне диапазона"}), 400
+        address = (data.get("address") or "").strip() or p["address"] \
+            or reverse_geocode(lat, lng) or "Точка выдачи"
+        p.update({"address": address, "lat": lat, "lng": lng})
+    _points_changed()
+    return _payload()
+
+
+@app.delete("/api/points/<pid>")
+def del_point(pid):
+    pts = STATE.get("points") or []
+    p = next((x for x in pts if x["id"] == pid), None)
+    if not p:
+        return jsonify({"error": "Точка не найдена"}), 404
+    if len(pts) == 1:
+        return jsonify({"error": "Должна остаться хотя бы одна точка выдачи"}), 400
+    attached = [c["name"] for c in STATE["couriers"] if c.get("point_id") == pid]
+    if attached:
+        return jsonify({"error": "К точке привязаны курьеры: "
+                                 + ", ".join(attached)
+                                 + ". Сначала перевесьте их на другую точку"}), 400
+    pts.remove(p)
+    _points_changed()
+    return _payload()
+
+
+@app.post("/api/couriers/<cid>/point")
+def set_courier_point(cid):
+    """Перекинуть курьера на другое место выдачи."""
+    data = _json()
+    pid = (data.get("point_id") or "").strip()
+    if not any(x["id"] == pid for x in STATE.get("points") or []):
+        return jsonify({"error": "Точка выдачи не найдена"}), 404
+    c = next((x for x in STATE["couriers"] if x["id"] == cid), None)
+    if not c:
+        return jsonify({"error": "Курьер не найден"}), 404
+    if c.get("point_id") == pid:
+        return _payload()
+    c["point_id"] = pid
+    _points_changed(persist_couriers=True)
     return _payload()
 
 
@@ -1323,7 +1619,8 @@ def add_courier():
     STATE["color_seq"] += 1
     STATE["couriers"].append({"id": uuid.uuid4().hex[:8], "name": name,
                               "status": "base", "color": color, "back_min": 15,
-                              "tg_chat_id": ""})
+                              "tg_chat_id": "",
+                              "point_id": (STATE.get("points") or [{}])[0].get("id", "")})
     _persist_couriers(), _persist_meta()
     _invalidate_plan()
     return _payload()
@@ -1423,13 +1720,20 @@ def add_order():
     if deadline and not _deadline_rel_min(deadline, 0) and deadline != "00:00":
         return jsonify({"error": "Дедлайн должен быть в формате ЧЧ:ММ"}), 400
     oid = uuid.uuid4().hex[:8]
+    pid = (data.get("point_id") or "").strip()
+    pids = {p["id"] for p in STATE.get("points") or []}
+    if pid not in pids:
+        pid = (STATE["points"][0]["id"] if STATE.get("points") else "")
     STATE["orders"].append({
         "id": oid,
         "address": (data.get("address") or "").strip() or reverse_geocode(lat, lng) or f"Заказ {oid[:4]}",
         "lat": lat, "lng": lng,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": _now().isoformat(timespec="seconds"),
         "prio": 1 if data.get("prio") else 0,
         "deadline": deadline if _deadline_rel_min(deadline, 0) is not None else "",
+        "point_id": pid,
+        "status": "ready",
+        "assigned": "",
     })
     _persist_orders()
     _invalidate_plan()
@@ -1479,6 +1783,25 @@ def del_order(oid):
     return _payload()
 
 
+def _retiming_bases(routes):
+    """Точки выдачи для маршрутов: (список домов, {courier_id: узел дома}).
+
+    Берёт home_point из плана (падение в текущую точку курьера для старых планов).
+    """
+    homes, home_idx, home_of = [], {}, {}
+    for r in routes:
+        hp = r.get("home_point")
+        if not hp:
+            c = next((x for x in STATE["couriers"] if x["id"] == r["courier_id"]), None)
+            hp = _home_point(c) if c else (STATE.get("points") or [None])[0]
+        key = hp["id"] if hp else ""
+        if key not in home_idx:
+            home_idx[key] = len(homes)
+            homes.append(hp)
+        home_of[r["courier_id"]] = home_idx[key]
+    return homes, home_of
+
+
 def _patch_plan_after_assign(oids):
     """Убрать выданные заказы из плана и пересчитать ETA оставшихся курьеров.
 
@@ -1500,16 +1823,19 @@ def _patch_plan_after_assign(oids):
         r["trips"] = [tr for tr in r.get("trips", []) if tr["stops"]]
     if not touched:
         return False
-    now = datetime.now()
+    now = _now()
     ready = [o for o in STATE["orders"] if (o.get("status") or "ready") == "ready"]
-    points = [STATE["depot"]] + ready
+    touched_routes = [r for r in plan["routes"] if r["courier_id"] in touched]
+    homes, home_of = _retiming_bases(touched_routes)
+    K = len(homes)
+    points = homes + ready
     try:
         matrix, _, _, _ = build_time_matrix(points, STATE["settings"])
-        node = {o["id"]: i + 1 for i, o in enumerate(ready)}
-        appr = _approach_for(points, STATE["depot"], STATE["settings"])
-        for r in plan["routes"]:
-            if r["courier_id"] in touched:
-                _retime_route(r, matrix, node, STATE["settings"], now, appr)
+        node = {o["id"]: K + i for i, o in enumerate(ready)}
+        appr_home = [_approach_map(points, h, K, STATE["settings"]) for h in homes]
+        for r in touched_routes:
+            h = home_of[r["courier_id"]]
+            _retime_route(r, matrix, node, STATE["settings"], now, appr_home[h], h)
     except Exception:
         log.warning("plan retime after assign failed, агрегаты пересобраны без матрицы")
         for r in plan["routes"]:
@@ -1535,6 +1861,73 @@ def _patch_plan_after_assign(oids):
     return True
 
 
+@app.post("/api/plan/pin")
+def plan_pin():
+    """Закрепить готовый заказ за курьером и пересчитать план.
+
+    Заказ остаётся ready («в развозку» уходит только по явной выдаче),
+    но при расчёте его повезёт именно этот курьер.
+    """
+    data = _json()
+    oid, cid = data.get("order_id"), data.get("courier_id")
+    order = next((o for o in STATE["orders"] if o["id"] == oid), None)
+    courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
+    if not order:
+        return jsonify({"error": "Заказ не найден"}), 404
+    if not courier:
+        return jsonify({"error": "Курьер не найден"}), 404
+    if (order.get("status") or "ready") != "ready":
+        return jsonify({"error": "Заказ уже в развозке"}), 400
+    if courier["status"] == "off":
+        return jsonify({"error": f"{courier['name']} недоступен: включите его статусом"}), 400
+    opid = order.get("point_id") or (STATE["points"][0]["id"] if STATE.get("points") else "")
+    if opid and opid != _home_point(courier)["id"]:
+        pt = next((p["name"] for p in STATE.get("points", []) if p["id"] == opid),
+                  "другой точки")
+        return jsonify({"error": f"Заказ из точки «{pt}» — закрепить можно только "
+                                 f"за курьером этой точки"}), 400
+    order["pin"] = cid
+    _persist_orders()
+    try:
+        solve_plan()
+    except (ValueError, RuntimeError) as e:
+        order["pin"] = ""
+        _persist_orders()
+        return jsonify({"error": str(e)}), 400
+    log.info("pin: %s -> %s", oid, courier["name"])
+    _bump()
+    return _payload()
+
+
+@app.post("/api/plan/help")
+def plan_help():
+    """Разовая помощь: курьер подъезжает к чужой точке и берёт один заказ.
+
+    Точка и статус курьера НЕ меняются — только этот расчёт плана.
+    """
+    data = _json()
+    cid, pid = data.get("courier_id"), data.get("point_id")
+    courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
+    point = next((p for p in STATE.get("points") or [] if p["id"] == pid), None)
+    if not courier:
+        return jsonify({"error": "Курьер не найден"}), 404
+    if not point:
+        return jsonify({"error": "Точка выдачи не найдена"}), 404
+    first_pid = STATE["points"][0]["id"] if STATE.get("points") else ""
+    if not any((o.get("status") or "ready") == "ready"
+               and (o.get("point_id") or first_pid) == pid
+               for o in STATE["orders"]):
+        return jsonify({"error": "У этой точки нет готовых заказов — помогать не с чем"}), 400
+    helpers = {cid: pid} if _home_point(courier)["id"] != pid else {}
+    try:
+        solve_plan(helpers=helpers)
+    except (ValueError, RuntimeError) as e:
+        return jsonify({"error": str(e)}), 400
+    log.info("plan help: %s -> точка %s", courier["name"], point["name"])
+    _bump()
+    return _payload()
+
+
 @app.post("/api/orders/assign")
 def assign_orders():
     """Выдать заказы курьеру: статус ready -> out (в развозке)."""
@@ -1546,13 +1939,24 @@ def assign_orders():
     courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
     if not courier:
         return jsonify({"error": "Курьер не найден"}), 404
-    now = datetime.now().isoformat(timespec="seconds")
+    courier_pid = _home_point(courier)["id"]
+    first_pid = STATE["points"][0]["id"] if STATE.get("points") else ""
+    bad = [o for o in STATE["orders"]
+           if o["id"] in oids and (o.get("status") or "ready") == "ready"
+           and (o.get("point_id") or first_pid) != courier_pid]
+    if bad:
+        pt = next((p["name"] for p in STATE.get("points", [])
+                   if p["id"] == (bad[0].get("point_id") or first_pid)), "другой точки")
+        return jsonify({"error": f"Заказ из точки «{pt}» — выдать может только "
+                                 f"курьер этой точки"}), 400
+    now = _now().isoformat(timespec="seconds")
     given = 0
     for o in STATE["orders"]:
         if o["id"] in oids and (o.get("status") or "ready") == "ready":
             o["status"] = "out"
             o["assigned"] = cid
             o["out_at"] = now
+            o["pin"] = ""  # выдан — закрепление больше не нужно
             given += 1
     if not given:
         return jsonify({"error": "Заказы уже выданы или не найдены"}), 400
@@ -1641,9 +2045,24 @@ def _advice_side(plan):
 def solve():
     body = _json()
     mode = body.get("mode") if body.get("mode") in ("auto", "split", "now") else "auto"
+    force = [x for x in (body.get("force") or []) if isinstance(x, str)]
+    if force:
+        first_pid = STATE["points"][0]["id"] if STATE.get("points") else ""
+        for cid in force:
+            c = next((c for c in STATE["couriers"] if c["id"] == cid), None)
+            if not c:
+                return jsonify({"error": "Курьер не найден"}), 404
+            pid = _home_point(c)["id"]
+            if not any((o.get("status") or "ready") == "ready"
+                       and (o.get("point_id") or first_pid) == pid
+                       for o in STATE["orders"]):
+                pt = next((p["name"] for p in STATE.get("points", []) if p["id"] == pid),
+                          "его точки")
+                return jsonify({"error": f"У точки «{pt}» нет готовых заказов — "
+                                         f"«{c['name']}» не сможет участвовать в плане"}), 400
     try:
         t0 = time.time()
-        plan = _compute_plan(mode)
+        plan = _compute_plan(mode, force=force)
         log.info("solve: %d routes, provider=%s, scenario=%s, %.1fs",
                  len(plan["routes"]), plan.get("provider"),
                  (plan.get("advice") or {}).get("chosen", "no-away"), time.time() - t0)
@@ -1654,7 +2073,7 @@ def solve():
     return _payload()
 
 
-def _compute_plan(mode="auto", advice=True):
+def _compute_plan(mode="auto", advice=True, force=None):
     """Ядро расчёта (без HTTP): план + совет «ждать/не ждать».
 
     Вызывается ТОЛЬКО вручную: кнопка «Рассчитать» и выбор сценария совета.
@@ -1663,7 +2082,7 @@ def _compute_plan(mode="auto", advice=True):
     if mode in ("now", "split"):
         STATE["advice_mode"] = mode
     mode = STATE.get("advice_mode") or mode
-    plan_split = solve_plan()
+    plan_split = solve_plan(force=force)
     advice_obj = None
     away = [c for c in STATE["couriers"]
             if c["status"] == "away" and int(c.get("back_min", 15) or 0) > 0]
@@ -1675,7 +2094,7 @@ def _compute_plan(mode="auto", advice=True):
     plan_now = None
     if (advice or mode == "now") and scenario:
         try:
-            plan_now = solve_plan(include_away=False, with_geometry=False)
+            plan_now = solve_plan(include_away=False, with_geometry=False, force=force)
         except (ValueError, RuntimeError):
             plan_now = None
     if plan_now is not None:
@@ -1694,7 +2113,7 @@ def _compute_plan(mode="auto", advice=True):
                 "chosen": "split" if chosen is plan_split else "now",
                 "wait_couriers": [{"name": c["name"],
                                    "back_min": int(c.get("back_min", 15) or 0),
-                                   "back_clock": (datetime.now() + timedelta(
+                                   "back_clock": (_now() + timedelta(
                                        minutes=int(c.get("back_min", 15) or 0))
                                                   ).strftime("%H:%M")} for c in away],
                 "now": _advice_side(plan_now),
@@ -1785,7 +2204,7 @@ def api_backup():
         return resp
     return send_file(tmp.name, as_attachment=True,
                      download_name=f"dispatcher-backup-"
-                                   f"{datetime.now().strftime('%Y%m%d-%H%M')}.db")
+                                   f"{_now().strftime('%Y%m%d-%H%M')}.db")
 
 
 def _geocode_center():
@@ -1816,6 +2235,14 @@ def plan_move():
     dst = next((r for r in plan["routes"] if r["courier_id"] == target), None)
     if not dst:
         return jsonify({"error": "Курьер отсутствует в плане"}), 400
+    dst_courier = next((c for c in STATE["couriers"] if c["id"] == target), None)
+    first_pid = STATE["points"][0]["id"] if STATE.get("points") else ""
+    opid = order.get("point_id") or first_pid
+    if dst_courier and opid and opid != _home_point(dst_courier)["id"]:
+        pt = next((p["name"] for p in STATE.get("points", []) if p["id"] == opid),
+                  "другой точки")
+        return jsonify({"error": f"Заказ из точки «{pt}» — перенести можно только "
+                                 f"курьеру этой точки"}), 400
 
     stop, src_id = None, None
     for r in plan["routes"]:
@@ -1827,15 +2254,20 @@ def plan_move():
     if stop is None:
         return jsonify({"error": "Заказа нет в текущем плане"}), 400
 
-    points = [STATE["depot"]] + STATE["orders"]
+    touched_routes = [r for r in plan["routes"]
+                      if r["courier_id"] in {src_id, dst["courier_id"]}]
+    homes, home_of = _retiming_bases(touched_routes)
+    K = len(homes)
+    h_dst = home_of[dst["courier_id"]]
+    points = homes + STATE["orders"]
     matrix, _, _, _ = build_time_matrix(points, STATE["settings"])
-    appr = _approach_for(points, STATE["depot"], STATE["settings"])
-    node = {o["id"]: i + 1 for i, o in enumerate(STATE["orders"])}
+    appr_home = [_approach_map(points, h, K, STATE["settings"]) for h in homes]
+    node = {o["id"]: K + i for i, o in enumerate(STATE["orders"])}
     g_x = node[oid]
 
     best = None  # (удлинение, индекс заезда, позиция вставки)
     for ti, tr in enumerate(dst.get("trips", [])):
-        seq = [0] + [node[s["order_id"]] for s in tr["stops"]] + [0]
+        seq = [h_dst] + [node[s["order_id"]] for s in tr["stops"]] + [h_dst]
         for pos in range(1, len(seq)):
             a, b = seq[pos - 1], seq[pos]
             delta = matrix[a][g_x] + matrix[g_x][b] - matrix[a][b]
@@ -1846,13 +2278,15 @@ def plan_move():
                          "start_clock": "", "end_clock": "", "distance_km": None}]
         best = (0, 0, 0)
     dst["trips"][best[1]]["stops"].insert(best[2], stop)
+    order["pin"] = target  # закрепляем и на будущие пересчёты плана
 
     # пересчёт ETA затронутых курьеров от текущего момента
-    now = datetime.now()
+    now = _now()
     touched = {src_id, dst["courier_id"]}
-    for r in plan["routes"]:
+    for r in touched_routes:
         if r["courier_id"] in touched:
-            _retime_route(r, matrix, node, STATE["settings"], now, appr)
+            h = home_of[r["courier_id"]]
+            _retime_route(r, matrix, node, STATE["settings"], now, appr_home[h], h)
     all_etas = [s["eta_min"] for r in plan["routes"] for s in r["stops"]]
     plan["last_delivery_min"] = max(all_etas, default=0)
     plan["last_delivery_clock"] = ((now + timedelta(
@@ -1865,13 +2299,13 @@ def plan_move():
     return _payload()
 
 
-def _retime_route(route, matrix, node, settings, now_dt, appr=None):
+def _retime_route(route, matrix, node, settings, now_dt, appr=None, home=0):
     """Пересчёт ETA всех заездов курьера от now_dt. Меняет route на месте."""
     now_hm = now_dt.hour * 60 + now_dt.minute
     for tr in route.get("trips", []):
         seq = [node[s["order_id"]] for s in tr["stops"]]
         etas, total = _eta_pass(seq, tr["start_delay_min"], matrix, settings,
-                                now_dt, appr)
+                                now_dt, appr, home)
         for s, eta in zip(tr["stops"], etas):
             s["eta_min"] = eta
             s["eta_clock"] = (now_dt + timedelta(minutes=eta)).strftime("%H:%M")
@@ -1975,8 +2409,8 @@ def report_day():
     hist = _history_period(1)
     return render_template("report_day.html", hist=hist,
                            plan=STATE.get("plan") or {},
-                           today=datetime.now().strftime("%d.%m.%Y"),
-                           now=datetime.now().strftime("%H:%M"))
+                           today=_now().strftime("%d.%m.%Y"),
+                           now=_now().strftime("%H:%M"))
 
 
 def _strip_street_type(s):

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, fmtCoords, type AppState, type Courier, type Order, type Route, type Advice } from "@/lib/api";
 import GeoInput, { type GeoItem } from "./GeoInput";
+import { Bike, Check, ChevronDown, CircleHelp, Flame, History, Hourglass, House, Link2, Loader2, LogOut, MapPin, Moon, Package, PackageOpen, Pause, Pencil, Plus, Route as RouteIcon, Settings, ShieldCheck, SlidersHorizontal, Sun, Timer, Trash2, Undo2, User, Users, X, Zap } from "lucide-react";
 
 const MapView = dynamic(() => import("./MapView"), {
   ssr: false,
@@ -12,19 +13,31 @@ const MapView = dynamic(() => import("./MapView"), {
 });
 
 /* ---------- утилиты ---------- */
-const SEG_ICONS: Record<string, string> = { base: "🏠", away: "🛵", off: "⏸" };
+const SEG_ICONS = { base: <House size={14} strokeWidth={2.2} />, away: <Bike size={14} strokeWidth={2.2} />, off: <Pause size={14} strokeWidth={2.2} /> };
 const SEG_TITLES: Record<string, string> = {
   base: "На базе: отдать сейчас",
   away: "В пути: следующим заездом",
   off: "Не участвует в расчёте",
 };
 
+/** Заголовок секции-аккордеона: иконка, название, счётчик, шеврон. */
+function AccHead({ icon, label, count, open, onClick }: {
+  icon: React.ReactNode; label: string; count: number; open: boolean; onClick: () => void;
+}) {
+  return (
+    <button className="acc-head" onClick={onClick} aria-expanded={open}>
+      {icon}{label}
+      <span className={"p-count" + (count ? " on" : "")}>{count}</span>
+      <ChevronDown size={15} className="chev" />
+    </button>
+  );
+}
+
 function declName(n: string) {
   if (!n) return "";
   if (!/[а-яё]$/i.test(n)) return n;
   if (n.endsWith("ий")) return n.slice(0, -2) + "ия";
-  if (n.endsWith("я")) return n.slice(0, -1) + "и";
-  if (n.endsWith("а")) return n.slice(0, -1) + "ы";
+  if (n.endsWith("я")) return n.slice(0, -1) + "и";  if (n.endsWith("а")) return n.slice(0, -1) + "ы";
   return n + "а";
 }
 const posAgeMin = (ts: number) => Math.max(0, Math.round((Date.now() - ts * 1000) / 60000));
@@ -93,14 +106,16 @@ export default function Console() {
   const undoStack = useRef<UndoEntry[]>([]);
   const [undoLen, setUndoLen] = useState(0);
 
-  const [pickTarget, setPickTarget] = useState<"depot" | "order" | null>(null);
+  const [pickTarget, setPickTarget] = useState<"point" | "order" | null>(null);
   const [fitSignal, setFitSignal] = useState(0);
   const [hoverOid, setHoverOid] = useState<string | null>(null);
   const [cardHl, setCardHl] = useState<string | null>(null);
 
-  const [depotEdit, setDepotEdit] = useState(false);
-  const pendingDepot = useRef<GeoItem | null>(null);
-  const [depotNote, setDepotNote] = useState("");
+  // редактируемая точка выдачи: null - список закрыт, "new" - добавление, id - правка
+  const [pointEdit, setPointEdit] = useState<string | null>(null);
+  const pendingPoint = useRef<GeoItem | null>(null);
+  const [pointNote, setPointNote] = useState("");
+  const [pointName, setPointName] = useState("");
   const pendingOrder = useRef<GeoItem | null>(null);
   const [orderNote, setOrderNote] = useState("");
   const orderLabel = useRef("");
@@ -108,11 +123,12 @@ export default function Console() {
 
   const [dlEdit, setDlEdit] = useState<string | null>(null);
   const [solving, setSolving] = useState(false);
+  const [pinning, setPinning] = useState<string | null>(null); // заказ в фазе «в маршрут…»
   const [busyMode, setBusyMode] = useState(false); // клик по сценарию совета
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetTab, setSheetTab] = useState<"params" | "hist" | "users">("params");
   const [helpOpen, setHelpOpen] = useState(false);
-  const [accOrders, setAccOrders] = useState(true);
-  const [accCouriers, setAccCouriers] = useState(false);
+  const [openAcc, setOpenAcc] = useState<"points" | "orders" | "couriers" | null>("orders");
   const [histDays, setHistDays] = useState("1");
   const [hist, setHist] = useState<{ rows?: unknown[]; summary?: Record<string, number | null> } | null>(null);
   const [week, setWeek] = useState<string>("");
@@ -125,6 +141,31 @@ export default function Console() {
   const [userIsAdmin, setUserIsAdmin] = useState(false);
   const [dragOverCourier, setDragOverCourier] = useState<string | null>(null);
   const [dragOverRoute, setDragOverRoute] = useState<string | null>(null);
+  const [workPoint, setWorkPoint] = useState(() => (typeof window !== "undefined" ? localStorage.getItem("workPoint") || "" : "")); // точка выдачи, в которой работает администратор
+
+  const firstPid = st?.points?.[0]?.id || "";
+  const wpSynced = useRef(false);
+  useEffect(() => {
+    if (!st?.points?.length) return;
+    setWorkPoint(cur => {
+      if (st.points!.some(p => p.id === cur)) return cur;
+      return st.points![0].id;
+    });
+  }, [st?.points]);
+  useEffect(() => { if (workPoint) localStorage.setItem("workPoint", workPoint); }, [workPoint]);
+  // сообщаем серверу, где мы работаем: при первом входе и при смене селектора
+  useEffect(() => {
+    if (!workPoint || !st?.points?.length) return;
+    if (wpSynced.current) return;
+    wpSynced.current = true;
+    void api("/api/workpoint", "POST", { point_id: workPoint }).catch(() => {});
+  }, [workPoint, st?.points]);
+  const onWorkPoint = (pid: string) => {
+    setWorkPoint(pid);
+    wpSynced.current = false;
+    void api("/api/workpoint", "POST", { point_id: pid }).catch(() => {});
+  };
+  const curPoint = st?.points?.find(p => p.id === workPoint) || st?.points?.[0] || null;
 
   const showToast = useCallback((msg: string, err = false, act?: ToastState["act"]) => {
     setToast({ msg, err, act });
@@ -198,7 +239,7 @@ export default function Console() {
     const patch = (fn: (s: AppState) => void): ((s: AppState) => AppState) =>
       (s: AppState) => { const c = { ...s, orders: [...s.orders], couriers: [...s.couriers] }; fn(c); return c; };
     if (method === "POST" && path === "/api/orders" && body?.lat !== undefined)
-      return patch(s => { s.orders.push({ id: "tmp-" + Date.now(), address: String(body.address || "Точка"), lat: body.lat, lng: body.lng, created_at: new Date().toISOString(), status: "ready" }); });
+      return patch(s => { s.orders.push({ id: "tmp-" + Date.now(), address: String(body.address || "Точка"), lat: body.lat, lng: body.lng, point_id: body.point_id ? String(body.point_id) : undefined, created_at: new Date().toISOString(), status: "ready" }); });
     if (method === "POST" && path === "/api/orders/assign" && Array.isArray(body?.order_ids))
       return patch(s => { const name = s.couriers.find(c => c.id === body.courier_id)?.name || ""; s.orders = s.orders.map(o => body.order_ids.includes(o.id) ? { ...o, status: "out" as const, assigned: name } : o); });
     if (method === "POST" && /^\/api\/orders\/[^/]+\/return$/.test(path))
@@ -211,8 +252,14 @@ export default function Console() {
       if (body?.deadline !== undefined) return patch(s => { s.orders = s.orders.map(o => o.id === oid ? { ...o, deadline: String(body.deadline) } : o); });
       return undefined;
     }
-    if (method === "POST" && path === "/api/depot" && body?.lat !== undefined)
-      return patch(s => { s.depot = { address: String(body.address || "…"), lat: body.lat, lng: body.lng }; });
+    if (method === "POST" && path === "/api/points" && body?.lat !== undefined)
+      return patch(s => { s.points = [...(s.points || []), { id: "tmp-" + Date.now(), name: String(body.name || "Точка"), address: String(body.address || "…"), lat: body.lat, lng: body.lng }]; });
+    if (method === "POST" && /^\/api\/points\/[^/]+$/.test(path) && body)
+      return patch(s => { const pid = path.split("/")[3]; s.points = (s.points || []).map(p => p.id === pid ? { ...p, ...(body.name !== undefined ? { name: String(body.name) } : {}), ...(body.lat !== undefined ? { address: String(body.address || p.address), lat: body.lat, lng: body.lng } : {}) } : p); });
+    if (method === "DELETE" && /^\/api\/points\/[^/]+$/.test(path))
+      return patch(s => { const pid = path.split("/")[3]; s.points = (s.points || []).filter(p => p.id !== pid); });
+    if (method === "POST" && /^\/api\/couriers\/[^/]+\/point$/.test(path))
+      return patch(s => { const cid = path.split("/")[3]; s.couriers = s.couriers.map(c => c.id === cid ? { ...c, point_id: String(body?.point_id || "") } : c); });
     if (method === "POST" && path === "/api/couriers" && body?.name)
       return patch(s => { s.couriers.push({ id: "tmp-" + Date.now(), name: String(body.name), status: "base" }); });
     if (method === "DELETE" && path.startsWith("/api/couriers/"))
@@ -237,10 +284,27 @@ export default function Console() {
     catch (e) { showToast((e as Error).message, true); if (opt) void refresh(); }
   };
 
+  /* выдать заказ курьеру напрямую (drag-n-drop из «Готовых заказов») */
+  const assignOrderTo = async (oid: string, cid: string) => {
+    const o = st?.orders.find(x => x.id === oid);
+    if (!o || o.status === "out") return;
+    const c = st?.couriers.find(x => x.id === cid);
+    if (!c) return;
+    if (c.status === "off") { showToast(`${c.name} недоступен: включите его статусом`, true); return; }
+    const oPid = o.point_id || st?.points?.[0]?.id || "";
+    const cPid = c.point_id || st?.points?.[0]?.id || "";
+    if ((st?.points?.length || 0) > 1 && oPid !== cPid) {
+      const pn = st?.points?.find(p => p.id === oPid)?.name || "";
+      showToast(`Заказ из точки «${pn}» — выдать может только курьер этой точки`, true); return;
+    }
+    await mutate("POST", "/api/orders/assign", { order_ids: [oid], courier_id: cid });
+    undoToast(`Выдан: ${c.name}`, `выдача ${o.address || ""}`.slice(0, 60), "assign", { order_ids: [oid] });
+  };
+
   const addOrder = async () => {
     const p = pendingOrder.current;
     if (!p) { showToast("Укажите точку: подсказкой в поле или кнопкой 📍 по карте", true); return; }
-    await mutate("POST", "/api/orders", { address: orderLabel.current || p.label, lat: p.lat, lng: p.lng });
+    await mutate("POST", "/api/orders", { address: orderLabel.current || p.label, lat: p.lat, lng: p.lng, point_id: workPoint });
     pendingOrder.current = null;
     orderLabel.current = "";
     setOrderNote("");
@@ -253,6 +317,69 @@ export default function Console() {
     try {
       setSt(await api<AppState>("/api/solve", "POST"));
       showToast("Развозка рассчитана");
+    } catch (e) { showToast((e as Error).message, true); }
+    finally { setSolving(false); }
+  };
+
+  /* закрепление за курьером с видимой фазой пересчёта */
+  const pinOrder = async (oid: string, cid: string) => {
+    if (solving) { showToast("Дождитесь окончания расчёта", true); return; }
+    setSolving(true); setPinning(oid);
+    try {
+      setSt(await api<AppState>("/api/plan/pin", "POST", { order_id: oid, courier_id: cid }));
+      showToast("Заказ закреплён за курьером в плане (выдать — кнопкой в маршруте)");
+    } catch (e) { showToast((e as Error).message, true); }
+    finally { setSolving(false); setPinning(null); }
+  };
+
+  /* перетаскивание курьера в план: свой депо — просто в план, чужой — через подтверждение */
+  const courierToPlan = async (cid: string, routeEl: Element | null) => {
+    const c = st?.couriers.find(x => x.id === cid);
+    if (!c || !st || solving) return;
+    const pts = st.points || [];
+    if (!pts.length) return;
+    const firstPid = pts[0].id;
+    // точка, куда бросили: маршрут под курсором или точка первых готовых заказов
+    const routeCid = routeEl?.getAttribute("data-cid") || undefined;
+    let targetPid: string | undefined;
+    if (routeCid) {
+      const rc = st.couriers.find(x => x.id === routeCid);
+      targetPid = rc ? (rc.point_id || firstPid) : undefined;
+    }
+    if (!targetPid) {
+      const ready = st.orders.filter(o => (o.status || "ready") === "ready");
+      targetPid = ready[0] ? (ready[0].point_id || firstPid) : undefined;
+    }
+    if (!targetPid) { showToast("Нет готовых заказов — сначала добавьте заказы", true); return; }
+    const ptName = (pid: string) => pts.find(p => p.id === pid)?.name || "точки";
+    const hisPid = c.point_id || firstPid;
+    const inPlan = (st.plan?.routes || []).some(r => r.courier_id === c.id);
+
+    const include = async () => {
+      if (c.status === "off")
+        await api("/api/couriers/" + c.id, "PATCH", { status: "base" });
+      setSolving(true);
+      try {
+        setSt(await api<AppState>("/api/solve", "POST", { force: [c.id] }));
+        showToast(`«${c.name}» добавлен в план`);
+      } catch (e) { showToast((e as Error).message, true); }
+      finally { setSolving(false); }
+    };
+
+    if (hisPid === targetPid) {
+      if (inPlan && c.status !== "off") { showToast(`«${c.name}» уже в плане`); return; }
+      await include();
+      return;
+    }
+    // чужая точка: разовая помощь — один заказ, без перевода курьера
+    const ok = await askConfirm(
+      `«${c.name}» работает на точке «${ptName(hisPid)}».\n\nПозвать его на помощь к точке «${ptName(targetPid)}»? Он возьмёт один заказ, его точка останется прежней.`,
+      { ok: "Позвать на помощь" });
+    if (!ok) return;
+    setSolving(true);
+    try {
+      setSt(await api<AppState>("/api/plan/help", "POST", { courier_id: c.id, point_id: targetPid }));
+      showToast(`«${c.name}» приедет на помощь: возьмёт один заказ с точки «${ptName(targetPid)}»`);
     } catch (e) { showToast((e as Error).message, true); }
     finally { setSolving(false); }
   };
@@ -270,17 +397,22 @@ export default function Console() {
     const target = pickTarget;
     setPickTarget(null);
     try {
-      if (target === "depot") {
-        showToast("Определяю адрес…");
-        const s = await api<AppState>("/api/depot", "POST", { address: "", lat: ll.lat, lng: ll.lng });
+      if (target === "point") {
+        showToast("Сохраняем точку…");
+        const pid = pointEdit;
+        const s = pid && pid !== "new"
+          ? await api<AppState>("/api/points/" + pid, "POST", { address: "", lat: ll.lat, lng: ll.lng })
+          : await api<AppState>("/api/points", "POST", { address: "", lat: ll.lat, lng: ll.lng });
         setSt(s);
-        setDepotEdit(false);
-        showToast("Депо: " + (s.depot?.address || ""));
+        setPointEdit(null);
+        pendingPoint.current = null;
+        setPointNote("");
+        showToast("Точка выдачи: " + ((s.points || []).slice(-1)[0]?.address || ""));
       } else {
-        showToast("Добавляю заказ…");
+        showToast("Добавляем заказ…");
         const s = await api<AppState>("/api/orders", "POST", { address: "", lat: ll.lat, lng: ll.lng });
         setSt(s);
-        showToast("Заказ добавлен: " + s.orders[s.orders.length - 1].address);
+        showToast("Новый заказ: " + s.orders[s.orders.length - 1].address);
       }
     } catch (e) { showToast((e as Error).message, true); }
   };
@@ -348,6 +480,10 @@ export default function Console() {
     } catch (e) { setWeek("Не загрузилось: " + (e as Error).message); }
   }, []);
 
+  useEffect(() => {
+    if (sheetOpen && sheetTab === "hist") { void loadHistory(histDays); void loadWeek(); }
+  }, [sheetOpen, sheetTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /* ---------- производные ---------- */
   const planClockFn = useCallback(() => {
     const base = new Date(st?.plan?.solved_at || Date.now()).getTime();
@@ -375,7 +511,7 @@ export default function Console() {
   const courName = (id: string) => st.couriers.find(c => c.id === id)?.name || "";
 
   const active = st.couriers.filter(c => c.status !== "off").length;
-  const miss = !st.depot ? "укажите точку ресторана"
+  const miss = !(st.points || []).length ? "укажите место выдачи заказов"
     : !active ? "добавьте курьера («На базе» или «В пути»)"
     : !st.orders.length ? "добавьте готовые заказы" : "";
 
@@ -392,84 +528,166 @@ export default function Console() {
   return (
     <>
       <header className="topbar">
-        <div className="brand">Диспетчер доставки</div>
-        <div className="daystats">
-          {[
-            (today.delivered || today.cancelled) && `сегодня ✓${today.delivered || 0} · ✕${today.cancelled || 0}`,
-            today.avg_cycle_min && `цикл ${today.avg_cycle_min} мин`,
-          ].filter(Boolean).join("  ·  ")}
+        <div className="brand">
+          <span className="brand-mark"><RouteIcon size={16} strokeWidth={2.25} /></span>
+          <span className="brand-name">Диспетчер доставки</span>
         </div>
+        {(st?.points?.length || 0) > 0 && (
+          <label className="pp-hsel" title="Точка выдачи, в которой вы работаете: новые заказы попадают к курьерам этой точки">
+            <MapPin size={13} />
+            <span className="pp-hsel-cap">Место работы:</span>
+            <select value={workPoint || firstPid} aria-label="Рабочая точка выдачи"
+              onChange={e => onWorkPoint(e.target.value)}>
+              {st!.points!.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+        )}
+        {(!!today.delivered || !!today.cancelled || !!today.avg_cycle_min) && (
+          <div className="daystats">
+            <span className="dchip ok" title="Доставлено сегодня"><Check size={12} strokeWidth={2.5} />{today.delivered || 0}</span>
+            {!!today.cancelled && (
+              <span className="dchip no" title="Отменено сегодня"><X size={12} strokeWidth={2.5} />{today.cancelled}</span>
+            )}
+            {!!today.avg_cycle_min && (
+              <span className="dchip" title="Средний цикл заказа"><Timer size={12} />{today.avg_cycle_min} мин</span>
+            )}
+          </div>
+        )}
         <div className="spacer" />
         {undoLen > 0 && (
           <button id="undoBtn" className="iconbtn" style={{ display: "" }}
             title={`Отменить: ${undoStack.current[undoStack.current.length - 1].label} (Ctrl+Z)`}
-            onClick={() => void doUndo()}>↩</button>
+            aria-label="Отменить действие"
+            onClick={() => void doUndo()}><Undo2 size={16} /></button>
         )}
-        <button className="iconbtn" title="Тёмная тема" onClick={() => applyTheme(!dark)}>{dark ? "☀️" : "🌙"}</button>
-        <button className="iconbtn" title="Как пользоваться" onClick={() => setHelpOpen(true)}>?</button>
-        <span className="me">{me.email ? `${me.email}${me.is_admin ? " · админ" : ""}` : ""}</span>
-        <button id="logoutLink" onClick={async () => {
+        <button className="iconbtn" title="Тёмная тема" aria-label="Переключить тему"
+          onClick={() => applyTheme(!dark)}>{dark ? <Sun size={16} /> : <Moon size={16} />}</button>
+        <button className="iconbtn" title="Как пользоваться" aria-label="Справка"
+          onClick={() => setHelpOpen(true)}><CircleHelp size={16} /></button>
+        <button className="iconbtn gear" title="Параметры расчёта" aria-label="Параметры расчёта"
+          onClick={() => { setSheetTab("params"); setSheetOpen(true); }}><Settings size={16} /></button>
+        <span className="vdiv" />
+        <span className="me" title={me.email || ""}>
+          <User size={13} />
+          {me.email ? `${me.email}${me.is_admin ? " · админ" : ""}` : ""}
+        </span>
+        <button id="logoutLink" title="Выйти" aria-label="Выйти" onClick={async () => {
           await fetch("/api/logout", { headers: { Accept: "application/json" } });
           window.location.href = "/login";
-        }}>Выйти</button>
+        }}><LogOut size={15} /></button>
       </header>
 
       {pickTarget && (
         <div className="pick-banner">
-          📍 Кликните по карте: <b>{pickTarget === "depot" ? "депо сохранится сразу" : "каждый клик добавляет заказ"}</b>
+          📍 Кликните по карте: <b>{pickTarget === "point" ? "точка выдачи сохранится сразу" : "каждый клик добавляет заказ"}</b>
           <button onClick={() => setPickTarget(null)}>Отмена</button>
         </div>
       )}
 
       <main className="console">
         <aside className="col-left">
-          {/* депо */}
-          {depotEdit ? (
+          {/* места выдачи заказов */}
+          <div className={"acc-item" + (openAcc === "points" ? " open" : "")} data-acc="points">
+            <AccHead icon={<MapPin size={15} className="acc-ico" />} label="Места выдачи"
+              count={(st.points || []).length} open={openAcc === "points"}
+              onClick={() => setOpenAcc(a => a === "points" ? null : "points")} />
+            <div className="acc-body"><div className="acc-inner">
+          {pointEdit !== null ? (
             <div className="depot-edit">
+              <div className="pp-form-title">{pointEdit === "new" ? "Новое место выдачи" : "Изменить место выдачи"}</div>
+              <input
+                className="pp-name-input" type="text" placeholder="Название (например, ресторан)"
+                aria-label="Название места выдачи" value={pointName}
+                onChange={e => setPointName(e.target.value)} />
               <div className="addrow">
                 <GeoInput
-                  placeholder="Адрес ресторана (подсказки появятся)" ariaLabel="Адрес ресторана"
-                  onPicked={(it, label) => {
-                    pendingDepot.current = it;
-                    if (it) setDepotNote(`точка выбрана (${fmtCoords(it)})`);
-                    else setDepotNote(label.trim() ? "" : "");
+                  key={pointEdit}
+                  initial={pointEdit === "new" ? "" : (st.points?.find(p => p.id === pointEdit)?.address || "")}
+                  placeholder="Адрес точки (подсказки появятся)" ariaLabel="Адрес места выдачи"
+                  onPicked={it => {
+                    pendingPoint.current = it;
+                    setPointNote(it ? `точка выбрана (${fmtCoords(it)})` : "");
                   }}
                 />
-                <button className="iconbtn" style={{ color: "#6d7688", fontSize: 15 }}
-                  title="Отметить точку кликом по карте"
-                  onClick={() => setPickTarget(pickTarget === "depot" ? null : "depot")}>📍</button>
+                <button className={"iconbtn pick-btn" + (pickTarget === "point" ? " active" : "")}
+                  title="Отметить точку кликом по карте" aria-label="Отметить точку по карте"
+                  aria-pressed={pickTarget === "point"}
+                  onClick={() => setPickTarget(pickTarget === "point" ? null : "point")}><MapPin size={15} /></button>
               </div>
-              <div className={"addnote" + (depotNote ? " show" : "")} dangerouslySetInnerHTML={{ __html: depotNote }} />
+              <div className={"addnote" + (pointNote ? " show" : "")} dangerouslySetInnerHTML={{ __html: pointNote }} />
               <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                 <button className="btn btn-primary" onClick={async () => {
-                  const p = pendingDepot.current;
+                  const p = pendingPoint.current;
                   if (!p) { showToast("Сначала выберите точку: подсказкой или 📍 по карте", true); return; }
-                  await mutate("POST", "/api/depot", { address: orderLabelDepot(p), lat: p.lat, lng: p.lng });
-                  setDepotEdit(false);
-                  pendingDepot.current = null;
-                  setDepotNote("");
-                  showToast("Депо сохранено");
+                  const payload = { name: pointName.trim(), address: orderLabelDepot(p), lat: p.lat, lng: p.lng };
+                  if (pointEdit === "new") await mutate("POST", "/api/points", payload);
+                  else await mutate("POST", "/api/points/" + pointEdit, payload);
+                  setPointEdit(null);
+                  pendingPoint.current = null;
+                  setPointNote("");
+                  setPointName("");
+                  showToast("Место выдачи сохранено");
                 }}>Сохранить</button>
-                <button className="btn" onClick={() => { setDepotEdit(false); pendingDepot.current = null; setDepotNote(""); }}>Отмена</button>
+                <button className="btn" onClick={() => { setPointEdit(null); pendingPoint.current = null; setPointNote(""); setPointName(""); }}>Отмена</button>
               </div>
             </div>
-          ) : st.depot ? (
-            <div className="depot-line" title={`${st.depot.address} (${fmtCoords(st.depot)}) · клик, чтобы изменить`} onClick={() => setDepotEdit(true)}>
-              <span>🏠</span><span className="d-name">{st.depot.address}</span><span className="d-edit">изменить</span>
-            </div>
           ) : (
-            <div className="depot-line none" onClick={() => setDepotEdit(true)}>
-              <span>🏠</span><span className="d-name">Укажите точку ресторана</span><span className="d-edit">адрес / карта</span>
+            <div className="pts">
+              {(st.points || []).map((p, i) => {
+                const used = st.couriers.filter(c => (c.point_id || st.points?.[0]?.id) === p.id).length;
+                const adminsOn = p.admins || [];
+                return (
+                  <div className="pp-line" key={p.id}
+                    title={`${p.name}: ${p.address} · клик, чтобы изменить`}>
+                    <span className="pp-num">{i + 1}</span>
+                    <div className="pp-info">
+                      <div className="pp-top">
+                        <b className="pp-name">{p.name}</b>
+                        <span className="pp-stats">
+                          <span className="pp-stat" title={`Курьеров на точке: ${used}`}><Users size={10} />{used}</span>
+                          <span className={"pp-stat adm" + (adminsOn.length ? " on" : "")}
+                            title={adminsOn.length ? `Администраторов онлайн: ${adminsOn.length} (${adminsOn.join(", ")})` : "Администраторов онлайн: нет"}>
+                            <ShieldCheck size={10} />{adminsOn.length}
+                          </span>
+                        </span>
+                      </div>
+                      <span className="pp-addr">{p.address}</span>
+                    </div>
+                    <span className="pp-acts">
+                      <button className="pp-ib" title="Изменить" aria-label="Изменить место выдачи"
+                        onClick={e => {
+                          e.stopPropagation();
+                          setPointEdit(p.id); setPointName(p.name);
+                          setPointNote(`сейчас: ${p.address}`);        // подсказка, что точка уже стоит
+                          pendingPoint.current = { label: p.address, lat: p.lat, lng: p.lng };  // сохранение без нового выбора адреса оставит точку на месте
+                        }}><Pencil size={13} /></button>
+                      {(st.points || []).length > 1 && (
+                        <button className="pp-ib danger" title={used > 0 ? `Привязан курьер — сначала перевесьте его` : "Удалить место выдачи"} aria-label="Удалить место выдачи"
+                          onClick={async e => {
+                            e.stopPropagation();
+                            if (used > 0) { showToast(`К точке привязаны курьеры (${used}) — сначала перевесьте их`, true); return; }
+                            if (!(await askConfirm(`Удалить «${p.name}»?`, { ok: "Удалить", danger: true }))) return;
+                            await mutate("DELETE", "/api/points/" + p.id);
+                          }}><Trash2 size={13} /></button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+              <button className="pp-add" title="Добавить место выдачи"
+                onClick={() => { setPointEdit("new"); setPointName(""); setPointNote(""); pendingPoint.current = null; }}>добавить место выдачи</button>
             </div>
           )}
+            </div></div>
+          </div>
 
           <div className="acc">
             {/* заказы */}
-            <div className={"acc-item" + (accOrders ? " open" : "")} data-acc="orders">
-              <button className="acc-head" onClick={() => setAccOrders(v => !v)}>
-                Готовые заказы <span className="p-count">{st.orders.length}</span><span className="chev">▾</span>
-              </button>
-              <div className="acc-body">
+            <div className={"acc-item" + (openAcc === "orders" ? " open" : "")} data-acc="orders">
+              <AccHead icon={<Package size={15} className="acc-ico" />} label="Готовые заказы"
+                count={st.orders.length} open={openAcc === "orders"}
+                onClick={() => setOpenAcc(a => a === "orders" ? null : "orders")} />
+              <div className="acc-body"><div className="acc-inner">
                 <div className="addrow">
                   <GeoInput
                     inputRef={orderInputRef}
@@ -487,15 +705,20 @@ export default function Console() {
                     }}
                     onEnterEmpty={() => void solve()}
                   />
-                  <button className="iconbtn" style={{ color: "#6d7688", fontSize: 15 }}
-                    title="Отметить точку кликом по карте"
-                    onClick={() => setPickTarget(pickTarget === "order" ? null : "order")}>📍</button>
-                  <button className="plus" title="Добавить заказ" onClick={() => void addOrder()}>+</button>
+                  <button className={"iconbtn pick-btn" + (pickTarget === "order" ? " active" : "")}
+                    title="Отметить точку кликом по карте" aria-label="Отметить точку по карте"
+                    aria-pressed={pickTarget === "order"}
+                    onClick={() => setPickTarget(pickTarget === "order" ? null : "order")}><MapPin size={15} /></button>
+                  <button className="plus" title="Добавить заказ" aria-label="Добавить заказ" onClick={() => void addOrder()}><Plus size={15} /></button>
                 </div>
                 <div className={"addnote" + (orderNote ? " show" : "")} dangerouslySetInnerHTML={{ __html: orderNote }} />
                 <div id="orderList" className="ents" onMouseLeave={() => setHoverOid(null)}>
                   {readyOrders.length === 0 && !outOrders.length && (
-                    <div className="empty-list">Готовых заказов нет. Введите адрес или кликните по карте</div>
+                    <div className="empty-state">
+                      <PackageOpen size={22} />
+                      <b>Готовых заказов нет</b>
+                      <span>Введите адрес выше или отметьте точку на карте</span>
+                    </div>
                   )}
                   {readyOrders.map((o, i) => {
                     void tick;
@@ -508,9 +731,9 @@ export default function Console() {
                     return (
                       <div
                         key={o.id}
-                        className={`ent ocard${o.prio ? " prio" : ""}${late > 0 ? " burning" : ""}${cardHl === o.id ? " hl" : ""}`}
+                        className={`ent ocard${o.prio ? " prio" : ""}${late > 0 ? " burning" : ""}${cardHl === o.id ? " hl" : ""}${pinning === o.id ? " adding" : ""}`}
                         data-oid={o.id}
-                        draggable
+                        draggable={pinning !== o.id}
                         title={`${o.address} · перетащите на курьера, чтобы выдать сразу`}
                         onDragStart={e => {
                           e.dataTransfer.setData("text/plain", "assign:" + o.id);
@@ -518,17 +741,21 @@ export default function Console() {
                         }}
                         onMouseEnter={() => setHoverOid(o.id)}
                       >
-                        <span className="e-num">{i + 1}</span>
+                        <span className="e-num">{pinning === o.id ? <Loader2 size={13} className="spin" /> : i + 1}</span>
                         <span className="e-name">
                           {o.address}
-                          {o.deadline && <span className="dl-chip" title="Обещали к этому времени">⏱ {o.deadline}</span>}
+                          {pinning === o.id && <span className="pin-chip">пересчитываем маршрут…</span>}
+                          {(st.points?.length || 0) > 1 && o.point_id && st.points?.some(p => p.id === o.point_id) && (
+                            <span className="opt-tag" title="Место выдачи заказа">{st.points.find(p => p.id === o.point_id)!.name}</span>
+                          )}
+                          {o.deadline && <span className="dl-chip" title="Обещали к этому времени"><Timer size={11} /> {o.deadline}</span>}
                           {late > 0
-                            ? <span className="burn-chip" title="По текущему плану к обещанному времени не успеваем">🔥 опоздание ~{late} мин</span>
+                            ? <span className="burn-chip" title="По текущему плану к обещанному времени не успеваем"><Flame size={11} /> опоздание ~{late} мин</span>
                             : (soon !== null && 0 <= soon && soon <= 15)
-                              ? <span className="soon-chip" title="Дедлайн на подходе, а заказа ещё нет в маршруте">⏳ скоро {o.deadline}</span>
+                              ? <span className="soon-chip" title="Дедлайн на подходе, а заказа ещё нет в маршруте"><Hourglass size={11} /> скоро {o.deadline}</span>
                               : null}
-                          {o.prio && <span className="prio-tag">⚡ приоритет</span>}
-                          {auto && <span className="age-tag" title="Долго в очереди: в плане будет как приоритетный">⏳ {age} мин</span>}
+                          {o.prio && <span className="prio-tag"><Zap size={11} /> приоритет</span>}
+                          {auto && <span className="age-tag" title="Долго в очереди: в плане будет как приоритетный"><Hourglass size={11} /> {age} мин</span>}
                           {dlEdit === o.id && (
                             <DlPop
                               initial={o.deadline || dlRound(new Date(Date.now() + 30 * 60000))}
@@ -543,63 +770,63 @@ export default function Console() {
                         </span>
                         <span className="e-acts">
                           <button title="Обещанное время доставки (дедлайн)" aria-label="Дедлайн заказа"
-                            onClick={() => setDlEdit(dlEdit === o.id ? null : o.id)}>⏱</button>
+                            onClick={() => setDlEdit(dlEdit === o.id ? null : o.id)}><Timer size={14} /></button>
                           <button className={"prio-btn" + (o.prio ? " on" : "")}
                             title={o.prio ? "Снять приоритет" : "Приоритет: доставить как можно раньше"}
                             aria-label="Приоритет заказа"
-                            onClick={() => void mutate("PATCH", "/api/orders/" + o.id, { prio: !o.prio })}>⚡</button>
+                            onClick={() => void mutate("PATCH", "/api/orders/" + o.id, { prio: !o.prio })}><Zap size={14} /></button>
                           <button className="ok" title="Выдать курьеру (из текущего плана)" aria-label="Выдать заказ"
                             onClick={async () => {
                               const r = (st.plan?.routes || []).find(r => (r.stops || []).some(s => s.order_id === o.id));
                               if (!r) { showToast("Заказа нет в текущем плане: рассчитайте план или выдайте с маршрута", true); return; }
                               await mutate("POST", "/api/orders/assign", { order_ids: [o.id], courier_id: r.courier_id });
-                              undoToast(`✓ Выдан: ${r.courier_name}`, `выдача ${o.address || ""}`.slice(0, 60), "assign", { order_ids: [o.id] });
-                            }}>✓</button>
+                              undoToast(`Выдан: ${r.courier_name}`, `выдача ${o.address || ""}`.slice(0, 60), "assign", { order_ids: [o.id] });
+                            }}><Check size={14} /></button>
                           <button className="no" title="Отменить (в историю)" aria-label="Отменить заказ"
                             onClick={async () => {
                               await mutate("DELETE", "/api/orders/" + o.id, { outcome: "cancelled" });
                               pushUndo(`удаление ${o.address || ""}`.slice(0, 60), "delOrder",
-                                { address: o.address, lat: o.lat, lng: o.lng, prio: o.prio, deadline: o.deadline });
+                                { address: o.address, lat: o.lat, lng: o.lng, prio: o.prio, deadline: o.deadline, point_id: o.point_id });
                               showToast("Заказ отменён", false, { label: "Отменить", fn: () => void doUndo() });
-                            }}>✕</button>
+                            }}><X size={14} /></button>
                         </span>
                       </div>
                     );
                   })}
-                  {outOrders.length > 0 && <div className="out-cap">🛵 В развозке</div>}
+                  {outOrders.length > 0 && <div className="out-cap"><Bike size={13} /> В развозке</div>}
                   {outOrders.map(o => (
                     <div key={o.id} className="ent ocard out" data-oid={o.id} title={o.address}
                       onMouseEnter={() => setHoverOid(o.id)}>
-                      <span className="e-num">🛵</span>
+                      <span className="e-num out-ico"><Bike size={14} /></span>
                       <span className="e-name">{o.address} <span className="out-chip">{courName(o.assigned || "")}</span></span>
                       <span className="e-acts">
                         <button className="ok" title="Вернуть в очередь готовых (не доехал, передумали)" aria-label="Вернуть в очередь"
                           onClick={async () => {
                             const was = o.assigned;
                             await mutate("POST", `/api/orders/${o.id}/return`);
-                            undoToast("↩ Заказ снова в очереди", `возврат ${o.address || ""}`.slice(0, 60), "return",
+                            undoToast("Заказ снова в очереди", `возврат ${o.address || ""}`.slice(0, 60), "return",
                               { order_ids: [o.id], courier_id: was });
-                          }}>↩</button>
+                          }}><Undo2 size={14} /></button>
                         <button className="no" title="Отменить (в историю)" aria-label="Отменить заказ"
                           onClick={async () => {
                             await mutate("DELETE", "/api/orders/" + o.id, { outcome: "cancelled" });
                             pushUndo(`удаление ${o.address || ""}`.slice(0, 60), "delOrder",
-                              { address: o.address, lat: o.lat, lng: o.lng, prio: o.prio, deadline: o.deadline });
+                                { address: o.address, lat: o.lat, lng: o.lng, prio: o.prio, deadline: o.deadline, point_id: o.point_id });
                             showToast("Заказ отменён", false, { label: "Отменить", fn: () => void doUndo() });
-                          }}>✕</button>
+                          }}><X size={14} /></button>
                       </span>
                     </div>
                   ))}
-                </div>
+                </div></div>
               </div>
             </div>
 
             {/* курьеры */}
-            <div className={"acc-item" + (accCouriers ? " open" : "")} data-acc="couriers">
-              <button className="acc-head" onClick={() => setAccCouriers(v => !v)}>
-                Курьеры <span className="p-count">{st.couriers.length}</span><span className="chev">▾</span>
-              </button>
-              <div className="acc-body">
+            <div className={"acc-item" + (openAcc === "couriers" ? " open" : "")} data-acc="couriers">
+              <AccHead icon={<Bike size={15} className="acc-ico" />} label="Курьеры"
+                count={st.couriers.length} open={openAcc === "couriers"}
+                onClick={() => setOpenAcc(a => a === "couriers" ? null : "couriers")} />
+              <div className="acc-body"><div className="acc-inner">
                 <div className="addrow">
                   <input type="text" placeholder="Имя курьера (Enter)" aria-label="Имя нового курьера"
                     value={courierName} onChange={e => setCourierName(e.target.value)}
@@ -610,21 +837,33 @@ export default function Console() {
                       setCourierName("");
                       await mutate("POST", "/api/couriers", { name });
                     }} />
-                  <button className="plus" title="Добавить курьера"
+                  <button className="plus" title="Добавить курьера" aria-label="Добавить курьера"
                     onClick={async () => {
                       const name = courierName.trim();
                       if (!name) { showToast("Введите имя курьера", true); return; }
                       setCourierName("");
                       await mutate("POST", "/api/couriers", { name });
-                    }}>+</button>
+                    }}><Plus size={15} /></button>
                 </div>
                 <div id="courierList" className="ents">
-                  {st.couriers.length === 0 && <div className="empty-list">Добавьте курьеров дня</div>}
+                  {st.couriers.length === 0 && (
+                    <div className="empty-state">
+                      <Bike size={22} />
+                      <b>Курьеров нет</b>
+                      <span>Введите имя выше — курьер появится в списке и на карте</span>
+                    </div>
+                  )}
                   {st.couriers.map(c => {
                     const n = carrying[c.id] || 0;
                     return (
                       <div key={c.id}
                         className={"ent crow" + (dragOverCourier === c.id ? " drop-hint" : "")}
+                        draggable
+                        title={`${c.name}: перетащите в план развозки справа, чтобы включить в расчёт`}
+                        onDragStart={e => {
+                          e.dataTransfer.setData("text/plain", "courier:" + c.id);
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
                         onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setDragOverCourier(c.id); }}
                         onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCourier(null); }}
                         onDrop={async e => {
@@ -632,12 +871,7 @@ export default function Console() {
                           setDragOverCourier(null);
                           const raw = e.dataTransfer.getData("text/plain") || "";
                           if (!raw.startsWith("assign:")) return;
-                          const oid = raw.slice(7);
-                          const o = st.orders.find(x => x.id === oid);
-                          if (!o || o.status === "out") return;
-                          if (c.status === "off") { showToast(`${c.name} недоступен: включите его статусом`, true); return; }
-                          await mutate("POST", "/api/orders/assign", { order_ids: [oid], courier_id: c.id });
-                          undoToast(`✓ Выдан: ${c.name}`, `выдача ${o.address || ""}`.slice(0, 60), "assign", { order_ids: [oid] });
+                          await assignOrderTo(raw.slice(7), c.id);
                         }}
                       >
                         <div className="c-row1">
@@ -652,41 +886,57 @@ export default function Console() {
                               </button>
                             ))}
                           </span>
-                          <span className="e-acts" style={{ opacity: 1 }}>
+                          <span className="e-acts">
                             <button className="no" title="Удалить курьера" aria-label="Удалить курьера"
                               onClick={async () => {
                                 if (!(await askConfirm(`Удалить курьера «${c.name}»?`, { ok: "Удалить", danger: true }))) return;
                                 await mutate("DELETE", "/api/couriers/" + c.id);
                                 pushUndo(`курьер ${c.name}`, "delCourier", { name: c.name });
-                              }}>✕</button>
+                              }}><X size={14} /></button>
                           </span>
                         </div>
+                        {(st.points || []).length > 0 && (
+                          <div className="c-row2 pt-row" title="Место, откуда курьер забирает заказы (маршрут начинается отсюда)">
+                            <MapPin size={11} className="pp-ico" />
+                            <select className="pp-sel" value={c.point_id || st.points?.[0]?.id || ""}
+                              aria-label="Место выдачи курьера"
+                              onChange={e => {
+                                const np = e.target.value;
+                                if (np && np !== c.point_id)
+                                  void mutate("POST", `/api/couriers/${c.id}/point`, { point_id: np });
+                              }}>
+                              {st.points!.map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
                         {c.status === "away" && (c.geo
-                          ? <div className="c-row2" title="Возврат рассчитан по живой геолокации курьера (обновляется автоматически)">
+                          ? <div className="c-row2 geo-row" title="Возврат рассчитан по живой геолокации курьера (обновляется автоматически)">
                               {c.geo.at_depot
-                                ? "📍 у депо — готов грузиться"
-                                : `📍 вернётся ≈${c.geo.back_min} мин (по гео)`}
+                                ? <><MapPin size={11} /> у своей точки — готов грузиться</>
+                                : <><Timer size={11} /> вернётся ≈{c.geo.back_min} мин (по гео)</>}
                             </div>
-                          : <div className="c-row2">⏱ вернётся через
+                          : <div className="c-row2 geo-row"><Timer size={11} /> вернётся через
                             <input className="backMin" type="number" min={0} max={480} defaultValue={c.back_min ?? 15}
                               title="Через сколько минут вернётся на базу (привяжите Telegram — будет считаться сам)" aria-label="Возврат на базу, минут"
                               onChange={e => void mutate("PATCH", "/api/couriers/" + c.id, { back_min: +e.target.value || 0 })} />
                             мин
                           </div>)}
                         {c.geo?.at_order && (
-                          <div className="c-row2" title="Курьер сейчас стоит у этого заказа">
-                            🛵 у заказа: {c.geo.at_order}
+                          <div className="c-row2 geo-row" title="Курьер сейчас стоит у этого заказа">
+                            <Bike size={11} /> у заказа: {c.geo.at_order}
                           </div>
                         )}
                         {st.cfg?.tg && (
                           <div className="c-row2 tg-row">
                             {c.tg_chat_id
                               ? <span className="tg-bound" title={`Telegram привязан: ${c.tg_login || c.tg_chat_id}`}
-                                onClick={() => setBindFor(c)}>🔗 {c.tg_login || ("ID " + c.tg_chat_id)}</span>
-                              : <button className="tg-btn" title="Привязать Telegram-аккаунт курьера" onClick={() => setBindFor(c)}>🔗 Telegram</button>}
+                                onClick={() => setBindFor(c)}><Link2 size={11} /> {c.tg_login || ("ID " + c.tg_chat_id)}</span>
+                              : <button className="tg-btn" title="Привязать Telegram-аккаунт курьера" onClick={() => setBindFor(c)}><Link2 size={11} /> Telegram</button>}
                             {c.pos && (
                               <span className="tg-pos" title={`Геолокация обновлена${c.pos.live ? " (live-трансляция)" : ""}`}>
-                                📍 {posAgeMin(c.pos.ts)} назад{c.pos.live ? " · live" : ""}
+                                <MapPin size={11} /> {posAgeMin(c.pos.ts)} назад{c.pos.live ? " · live" : ""}
                               </span>
                             )}
                           </div>
@@ -702,7 +952,7 @@ export default function Console() {
                       </div>
                     );
                   })}
-                </div>
+                </div></div>
               </div>
             </div>
           </div>
@@ -712,9 +962,6 @@ export default function Console() {
               {solving ? "⏳ Считаю…" : "⚡ Рассчитать развозку"}
             </button>
             <div className="solve-hint">{miss || ""}</div>
-            <button className="more" onClick={() => { setSheetOpen(true); void loadHistory(histDays); void loadWeek(); }}>
-              Ещё: параметры, история, доступ
-            </button>
           </div>
         </aside>
 
@@ -732,7 +979,18 @@ export default function Console() {
             onClick={() => setFitSignal(s => s + 1)}>⤢</button>
         </section>
 
-        <section className="col-plan" id="planPanel">
+        <section className="col-plan" id="planPanel"
+          onDragOver={e => {
+            if ([...e.dataTransfer.types].includes("text/plain")) {
+              e.preventDefault(); e.dataTransfer.dropEffect = "move";
+            }
+          }}
+          onDrop={async e => {
+            const raw = e.dataTransfer.getData("text/plain") || "";
+            if (!raw.startsWith("courier:")) return;
+            e.preventDefault();
+            await courierToPlan(raw.slice(8), (e.target as HTMLElement).closest(".route"));
+          }}>
           {!plan || !plan.routes || !plan.routes.length ? (
             <div className="plan-empty">
               {plan && plan.routes && !plan.routes.length
@@ -754,6 +1012,7 @@ export default function Console() {
                   showToast("Заказ перенесён, план обновлён");
                 } catch (e) { showToast((e as Error).message, true); }
               }}
+              onPin={pinOrder}
             />
           )}
         </section>
@@ -763,6 +1022,8 @@ export default function Console() {
       {sheetOpen && (
         <Sheet
           st={st}
+          tab={sheetTab}
+          setTab={setSheetTab}
           hist={hist} histDays={histDays}
           onHistDays={d => { setHistDays(d); void loadHistory(d); }}
           week={week}
@@ -812,7 +1073,7 @@ export default function Console() {
               <li>Занесите <b>готовые заказы</b>: адресом с подсказками или кликом по карте.</li>
               <li>Нажмите <b>«Рассчитать развозку»</b>. Карточка «отдать сейчас» и есть задание курьеру на базе.</li>
             </ol>
-            <p className="note">План пересчитывается сам после изменений. Редкие настройки живут под кнопкой «Ещё».</p>
+            <p className="note">План пересчитывается сам после изменений. Редкие настройки, история и доступ — шестерёнка в шапке.</p>
           </div>
         </div>
       )}
@@ -977,7 +1238,7 @@ function DlPop({ initial, hasDeadline, onSave, onClose }: {
 }
 
 /* ---------- панель плана ---------- */
-function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOverRoute, setDragOverRoute, onMoveStop }: {
+function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOverRoute, setDragOverRoute, onMoveStop, onPin }: {
   st: AppState;
   clock: (m: number) => string;
   busyMode: boolean;
@@ -988,6 +1249,7 @@ function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOver
   dragOverRoute: string | null;
   setDragOverRoute: (v: string | null) => void;
   onMoveStop: (oid: string, to: string) => Promise<void>;
+  onPin: (oid: string, cid: string) => Promise<void>;
 }) {
   const plan = st.plan!;
   let prov = plan.routing === "roads" ? "по дорогам · " + (({ ORS: "ORS", OSRM: "OSRM" } as Record<string, string>)[plan.provider || ""] || "") : "оценка по прямой";
@@ -1017,6 +1279,7 @@ function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOver
         let stopNo = 0;
         return (
           <div key={r.courier_id}
+            data-cid={r.courier_id}
             className={`route${ri === 0 && r.status === "base" ? " lead" : ""}${dragOverRoute === r.courier_id ? " dragover" : ""}`}
             style={{ borderLeftColor: r.color }}
             onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setDragOverRoute(r.courier_id); }}
@@ -1025,7 +1288,8 @@ function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOver
               e.preventDefault();
               setDragOverRoute(null);
               const raw = e.dataTransfer.getData("text/plain") || "";
-              if (!raw || raw.startsWith("assign:")) return;
+              if (!raw || raw.startsWith("courier:")) return; // курьера обработает секция плана
+              if (raw.startsWith("assign:")) { await onPin(raw.slice(7), r.courier_id); return; }
               const [oid, from] = raw.split("|");
               if (!oid || r.courier_id === from) return;
               await onMoveStop(oid, r.courier_id);
@@ -1149,12 +1413,14 @@ const SET_FIELDS: { key: string; label: string; min: number; max: number; step?:
   { key: "lights_sec_per_km", label: "Светофоры, с/км", min: 0, max: 60, title: "Средняя задержка на светофорах: секунд на километр пути" },
   { key: "auto_prio_min", label: "Авто-приоритет, мин (0 = выкл)", min: 0, max: 240, title: "Заказ ждёт в очереди дольше этого времени — он сам становится приоритетным" },
   { key: "reload_min", label: "Перезагрузка, мин", min: 0, max: 120, title: "Время на базе между заездами: принять заказы, погрузиться" },
-  { key: "approach_center_min", label: "Подъезд: центр, мин", min: 0, max: 15, title: "Добавка на парковку и подъём к двери: в радиусе 2.5 км от депо" },
-  { key: "approach_far_min", label: "Подъезд: окраины, мин", min: 0, max: 15, title: "Добавка на парковку и подъём к двери за пределами 2.5 км от депо" },
+  { key: "approach_center_min", label: "Подъезд: центр, мин", min: 0, max: 15, title: "Добавка на парковку и подъём к двери: в радиусе 2.5 км от места выдачи" },
+  { key: "approach_far_min", label: "Подъезд: окраины, мин", min: 0, max: 15, title: "Добавка на парковку и подъём к двери за пределами 2.5 км от места выдачи" },
 ];
 
 function Sheet(p: {
   st: AppState;
+  tab: "params" | "hist" | "users";
+  setTab: (t: "params" | "hist" | "users") => void;
   hist: { rows?: any[]; summary?: Record<string, number | null> } | null;
   histDays: string;
   onHistDays: (d: string) => void;
@@ -1181,13 +1447,22 @@ function Sheet(p: {
     await p.onSaveSettings(full);
   };
   const summ = p.hist?.summary || {};
+  const TITLES = { params: "Параметры расчёта", hist: "Неделя и история", users: "Доступ" } as const;
   return (
     <div className="sheet-bg" onClick={e => { if (e.target === e.currentTarget) p.onClose(); }}>
       <div className="sheet">
         <button className="close" aria-label="Закрыть" onClick={p.onClose}>✕</button>
-        <h3>Ещё</h3>
+        <h3>{TITLES[p.tab]}</h3>
+        <div className="sheet-tabs" role="tablist">
+          <button role="tab" aria-selected={p.tab === "params"} className={p.tab === "params" ? "on" : ""}
+            onClick={() => p.setTab("params")}><SlidersHorizontal size={14} />Параметры</button>
+          <button role="tab" aria-selected={p.tab === "hist"} className={p.tab === "hist" ? "on" : ""}
+            onClick={() => p.setTab("hist")}><History size={14} />Неделя и история</button>
+          <button role="tab" aria-selected={p.tab === "users"} className={p.tab === "users" ? "on" : ""}
+            onClick={() => p.setTab("users")}><Users size={14} />Доступ</button>
+        </div>
 
-        <h4>Параметры расчёта</h4>
+        {p.tab === "params" && (<>
         <div className="settings-grid">
           {SET_FIELDS.map(f => (
             <label key={f.key} title={f.title}>{f.label}
@@ -1204,12 +1479,14 @@ function Sheet(p: {
           учитывать час пик (утро/вечер)
         </label>
         </div>
+        </>)}
 
+        {p.tab === "hist" && (<>
         <h4>Неделя</h4>
         <div className="wk-note" dangerouslySetInnerHTML={{ __html: p.week || "Загрузка…" }} />
         <div style={{ marginTop: 8 }}>
           <a href="/report/day" target="_blank" rel="noopener" className="btn"
-            style={{ fontSize: "12.5px" }} title="Печатная версия: Ctrl+P позволяет сохранить в PDF">🖨 Отчёт дня (PDF)</a>
+            style={{ fontSize: "12.5px" }} title="Печатная версия: Ctrl+P позволяет сохранить в PDF">Отчёт дня (PDF)</a>
         </div>
 
         <h4>История</h4>
@@ -1222,7 +1499,7 @@ function Sheet(p: {
             <option value="31">31 день</option>
           </select>
           <a href={"/api/history/export?days=" + p.histDays} className="btn" style={{ fontSize: "12.5px" }}
-            title="Скачать CSV (открывается в Excel)">⬇ CSV</a>
+            title="Скачать CSV (открывается в Excel)">CSV</a>
         </div>
         <div style={{ color: "var(--mut)", fontSize: "12.5px" }}>
           Выдано: <b>{summ.delivered || 0}</b> · Отменено: <b>{summ.cancelled || 0}</b>
@@ -1241,8 +1518,9 @@ function Sheet(p: {
             ))
             : <div className="empty-list">Пока пусто</div>}
         </div>
+        </>)}
 
-        <h4>Доступ</h4>
+        {p.tab === "users" && (<>
         <div className="col">
           <label style={{ fontSize: "11.5px", color: "var(--mut)" }}>Смена своего пароля</label>
           <input type="password" placeholder="старый пароль" aria-label="Старый пароль"
@@ -1276,10 +1554,11 @@ function Sheet(p: {
               ))}
             </div>
             <div style={{ marginTop: 12 }}>
-              <a href="/api/backup" className="btn" title="Скачать снимок базы данных">💾 Бэкап БД</a>
+              <a href="/api/backup" className="btn" title="Скачать снимок базы данных">Бэкап БД</a>
             </div>
           </div>
         )}
+        </>)}
       </div>
     </div>
   );

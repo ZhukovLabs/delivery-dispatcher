@@ -1,15 +1,16 @@
 export interface Depot { address: string; lat: number; lng: number; }
+export interface PickPoint { id: string; name: string; address: string; lat: number; lng: number; couriers?: number; admins?: string[]; }
 export interface CourierPos { lat: number; lng: number; ts: number; live?: boolean; acc?: number; }
 export interface CourierGeo { lat: number; lng: number; age_min: number; back_min: number; at_depot: boolean; live?: boolean; at_order?: string; }
 export interface Courier {
   id: string; name: string; status: "base" | "away" | "off";
   color?: string; back_min?: number; tg_chat_id?: string; tg_login?: string;
-  pos?: CourierPos; geo?: CourierGeo;
+  pos?: CourierPos; geo?: CourierGeo; point_id?: string;
 }
 export interface Order {
   id: string; address: string; lat: number; lng: number;
   prio?: boolean; deadline?: string; created_at: string;
-  status?: "ready" | "out"; assigned?: string;
+  status?: "ready" | "out"; assigned?: string; point_id?: string; pin?: string;
 }
 export interface Stop {
   order_id: string; address: string; eta_min: number; eta_clock?: string;
@@ -25,6 +26,7 @@ export interface Route {
   courier_id: string; courier_name: string; status: string; color: string;
   stops: Stop[]; trips: Trip[]; count: number; total_min: number;
   start_delay_min: number; distance_km?: number; tg_chat_id?: string;
+  home_point?: PickPoint;
 }
 export interface AdviceSide { counts: string; last_clock?: string; avg_min: number; }
 export interface Advice {
@@ -42,7 +44,7 @@ export interface Plan {
 }
 export interface AppState {
   rev?: number; // версия состояния (long-poll /api/rev)
-  depot: Depot | null; couriers: Courier[]; orders: Order[];
+  depot: Depot | null; points?: PickPoint[]; couriers: Courier[]; orders: Order[];
   settings: Record<string, number>;
   plan: Plan | null; me?: { id: string; email: string; is_admin?: number };
   users?: { id: string; email: string; is_admin?: number }[];

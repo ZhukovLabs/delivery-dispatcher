@@ -13,11 +13,12 @@ interface GeoInputProps {
   enterKeyHint?: "add" | "solve";
   onEnterEmpty?: () => void;
   inputRef?: React.RefObject<HTMLInputElement | null>;
+  initial?: string;
 }
 
 /** Поле адреса с подсказками геокодера: debounce 300 мс, кэш TanStack Query (повтор — без сети), стрелки/Enter/Esc. */
-export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpty, inputRef }: GeoInputProps) {
-  const [val, setVal] = useState("");
+export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpty, inputRef, initial }: GeoInputProps) {
+  const [val, setVal] = useState(initial || "");
   const [deb, setDeb] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);

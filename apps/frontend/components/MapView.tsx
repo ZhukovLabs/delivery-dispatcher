@@ -97,6 +97,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
 
   /* ---------- содержимое: маркеры и линии ---------- */
   const d = state.depot;
+  const pickPts: { name: string; address: string; lat: number; lng: number }[] =
+    state.points?.length ? state.points
+      : d ? [{ name: "Основная", address: d.address, lat: d.lat, lng: d.lng }] : [];
   const planMap: Record<string, { color: string; label: string; popup: string }> = {};
   const plan = state.plan as Plan | null;
   if (plan) {
@@ -130,12 +133,12 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         `<div class="pin"><span class="${cls.trim()}" style="background:${color}"><i>${text}</i></span></div>`);
     };
 
-    if (d) {
-      const pm = new ym.Placemark([d.lat, d.lng],
-        { balloonContent: `<b>Депо</b><br>${esc(d.address)}` },
+    pickPts.forEach(p => {
+      const pm = new ym.Placemark([p.lat, p.lng],
+        { balloonContent: `<b>Место выдачи: ${esc(p.name)}</b><br>${esc(p.address)}` },
         { iconLayout: pinLayout("🏠", "#141c2b"), iconShape: { type: "Rectangle", coordinates: [[-13, -30], [13, 0]] } });
       map.geoObjects.add(pm);
-    }
+    });
 
     state.orders.forEach((o, i) => {
       const p = planMap[o.id];
@@ -167,9 +170,10 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       map.geoObjects.add(pm);
     });
 
-    if (plan && d) {
+    if (plan && pickPts.length) {
       plan.routes.forEach(r => (r.trips || []).forEach(tr => {
-        const depotPt: [number, number] = [d.lat, d.lng];
+        const hp = r.home_point || pickPts[0];
+        const depotPt: [number, number] = [hp.lat, hp.lng];
         const straight: [number, number][] = [depotPt, ...tr.stops.map(s => [s.lat, s.lng] as [number, number]), depotPt];
         const pts = tr.geometry && tr.geometry.length > 1 ? tr.geometry : straight;
         map.geoObjects.add(new ym.Polyline(pts, {}, { strokeColor: r.color, strokeWidth: 4, strokeOpacity: 0.9 }));
@@ -177,7 +181,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     }
 
     // первый автокадр; дальше позицию пользователя не трогаем
-    if (!didInitialFit.current && (state.orders.length || d)) {
+    if (!didInitialFit.current && (state.orders.length || pickPts.length)) {
       didInitialFit.current = true;
       fitAll(ym, map, state);
     }
@@ -217,7 +221,8 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
 
 function fitAll(ym: any, map: any, s: AppState) {
   const pts: [number, number][] = s.orders.map(o => [o.lat, o.lng] as [number, number]);
-  if (s.depot) pts.push([s.depot.lat, s.depot.lng]);
+  if (s.points?.length) s.points.forEach(p => pts.push([p.lat, p.lng] as [number, number]));
+  else if (s.depot) pts.push([s.depot.lat, s.depot.lng]);
   if (!pts.length) return;
   const lats = pts.map(p => p[0]), lngs = pts.map(p => p[1]);
   const padLat = Math.max((Math.max(...lats) - Math.min(...lats)) * 0.18, 0.004);
