@@ -1535,9 +1535,15 @@ TG_GEO_AT_PLACE = 0.15  # ближе 150 м = «на месте» (депо/за
 _LOAD_DWELL_S = 120     # столько нужно простоя у точки, чтобы считать выдачу состоявшейся
 
 
+def _courier_out_orders(c):
+    """Заказы «у курьера»: выданы и ещё не закрыты диспетчером."""
+    return [o for o in STATE["orders"]
+            if (o.get("status") or "ready") == "out"
+            and (o.get("assigned") or "") == c.get("id")]
+
+
 def _courier_has_out(c):
-    return any(o.get("assigned") == c.get("id") and (o.get("status") or "ready") == "out"
-               for o in STATE["orders"])
+    return bool(_courier_out_orders(c))
 
 
 def _load_track(c, pos, now=None):
@@ -1582,9 +1588,7 @@ def _deliver_track(c, pos, now=None):
     chat = c.get("tg_chat_id") or ""
     if not chat:
         return
-    out_orders = [o for o in STATE["orders"]
-                  if o.get("assigned") == c.get("id")
-                  and (o.get("status") or "ready") == "out"]
+    out_orders = _courier_out_orders(c)
     st = STATE["tg_deliv"].setdefault(chat, {})
     alive = {o["id"] for o in out_orders}
     for k in list(st):  # закрытые диспетчером записи чистим
@@ -1595,6 +1599,8 @@ def _deliver_track(c, pos, now=None):
         return
     now = now or time.time()
     for o in out_orders:
+        if o.get("lat") is None or o.get("lng") is None:
+            continue  # без координат адрес не сверить — поллер крашить нельзя
         rec = st.setdefault(o["id"], {})
         if rec.get("at"):
             continue
@@ -1616,7 +1622,8 @@ def _courier_geo(c, depot, now=None):
     back_min - за сколько курьер физически доедет до депо (анти-прыжки уже
     применены медианой при приёме точки, здесь только расстояние).
     """
-    pos = STATE["tg_pos"].get(c.get("tg_chat_id") or "")
+    chat = c.get("tg_chat_id") or ""
+    pos = STATE["tg_pos"].get(chat)
     if not pos or not depot:
         return None
     now = now or time.time()
@@ -1635,8 +1642,9 @@ def _courier_geo(c, depot, now=None):
         g["back_min"] = int(min(480, max(1, round(
             km * ROAD_FACTOR / kmh * 60))))
     # фаза развозки: заказы выданы? загрузка у точки зафиксирована?
-    has_out = _courier_has_out(c)
-    load = STATE["tg_load"].get(c.get("tg_chat_id") or "") or {}
+    out_orders = _courier_out_orders(c)
+    has_out = bool(out_orders)
+    load = STATE["tg_load"].get(chat) or {}
     g["has_out"] = has_out
     g["loaded"] = bool(load.get("loaded_at"))
     if has_out and not g["at_depot"]:
@@ -1644,12 +1652,9 @@ def _courier_geo(c, depot, now=None):
         # честный возврат: дорога до точки + развоз невыданных-недоставленных.
         # «доставленные» выводим по гео (долго стоял у адреса) — для расчёта
         # их считаем развезёнными; статус заказа не трогаем
-        chat = c.get("tg_chat_id") or ""
         dst = STATE["tg_deliv"].get(chat) or {}
-        rem = sum(1 for o in STATE["orders"]
-                  if (o.get("status") or "ready") == "out"
-                  and (o.get("assigned") or "") == c.get("id")
-                  and not dst.get(o["id"], {}).get("at"))
+        rem = sum(1 for o in out_orders
+                  if not dst.get(o["id"], {}).get("at"))
         per = _courier_del_avg_min(c)
         g["back_min"] = int(min(480, g["back_min"] + rem * per))
     if not has_out and not g["at_depot"]:
@@ -1659,11 +1664,7 @@ def _courier_geo(c, depot, now=None):
             km * ROAD_FACTOR / kmh2 * 60))))
     # стоит ли курьер прямо сейчас у одного из своих выданных заказов
     best, best_km = None, None
-    for o in STATE["orders"]:
-        if (o.get("status") or "ready") != "out":
-            continue
-        if o.get("assigned") and o["assigned"] != c.get("id"):
-            continue
+    for o in out_orders:
         d = haversine_km(pos, o)
         if d <= TG_GEO_AT_PLACE and (best_km is None or d < best_km):
             best, best_km = o["address"], d
