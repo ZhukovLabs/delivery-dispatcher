@@ -2,11 +2,14 @@ export interface Depot { address: string; lat: number; lng: number; }
 export interface PickPoint { id: string; name: string; address: string; lat: number; lng: number; couriers?: number; admins?: string[]; }
 export interface CourierPos { lat: number; lng: number; ts: number; live?: boolean; acc?: number; }
 export interface CourierGeo { lat: number; lng: number; age_min: number; back_min: number; at_depot: boolean; live?: boolean; at_order?: string; has_out?: boolean; loaded?: boolean; delivering?: boolean; to_point_min?: number; }
+/* остановка активной развозки: [lat, lng] или [lat, lng, order_id] */
+export type OutStop = [number, number] | [number, number, string];
 export interface Courier {
-  id: string; name: string; status: "base" | "away" | "off";
+  id: string; name: string; status?: "base" | "away" | "off";
   color?: string; back_min?: number; tg_chat_id?: string; tg_login?: string;
   pos?: CourierPos; geo?: CourierGeo; point_id?: string;
   cur_kmh?: number; avg_kmh?: number; speed_src?: "geo" | "delivery" | "default";
+  out_route?: { stops: OutStop[]; home?: { lat: number; lng: number } | null; geom?: [number, number][] };
 }
 export interface Order {
   id: string; address: string; lat: number; lng: number;
@@ -55,6 +58,7 @@ export interface AppState {
   ors?: { used?: number; soft_limit?: number; paused?: boolean };
   cfg?: { tg?: boolean };
   tg?: { bot?: string; seen?: { chat_id: string; login: string; ts: number }[] };
+  events?: { t: number; actor: string; text: string }[]; // лента активности
 }
 
 export async function api<T = AppState>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {

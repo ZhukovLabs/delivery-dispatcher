@@ -669,3 +669,31 @@ html.dark .pp-name-input,html.dark .pp-sel{background:#141b29}
 }
 
 @media (prefers-reduced-motion: reduce){.acc-item,.acc-body{transition:none}}
+
+/* ---------- Лента активности (поверх карты, снизу) ---------- */
+.feed{position:absolute;left:0;right:0;bottom:0;z-index:700;display:flex;flex-direction:column;
+  background:rgba(255,255,255,.86);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border-top:1px solid var(--line);box-shadow:0 -6px 24px rgba(15,23,42,.10)}
+html.dark .feed{background:rgba(15,23,42,.82);box-shadow:0 -6px 24px rgba(0,0,0,.45)}
+.feed-head{display:flex;align-items:center;gap:7px;padding:7px 12px;border:none;background:none;
+  font:600 12px/1 inherit;color:var(--ink);cursor:pointer;width:100%}
+.feed-head:hover{color:var(--acc)}
+.feed-n{margin-left:auto;background:var(--acc);color:#fff;border-radius:99px;padding:2px 7px;font-size:10.5px;font-weight:700}
+.feed-chev{color:var(--mut);transition:transform .18s}
+.feed-chev.open{transform:rotate(180deg)}
+.feed-list{max-height:170px;overflow:auto;overscroll-behavior:contain;padding:0 8px 8px;display:flex;flex-direction:column;gap:1px}
+.feed-ev{display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:7px;font-size:12px;line-height:1.4;
+  animation:feedIn .28s ease}
+.feed-ev:nth-child(odd){background:rgba(148,163,184,.08)}
+.feed-ev:hover{background:rgba(148,163,184,.18)}
+@keyframes feedIn{from{opacity:0;transform:translateY(-7px)}to{opacity:1;transform:none}}
+.feed-ico{flex-shrink:0;font-size:12px;align-self:center}
+.feed-txt{flex:1;min-width:0;color:var(--ink);overflow-wrap:anywhere}
+.feed-txt b{font-weight:700}
+.feed-time{flex-shrink:0;font-size:10.5px;color:var(--mut);font-variant-numeric:tabular-nums}
+.feed-ev.a-bot .feed-txt b,.feed-ev.a-bot .feed-ico{color:#2563eb}
+.feed-ev.a-disp .feed-txt b,.feed-ev.a-disp .feed-ico{color:#7c3aed}
+.feed-ev.a-cour .feed-txt b,.feed-ev.a-cour .feed-ico{color:#ea580c}
+.feed-ev.a-sys .feed-txt{color:var(--mut)}
+.feed.min .feed-head{padding:6px 12px}
+@media (max-width:1240px){.feed-list{max-height:120px}}

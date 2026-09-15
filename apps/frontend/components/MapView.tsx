@@ -15,6 +15,7 @@ export interface MapViewProps {
   hoverOid: string | null;
   onMarkerClick: (oid: string) => void;
   dupOids?: Set<string>;
+  focus?: { kind: "order" | "courier" | "point"; id: string; n: number } | null;
 }
 
 /* ---------- загрузка api-maps один раз на страницу ---------- */
@@ -45,12 +46,29 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 
 const ANIM_MS = 2400; // плавный «догон» курьера до свежей геопозиции
 
-export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, onMarkerClick, dupOids }: MapViewProps) {
+const DEFAULT_COURIER_COLOR = "#e8482b"; // курьер без назначенного цвета
+const ORDER_GRAY = "#8b95a8";            // заказ вне плана и без исполнителя
+const DUP_RED = "#d92d20";               // дублирующийся адрес
+
+/* маршрут курьера из плана (если есть) */
+const routeOf = (p: Plan | null | undefined, cid: string) =>
+  p?.routes.find(r => r.courier_id === cid);
+
+/* координаты трипа: дорожная геометрия или прямая через остановки */
+const tripCoords = (tr: { geometry?: [number, number][]; stops: { lat: number; lng: number }[] },
+                    depot: [number, number]): [number, number][] =>
+  tr.geometry && tr.geometry.length > 1
+    ? tr.geometry
+    : [depot, ...tr.stops.map(s => [s.lat, s.lng] as [number, number]), depot];
+
+export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, onMarkerClick, dupOids, focus }: MapViewProps) {
   const divRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const ymRef = useRef<any>(null);
   const [ready, setReady] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // зеркало выбора в стейт: клик по курьеру мгновенно перекрашивает его точки
+  const [selTick, setSelTick] = useState(0);
 
   // свежие колбэки для обработчиков карты без пересоздания карты
   const pickRef = useRef(pickMode);
@@ -97,6 +115,13 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         if (pickRef.current) {
           const c = e.get("coords") as [number, number];
           onPickRef.current({ lat: c[0], lng: c[1] });
+          return;
+        }
+        // клик мимо маркеров — снять выбор курьера и убрать его маршрут
+        if (selCid.current) {
+          selCid.current = null;
+          refreshRef.current();
+          setSelTick(t => t + 1);
         }
       });
       map.container.fitToViewport();
@@ -168,41 +193,70 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   }
 
   const courierBalloon = (c: Courier) => {
-    const r = plan?.routes.find(x => x.courier_id === c.id);
+    const r = routeOf(plan, c.id);
     const endClk = r && r.trips?.length ? r.trips[r.trips.length - 1].end_clock : undefined;
+    const outN = c.out_route?.stops?.length || 0;
     return `<b>${esc(c.name)}</b><br>📍 ${fmtAge(c.pos!.ts)} назад${c.pos!.live ? " · live" : ""}` +
       (c.pos!.acc ? ` · ±${Math.round(c.pos!.acc)} м` : "") +
-      (r ? `<br>Маршрут: ${r.count} зак. · ≈${Math.round(r.total_min)} мин · финиш ${endClk || "?"}` : "");
+      (r ? `<br>Маршрут: ${r.count} зак. · ≈${Math.round(r.total_min)} мин · финиш ${endClk || "?"}` : "") +
+      (!r && outN ? `<br>В развозке: ${outN} зак. (пунктир — выданные)` : "") +
+      (!r && !outN && (c.out_route?.geom?.length || 0) > 1 ? "<br>↩ Возвращается на базу" : "");
   };
 
   // живые ссылки для обработчиков, привязанных к долгоживущим маркерам:
   // их замыкания не должны ссылаться на протухший план
   const planRef = useRef(plan); planRef.current = plan;
   const pickPtsRef = useRef(pickPts); pickPtsRef.current = pickPts;
+  const couriersRef = useRef(state.couriers); couriersRef.current = state.couriers;
 
-  /* маршрут выбранного курьера: жирная линия поверх остальных (#5) */
+  /* маршрут выбранного курьера: точный из плана + пунктир выданных (#5) */
   const refreshSelRoute = () => {
     const ym = ymRef.current, map = mapRef.current;
     if (!ym || !map) return;
     if (L.current.routeLine) { map.geoObjects.remove(L.current.routeLine); L.current.routeLine = null; }
     const cid = selCid.current;
-    const curPlan = planRef.current;
-    if (!cid || !curPlan) return;
-    const r = curPlan.routes.find(x => x.courier_id === cid);
+    if (!cid) return;
+    const cur = couriersRef.current.find(c => c.id === cid);
+    if (!cur) return;
+    const r = routeOf(planRef.current, cid);
+    const orr = cur.out_route;
+    if (!r && !orr) return;
     const curPts = pickPtsRef.current;
-    if (!r || !curPts.length) return;
-    const hp = r.home_point || curPts[0];
-    const depot: [number, number] = [hp.lat, hp.lng];
-    const pts: [number, number][] = [depot];
-    (r.trips || []).forEach(tr => {
-      const seg: [number, number][] = tr.geometry && tr.geometry.length > 1
-        ? tr.geometry : [depot, ...tr.stops.map(s => [s.lat, s.lng] as [number, number]), depot];
-      pts.push(...seg);
-    });
-    L.current.routeLine = new ym.Polyline(pts, {},
-      { strokeColor: r.color, strokeWidth: 6, strokeOpacity: 1, zIndex: 30 });
+    const color = cur.color || r?.color || DEFAULT_COURIER_COLOR;
+    const lines: any[] = [];
+    // пунктир: выданные заказы (или возврат на базу) — по дорожной геометрии,
+    // если сохранили её на «Выдать», иначе по прямой через остановки
+    if (orr && (orr.geom?.length || 0) > 1 || orr?.stops?.length) {
+      const hp = orr.home || r?.home_point || curPts[0];
+      if (hp) {
+        const dashed: [number, number][] = orr.geom && orr.geom.length > 1
+          ? orr.geom
+          : [[hp.lat, hp.lng], ...(orr?.stops || []).map(sp => [sp[0], sp[1]] as [number, number]), [hp.lat, hp.lng]];
+        lines.push(new ym.Polyline(dashed, {},
+          { strokeColor: color, strokeWidth: 5, strokeOpacity: .85, strokeStyle: "1 3", zIndex: 30 }));
+      }
+    }
+    // сплошная: актуальный маршрут из плана
+    if (r && curPts.length) {
+      const hp = r.home_point || curPts[0];
+      const depot: [number, number] = [hp.lat, hp.lng];
+      const pts: [number, number][] = [depot];
+      (r.trips || []).forEach(tr => pts.push(...tripCoords(tr, depot)));
+      lines.push(new ym.Polyline(pts, {},
+        { strokeColor: r.color, strokeWidth: 6, strokeOpacity: 1, zIndex: 30 }));
+    }
+    if (!lines.length) return;
+    if (lines.length > 1) {
+      const col = new ym.Collection();
+      lines.forEach(l => col.add(l));
+      L.current.routeLine = col;
+    } else {
+      L.current.routeLine = lines[0];
+    }
     map.geoObjects.add(L.current.routeLine);
   };
+  // свежая версия refreshSelRoute для хендлеров карты, живущих с первой инициализации
+  const refreshRef = useRef(refreshSelRoute); refreshRef.current = refreshSelRoute;
 
   useEffect(() => {
     const ym = ymRef.current, map = mapRef.current;
@@ -253,15 +307,33 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       if (!seenP.has(k)) { map.geoObjects.remove(L.current.depots.get(k)!); L.current.depots.delete(k); }
     }
 
-    /* 2) заказы: дубли — красные (#3), метка маршрута или точка */
+    /* 2) заказы: дубли — красные (#3), точки выбранного курьера — его цветом */
+    const selCourier = selCid.current
+      ? state.couriers.find(c => c.id === selCid.current) : null;
+    const selOids = new Set<string>();
+    if (selCourier) {
+      (routeOf(plan, selCourier.id)?.stops || [])
+        .forEach(sp => selOids.add(sp.order_id));
+      (selCourier.out_route?.stops || [])
+        .forEach(sp => { if (sp.length > 2) selOids.add(sp[2] as string); });
+    }
+    const selColor = selCourier?.color || DEFAULT_COURIER_COLOR;
     const seenO = new Set<string>();
     state.orders.forEach(o => {
       seenO.add(o.id);
       const p = planMap[o.id];
-      const color = p ? p.color : (dupOids?.has(o.id) ? "#d92d20" : "#8b95a8");
+      // выданный заказ: его план-стоп уже удалён, но он в развозке у курьера
+      const oCour = o.status === "out" && o.assigned
+        ? state.couriers.find(c => c.id === o.assigned) : null;
+      const mine = selOids.has(o.id);
+      const color = mine ? selColor
+        : oCour ? (oCour.color || ORDER_GRAY)
+        : p ? p.color
+        : (dupOids?.has(o.id) ? DUP_RED : ORDER_GRAY);
       const text = p ? p.label : "•";
       const content = p ? p.popup
-        : `<b>${esc(o.address)}</b><br>(ещё не рассчитано)${dupOids?.has(o.id) ? "<br><span style=\"color:#d92d20\">дублирующийся адрес</span>" : ""}`;
+        : oCour ? `<b>${esc(o.address)}</b><br>🛵 В развозке: ${esc(oCour.name)}`
+        : `<b>${esc(o.address)}</b><br>(ещё не рассчитано)${dupOids?.has(o.id) ? `<br><span style=\"color:${DUP_RED}\">дублирующийся адрес</span>` : ""}`;
       const sig = `${text}|${color}`;
       let pm = L.current.orders.get(o.id);
       if (pm && L.current.orderSig.get(o.id) === sig) {
@@ -310,12 +382,22 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
           const was = selCid.current;
           selCid.current = was === cid ? null : cid;
           refreshSelRoute();
+          setSelTick(t => t + 1);
           const m = L.current.couriers.get(cid);
           const cur = m ? m.geometry.getCoordinates() : null;
           if (cur) flyTo([cur[0], cur[1]]);
           if (m && selCid.current && !m.balloon.isOpen()) m.balloon.open();
           // сигнатура с «S» изменилась — пересоберём маркер на следующем такте
           if (m) L.current.courierSig.set(cid, "");
+        });
+        // крестик балуна: закрыл — выбор снят, маршрут убран
+        pm.balloon.events.add("userclose", () => {
+          if (selCid.current === cid) {
+            selCid.current = null;
+            L.current.courierSig.set(cid, "");
+            refreshRef.current();
+            setSelTick(t => t + 1);
+          }
         });
         L.current.courierSig.set(cid, sig);
         anims.current.delete(c.id);
@@ -343,11 +425,13 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       }
     }
 
-    /* 4) линии планов: пересобираем при смене состава ИЛИ пересчёте (solved_at) */
-    const lineSig = plan
+    /* 4) линии планов: пересобираем при смене состава ИЛИ пересчёте (solved_at),
+       а для выбранного курьера — ещё и при изменении его выданной части */
+    const selSig = `${selCid.current || "-"}:${selCourier?.out_route?.stops?.length || 0}:${selCourier?.out_route?.geom?.length || 0}`;
+    const lineSig = selSig + "|" + (plan
       ? `${plan.solved_at}|` + plan.routes.map(r => [r.courier_id, r.color, (r.trips || [])
           .map(t => t.stops.map(s => s.order_id).join(",")).join(";")].join("|")).join("~")
-      : "";
+      : "");
     if (lineSig !== L.current.routeSig) {
       L.current.routeSig = lineSig;
       L.current.lines.forEach(l => map.geoObjects.remove(l));
@@ -356,8 +440,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         plan.routes.forEach(r => (r.trips || []).forEach(tr => {
           const hp = r.home_point || pickPts[0];
           const depotPt: [number, number] = [hp.lat, hp.lng];
-          const straight: [number, number][] = [depotPt, ...tr.stops.map(s => [s.lat, s.lng] as [number, number]), depotPt];
-          const pts = tr.geometry && tr.geometry.length > 1 ? tr.geometry : straight;
+          const pts = tripCoords(tr, depotPt);
           L.current.lines.push(new ym.Polyline(pts, {},
             { strokeColor: r.color, strokeWidth: 4, strokeOpacity: 0.9, zIndex: 10 }));
         }));
@@ -371,7 +454,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       didInitialFit.current = true;
       fitAll(ym, map, state);
     }
-  }, [ready, state, dupOids]);
+  }, [ready, state, dupOids, selTick]);
 
   /* смена депо: сбрасываем выбор и подтягиваемся к новой точке (#1/#7) */
   useEffect(() => {
@@ -383,6 +466,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     if (first) return; // первичная загрузка — кадр сделает автофит
     selCid.current = null;
     refreshSelRoute();
+    setSelTick(t => t + 1);
     const map = mapRef.current;
     const pt = state.points?.find(p => p.id === state.my_point);
     if (map && pt) {
@@ -400,6 +484,26 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       fitAll(ym, map, state);
     }
   }, [fitSignal, ready, state]);
+
+  /* клик по карточке в списке → летим к маркеру и открываем балун */
+  useEffect(() => {
+    if (!ready || !focus || !focus.n) return;
+    const pm = focus.kind === "order"
+      ? L.current.orders.get(focus.id)
+      : focus.kind === "courier"
+        ? L.current.couriers.get(focus.id)
+        : L.current.depots.get(focus.id);
+    if (!pm) return;
+    const g = pm.geometry.getCoordinates() as [number, number];
+    flyTo(g);
+    pm.balloon.open();
+    if (focus.kind === "courier") {
+      selCid.current = focus.id;
+      refreshSelRoute();
+      setSelTick(t => t + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, focus]);
 
   /* ---------- ховер карточки заказа → балун на карте (без пана) ---------- */
   useEffect(() => {
