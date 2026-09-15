@@ -1616,39 +1616,65 @@ def _deliver_track(c, pos, now=None):
             rec.pop("since", None)  # проехал мимо — не считается
 
 
-_AWAY_AUTO_KM = 0.5   # дальше этого от своей точки курьер «уехал»
-_AWAY_DWELL_S = 60    # непрерывно, столько секунд (глушит GPS-прыжок и «отошёл к машине»)
+_AWAY_AUTO_KM = 0.5    # дальше этого от своей точки курьер «уехал»
+_AWAY_DWELL_S = 60     # непрерывно, столько секунд (глушит GPS-прыжок и «отошёл к машине»)
+_BACK_DWELL_S = 120    # простой у точки после закрытия всех заказов — «на базе»
 
 
 def _away_track(c, pos, now=None):
-    """Авто-статус «в пути»: курьер с гео уехал дальше _AWAY_AUTO_KM от своей
-    точки и держится там _AWAY_DWELL_S — переводим с «базы» на «в пути».
+    """Авто-статусы по гео (в обе стороны, только с живым гео):
 
-    Возврат на базу автоматом НЕ делается (диспетчер подтверждает руками).
+    «база» -> «в пути»: уехал дальше _AWAY_AUTO_KM и держится _AWAY_DWELL_S.
+    «в пути» -> «база»: БЫЛ в развозке (выданные заказы закрыты) и простоял
+    у своей точки _BACK_DWELL_S. Курьер, который «в пути» стоит у точки и
+    ждёт выдачи, назад НЕ переводится — заказов не было, возврат за диспетчером.
     Зона 150 м..500 м — гистерезис: счётчик не тикает и не сбрасывается.
     """
     home = _home_point(c)
     chat = c.get("tg_chat_id") or ""
     if not home or not chat:
         return
-    if c.get("status") != "base":
-        STATE["tg_away"].pop(chat, None)  # уже не на базе — трекер не нужен
+    status = c.get("status")
+    if status not in ("base", "away"):
+        STATE["tg_away"].pop(chat, None)
         return
     now = now or time.time()
-    rec = STATE["tg_away"].setdefault(chat, {"since": None})
+    rec = STATE["tg_away"].setdefault(chat, {"since": None, "went_out": False})
     d = haversine_km(pos, home)
-    if d > _AWAY_AUTO_KM:
-        rec["since"] = rec["since"] or now
-        if now - rec["since"] >= _AWAY_DWELL_S:
-            c["status"] = "away"
-            STATE["tg_away"].pop(chat, None)
-            _persist_couriers()
-            _invalidate_plan(drop_plan=True)
-            log.info("auto-away: %s уехал от точки «%s» (%.0f м) — статус «в пути»",
-                     c.get("name"), home.get("name"), d * 1000)
-            _bump()
-    elif d <= TG_GEO_AT_PLACE:
-        rec["since"] = None  # у точки — отсчёт заново
+    out = _courier_out_orders(c)
+    if out:
+        rec["went_out"] = True
+    if status == "base":
+        if d > _AWAY_AUTO_KM:
+            rec["since"] = rec["since"] or now
+            if now - rec["since"] >= _AWAY_DWELL_S:
+                c["status"] = "away"
+                rec["since"], rec["went_out"] = None, False
+                _persist_couriers()
+                _invalidate_plan(drop_plan=True)
+                log.info("auto-away: %s уехал от точки «%s» (%.0f м) — статус «в пути»",
+                         c.get("name"), home.get("name"), d * 1000)
+                _bump()
+        elif d <= TG_GEO_AT_PLACE:
+            rec["since"] = None  # у точки — отсчёт заново
+            rec["went_out"] = False
+        return
+    # статус «в пути»
+    if d <= TG_GEO_AT_PLACE:
+        if not out and rec["went_out"]:
+            rec["since"] = rec["since"] or now
+            if now - rec["since"] >= _BACK_DWELL_S:
+                STATE["tg_away"].pop(chat, None)
+                c["status"] = "base"
+                _persist_couriers()
+                _invalidate_plan(drop_plan=True)
+                log.info("auto-return: %s вернулся к точке «%s» — статус «на базе»",
+                         c.get("name"), home.get("name"))
+                _bump()
+        else:
+            rec["since"] = None  # ждёт выдачи или ещё развозит — не возврат
+    else:
+        rec["since"] = None     # снова уехал — счётчик простоя сброшен
 
 
 def _courier_geo(c, depot, now=None):
