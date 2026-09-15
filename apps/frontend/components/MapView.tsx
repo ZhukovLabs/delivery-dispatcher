@@ -239,7 +239,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       if (!pm) {
         pm = new ym.Placemark([p.lat, p.lng], { balloonContent: balloon },
           { iconLayout: depotLayout(), iconShape: { type: "Rectangle", coordinates: [[-21, -21], [21, 24]] },
-            zIndex: 2000, cursor: "pointer" });
+            hideIconOnBalloonOpen: false, zIndex: 2000, cursor: "pointer" });
         const fx = () => { flyTo([p.lat, p.lng]); pm!.balloon.open(); };
         pm.events.add("click", fx);
         map.geoObjects.add(pm);
@@ -273,7 +273,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       pm = swap(L.current.orders, o.id, () => new ym.Placemark([o.lat, o.lng], { balloonContent: content },
         { iconLayout: pinLayout(text, color),
           iconShape: { type: "Rectangle", coordinates: [[-16, -16], [16, 20]] },
-          zIndex: 500, cursor: "pointer" }));
+          hideIconOnBalloonOpen: false, zIndex: 500, cursor: "pointer" }));
       pm.events.add("click", () => { flyTo([o.lat, o.lng]); onMarkerClickRef.current(oid); });
       L.current.orderSig.set(oid, sig);
     });
@@ -305,7 +305,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         pm = swap(L.current.couriers, cid, () => new ym.Placemark(to, { balloonContent: courierBalloon(c) },
           { iconLayout: ym.templateLayoutFactory.createClass(html),
             iconShape: { type: "Rectangle", coordinates: [[-14, -14], [14, 20]] },
-            zIndex: 1000, cursor: "pointer" }));
+            hideIconOnBalloonOpen: false, zIndex: 1000, cursor: "pointer" }));
         pm.events.add("click", () => {
           const was = selCid.current;
           selCid.current = was === cid ? null : cid;
