@@ -80,7 +80,7 @@ html.dark .fit-btn:hover{background:#283548}
 
 /* строки сущностей */
 .ents{display:flex;flex-direction:column;margin-top:2px}
-.ents > .ent{flex-shrink:0}
+.ents > *{flex-shrink:0}
 .ent{display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #f1f3f7;min-height:34px}
 .ent:last-child{border-bottom:none}
 .ent .e-name{flex:1;min-width:0;white-space:normal;word-break:break-word;overflow-wrap:anywhere;line-height:1.35}

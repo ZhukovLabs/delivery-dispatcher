@@ -2283,7 +2283,7 @@ def _fill_street_index(network=True):
         if os.path.exists(path) and time.time() - os.path.getmtime(path) < STREET_IDX_TTL:
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
-            if data.get("v") == 2:
+            if data.get("v") == 3:
                 STREET_IDX["names"] = {k: tuple(v) for k, v in data["names"].items()}
                 STREET_IDX["ways"] = {int(k): tuple(v) for k, v in data["ways"].items()}
                 _rebuild_alt()
@@ -2293,7 +2293,7 @@ def _fill_street_index(network=True):
         pass
     s, w, n, e = GOMEL_BBOX
     q = (f'[out:json][timeout:25];'
-         f'way["highway"~"^(residential|tertiary|secondary|primary|unclassified|living_street|pedestrian)$"]["name"]'
+         f'way["highway"~"^(residential|tertiary|secondary|primary|unclassified|living_street|pedestrian|service)$"]["name"]'
          f'({s},{w},{n},{e});out tags center 8000;')
     acc = {}  # lower -> [shown, sum_lat, sum_lng, cnt]
     for url in (OVERPASS_URLS if network else []):
@@ -2326,7 +2326,7 @@ def _fill_street_index(network=True):
         app.logger.info("street index: %d улиц", len(STREET_IDX["names"]))
         try:
             with open(path, "w", encoding="utf-8") as fh:
-                json.dump({"v": 2, "names": STREET_IDX["names"], "ways": STREET_IDX["ways"]},
+                json.dump({"v": 3, "names": STREET_IDX["names"], "ways": STREET_IDX["ways"]},
                           fh, ensure_ascii=False)
         except Exception:  # noqa: BLE001
             pass
@@ -2508,10 +2508,15 @@ def geocode():
                                "km": round(dist), "_s": score})
         # все слова запроса обязаны найтись в адресе (с допуском опечаток):
         # «еремино, школьная 13» не должно давать «Улукаўскі, ул. Школьная, 13»
-        if q_words and scored:
+        # ведущая цифра запроса («3-я авиационная») — часть имени улицы:
+        # фильтр должен требовать её в адресе, иначе сыплются 1-я/2-я
+        lead_ord = re.match(r"\s*(\d{1,2})\s*[-–—]?\s*([а-яё]{0,2})\s", q.lower() + " ")
+        ord_num = int(lead_ord.group(1)) if lead_ord and 1 <= int(lead_ord.group(1)) <= 30 else None
+        fw = q_words + ([f"{ord_num}-я"] if ord_num else [])
+        if fw and scored:
             def _hit_all(x):
                 hay = set(_tok(x["label"].split("(")[0]))
-                return all(any(_word_like(t, h) for h in hay) for t in q_words)
+                return all(any(_word_like(t, h) for h in hay) for t in fw)
             survived = [x for x in scored if _hit_all(x)]
             if survived:
                 scored = survived
@@ -2528,8 +2533,29 @@ def geocode():
                 seen_lbl[lbl] = 2.5
                 scored.append({"label": lbl_txt, "lat": slat, "lng": slng,
                                "km": round(d), "_s": 2.5})
+        # ведущая цифра или хвостовой номер («авиационная 3») —
+        # в семье нумерованных улиц это улица, а не дом
+        ordinal_hit = None
+        if (qnum or ord_num) and q_words:
+            mq = re.match(r"\d+", qnum or "")
+            n_ord = ord_num or (int(mq.group(0)) if mq and 1 <= int(mq.group(0)) <= 30 else None)
+            if n_ord:
+                for shown, slat, slng in _search_local_streets(q_words[0], 12):
+                    if shown.lower().startswith(f"{n_ord}-"):
+                        ordinal_hit = (shown, slat, slng)
+                        break
+        if ordinal_hit:
+            shown, slat, slng = ordinal_hit
+            lbl_txt = _place_label(shown, "Гомель", "", True)
+            lbl = lbl_txt.split("(")[0].strip().lower()
+            if seen_lbl.get(lbl, 99) > -1:
+                d_ord = haversine_km({"lat": lat, "lng": lng}, {"lat": slat, "lng": slng})
+                if d_ord <= 30:
+                    seen_lbl[lbl] = -1
+                    scored.insert(0, {"label": lbl_txt, "lat": slat, "lng": slng,
+                                      "km": round(d_ord), "_s": -1})
         # Номер дома не найден геокодерами — интерполируем по соседним домам улицы
-        if qnum and not exact_house:
+        if qnum and not exact_house and not ordinal_hit:
             def _word_hit(it):
                 hay = set(_tok(f"{it.get('road') or ''} {it.get('place') or ''}"))
                 return sum(1 for t in q_words if t in hay or any(h.startswith(t) for h in hay))
