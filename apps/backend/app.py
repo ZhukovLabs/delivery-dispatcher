@@ -158,8 +158,10 @@ STATE = {
     "tg_deliv": {},      # chat_id -> {order_id: {"since", "at"}} — вывод «доставлен»
                          # ТОЛЬКО для расчёта возврата; статус заказа не меняет
     "tg_away": {},       # chat_id -> {"since"} — авто-«в пути» при отъезде от точки
+    "tg_ask": {},        # chat_id -> {order_id: {"msg", "stage"}} — бот ждёт «доставил?»
     "tg_offset": 0,
     "tg_bot": "",        # @username бота (для подсказок в интерфейсе)
+    "events": [],        # лента активности: {"t", "actor": bot|disp|cour|sys, "text"}
 }
 
 ROAD_FACTOR = 1.4  # запасной расчёт (если OSRM недоступен): прямая -> дорога
@@ -257,6 +259,7 @@ _DB_MIGRATIONS = [
     ("users", "name", "ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT ''"),
     ("users", "phone", "ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''"),
     ("history", "point_id", "ALTER TABLE history ADD COLUMN point_id TEXT NOT NULL DEFAULT ''"),
+    ("history", "reason", "ALTER TABLE history ADD COLUMN reason TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -320,7 +323,7 @@ def _persist_orders():
              for x in STATE["orders"]])
 
 
-def _archive_order(order, outcome, courier="", courier_id=""):
+def _archive_order(order, outcome, courier="", courier_id="", reason=""):
     closed = _now().isoformat(timespec="seconds")
     if outcome == "delivered" and courier_id and order.get("out_at"):
         try:  # темп доставок -> фоллбек-замер скорости
@@ -331,11 +334,14 @@ def _archive_order(order, outcome, courier="", courier_id=""):
         except ValueError:
             pass
     with _db_lock, _db() as c:
-        c.execute("INSERT OR REPLACE INTO history VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        c.execute("INSERT OR REPLACE INTO history "
+                  "(id, address, lat, lng, created_at, closed_at, outcome,"
+                  " courier, deadline, point_id, reason) "
+                  "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                   (order["id"], order["address"], order["lat"], order["lng"],
                    order.get("created_at"),
                    closed, outcome, courier,
-                   order.get("deadline") or "", _obj_point(order)))
+                   order.get("deadline") or "", _obj_point(order), reason))
 
 
 def _history_period(days=1, point_id=None):
@@ -371,7 +377,8 @@ def _history_period(days=1, point_id=None):
             pass
         out.append({"closed_at": r["closed_at"], "address": r["address"],
                     "outcome": r["outcome"], "courier": r["courier"] or "",
-                    "cycle_min": cycle_min, "deadline": r["deadline"] or ""})
+                    "cycle_min": cycle_min, "deadline": r["deadline"] or "",
+                    "reason": r["reason"] or ""})
     summary = {"delivered": sum(1 for r in out if r["outcome"] == "delivered"),
                "cancelled": sum(1 for r in out if r["outcome"] == "cancelled"),
                "avg_cycle_min": round(sum(cycles) / len(cycles)) if cycles else None}
@@ -444,11 +451,12 @@ def _speed_current_kmh(pos, now):
         if max(a.get("acc") or 0, b.get("acc") or 0) > _SPEED_MAX_ACC_M:
             continue
         m = haversine_km(a, b) * ROAD_FACTOR * 1000.0
-        if m < _SPEED_SEG_MIN_M:
-            continue  # дрожь — не движение, но и не выброс
         kmh = m / 1000.0 / (dt / 3600.0)
         if kmh > 90.0:
             continue  # GPS-прыжок
+        if m < 15.0 and kmh < 5.0:
+            t_sum += dt  # стоит на месте: время идёт, метры — нет
+            continue
         m_sum += m
         t_sum += dt
     return round(m_sum / 1000.0 / (t_sum / 3600.0), 1) if t_sum else 0.0
@@ -1619,6 +1627,46 @@ def _tg_send(chat_id, text):
         log.warning("tg sendMessage: %s", e)
 
 
+def _tg_send_kb(chat_id, text, buttons):
+    """Сообщение с инлайн-кнопками. buttons = [[{text, callback_data}, ...], ...].
+    Возвращает message_id или None (не отправилось)."""
+    try:
+        r = requests.post(_tg_api("sendMessage"),
+                          json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                                "reply_markup": {"inline_keyboard": buttons}}, timeout=5)
+        data = r.json()
+        if data.get("ok"):
+            return data["result"]["message_id"]
+        log.warning("tg sendMessage kb: %s", data.get("description"))
+    except (requests.RequestException, ValueError, KeyError) as e:
+        log.warning("tg sendMessage kb: %s", e)
+    return None
+
+
+def _tg_edit_msg(chat_id, message_id, text, buttons=None):
+    """Правка сообщения бота (смена текста/кнопок). Ошибки молча в лог."""
+    payload = {"chat_id": chat_id, "message_id": message_id,
+               "text": text, "parse_mode": "HTML"}
+    if buttons is not None:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+    try:
+        requests.post(_tg_api("editMessageText"), json=payload, timeout=5)
+    except requests.RequestException as e:
+        log.warning("tg editMessageText: %s", e)
+
+
+def _tg_answer_cb(callback_id, text=""):
+    """Ответ на нажатие кнопки (закрывает «часики» у курьера)."""
+    try:
+        requests.post(_tg_api("answerCallbackQuery"),
+                      json={"callback_query_id": callback_id, "text": text}, timeout=5)
+    except requests.RequestException as e:
+        log.warning("tg answerCallbackQuery: %s", e)
+
+
+_BOT_ASK_AFTER_S = 30   # столько секунд курьер стоит у адреса, прежде чем бот спросит
+
+
 TG_GEO_FRESH = 600      # гео свежая для расчётов <= 10 мин
 TG_GEO_AT_PLACE = 0.15  # ближе 150 м = «на месте» (депо/заказ)
 _LOAD_DWELL_S = 120     # столько нужно простоя у точки, чтобы считать выдачу состоявшейся
@@ -1683,6 +1731,7 @@ def _deliver_track(c, pos, now=None):
     for k in list(st):  # закрытые диспетчером записи чистим
         if k not in alive:
             st.pop(k, None)
+            STATE["tg_ask"].get(chat, {}).pop(k, None)
     if not out_orders:
         STATE["tg_deliv"].pop(chat, None)
         return
@@ -1695,10 +1744,29 @@ def _deliver_track(c, pos, now=None):
             continue
         if haversine_km(pos, o) <= TG_GEO_AT_PLACE:
             rec["since"] = rec.get("since") or now
+            # бот спрашивает курьера «доставлен?» — один раз за подъезд
+            if (now - rec["since"] >= _BOT_ASK_AFTER_S and not rec.get("asked")
+                    and o["id"] not in STATE["tg_ask"].get(chat, {})):
+                rec["asked"] = True
+                mid = _tg_send_kb(
+                    chat,
+                    f"🛍 Кажется, заказ по адресу <b>{_esc(o.get('address') or '')}</b> "
+                    "доставлен. Это так?",
+                    [[{"text": "✅ Доставил", "callback_data": f"dlv:{o['id']}:y"}],
+                     [{"text": "❌ Нет", "callback_data": f"dlv:{o['id']}:n"}],
+                     [{"text": "🚫 Заказ отменён",
+                       "callback_data": f"dlv:{o['id']}:ref"}]])
+                if mid is not None or not CFG["tg_poll"]:
+                    STATE["tg_ask"].setdefault(chat, {})[o["id"]] = {
+                        "msg": mid or 0, "stage": "ask"}
+                    log.info("bot ask: %s у «%s» — спросили «доставлен?»",
+                             c.get("name"), o.get("address"))
+                    _ev("bot", f"спросил {c.get('name')}: «{o.get('address')}» — доставлен?")
             if now - rec["since"] >= _DELIVER_DWELL_S:
                 rec["at"] = now
                 log.info("deliver tracked: %s был у адреса «%s» — из расчёта возврата",
                          c.get("name"), o.get("address"))
+                _ev("sys", f"{c.get('name')} был у адреса «{o.get('address')}»")
                 _bump()
         else:
             rec.pop("since", None)  # проехал мимо — не считается
@@ -1711,9 +1779,13 @@ _BACK_DWELL_S = 120    # простой у точки после закрыти�
 
 def _auto_status_apply(c, new_status):
     """Перевод статуса курьера по гео: БД, сброс его маршрутов, пинок подписчикам."""
+    was = c.get("status")
     c["status"] = new_status
     _persist_couriers()
     _invalidate_plan(courier_id=c["id"])
+    if was != new_status:
+        _ev("sys", f"{c['name']}: " + ("уехал в путь" if new_status == "away"
+                                       else "вернулся на базу"))
     _bump()
 
 
@@ -1825,8 +1897,142 @@ def _courier_geo(c, depot, now=None):
     return g
 
 
+def _flip_return_route(courier_id):
+    """Все заказы развозки закрыты: разворачиваем трассу — курьер едет домой
+    по улицам, карта рисует возврат (ret_geom вместо out_geom)."""
+    c = next((x for x in STATE["couriers"] if x["id"] == courier_id), None)
+    if c and c.get("out_geom") and not any(
+            o.get("assigned") == courier_id and o.get("status") == "out"
+            for o in STATE["orders"]):
+        c["ret_geom"] = list(reversed(c["out_geom"]))
+        c.pop("out_geom", None)
+
+
+def _bot_close_delivered(oid, outcome="delivered", reason=""):
+    """Закрыть заказ по подтверждению КУРЬЕРА (без сессии): доставлен или
+    отменён (с причиной из диалога бота).
+
+    Тот же след, что у ручного закрытия диспетчером: архив, снятие из
+    развозки, разворот трассы на возврат, инвалидация плана.
+    """
+    order = next((o for o in STATE["orders"] if o["id"] == oid), None)
+    if not order or (order.get("status") or "ready") != "out":
+        return False, ""
+    cid = order.get("assigned") or ""
+    c = next((x for x in STATE["couriers"] if x["id"] == cid), None)
+    _archive_order(order, outcome, c["name"] if c else cid, cid, reason=reason)
+    STATE["orders"] = [o for o in STATE["orders"] if o["id"] != oid]
+    _flip_return_route(cid)
+    _persist_orders()
+    _invalidate_plan(drop_plan=True, pid=_obj_point(order))
+    _bump()
+    log.info("bot confirm: заказ %s (%s) закрыт курьером %s (%s)",
+             oid, order.get("address"), c.get("name") if c else cid, outcome)
+    who = c.get("name") if c else cid
+    _ev("bot", (f"отменил «{order.get('address')}» — {who}, причина: {reason}"
+                if outcome == "cancelled" else
+                f"закрыл «{order.get('address')}» — {who} подтвердил"))
+    return True, who
+
+
+# Причины отмены — по частоте (чаще всего в начале, «Другое» всегда последним)
+_CANCEL_REASONS = [
+    "Долгое ожидание",
+    "Человек не отвечает",
+    "Просто отказ",
+    "Неправильный заказ",
+    "Плохое качество товара",
+    "Не тот адрес",
+    "Другое",
+]
+
+
+def _tg_callback(cb):
+    """Нажатие инлайн-кнопки курьером: «доставил?» → «точно?» → закрытие."""
+    data = cb.get("data") or ""
+    cbid = cb.get("id") or ""
+    msg = cb.get("message") or {}
+    chat = str((msg.get("chat") or {}).get("id") or "")
+    if not data.startswith("dlv:"):
+        _tg_answer_cb(cbid)
+        return
+    parts = data.split(":", 2)
+    if len(parts) < 3 or not parts[1]:
+        _tg_answer_cb(cbid, "Кнопка не распознана")
+        return
+    _, oid, act = parts
+    pend = STATE["tg_ask"].get(chat, {}).get(oid)
+    order = next((o for o in STATE["orders"] if o["id"] == oid), None)
+    courier = next((c for c in STATE["couriers"]
+                    if (c.get("tg_chat_id") or "") == chat), None)
+    if not pend or not order or not courier or order.get("assigned") != courier.get("id"):
+        if pend:
+            _tg_edit_msg(chat, pend["msg"],
+                         "Этот вопрос уже неактуален — заказ закрыт диспетчером.")
+            STATE["tg_ask"].get(chat, {}).pop(oid, None)
+        _tg_answer_cb(cbid, "Уже неактуально")
+        return
+    addr = _esc(order.get("address") or "")
+    if act == "y" and pend["stage"] == "ask":
+        pend["stage"] = "confirm"
+        _tg_edit_msg(chat, pend["msg"], f"Точно доставлен? Заказ: <b>{addr}</b>",
+                     [[{"text": "✅ Подтвердить", "callback_data": f"dlv:{oid}:ok"}],
+                      [{"text": "↩️ Отменить", "callback_data": f"dlv:{oid}:no"}]])
+        _tg_answer_cb(cbid)
+    elif act == "ref" and pend["stage"] == "ask":
+        pend["stage"] = "refconfirm"
+        _tg_edit_msg(chat, pend["msg"],
+                     f"Точно отменяем? Заказ: <b>{addr}</b>",
+                     [[{"text": "✅ Да, отменяем", "callback_data": f"dlv:{oid}:refyes"}],
+                      [{"text": "↩️ Назад", "callback_data": f"dlv:{oid}:no"}]])
+        _tg_answer_cb(cbid)
+    elif act == "refyes" and pend["stage"] == "refconfirm":
+        pend["stage"] = "reason"
+        _tg_edit_msg(chat, pend["msg"],
+                     f"Причина отмены: <b>{addr}</b>",
+                     [[{"text": t, "callback_data": f"dlv:{oid}:r:{i}"}]
+                      for i, t in enumerate(_CANCEL_REASONS)])
+        _tg_answer_cb(cbid)
+    elif act.startswith("r:") and pend["stage"] == "reason":
+        try:
+            reason = _CANCEL_REASONS[int(act[2:])]
+        except (IndexError, ValueError):
+            reason = "Другое"
+        ok, name = _bot_close_delivered(oid, outcome="cancelled", reason=reason)
+        STATE["tg_ask"].get(chat, {}).pop(oid, None)
+        if ok:
+            _tg_edit_msg(chat, pend["msg"],
+                         f"🗑 Записано: <b>{addr}</b> — заказ отменён.\n"
+                         f"Причина: <b>{_esc(reason)}</b>")
+            _tg_answer_cb(cbid, "Заказ отменён ✓")
+        else:
+            _tg_edit_msg(chat, pend["msg"], "Не получилось закрыть — уже неактуален.")
+            _tg_answer_cb(cbid, "Уже неактуально")
+    elif act == "ok" and pend["stage"] == "confirm":
+        ok, name = _bot_close_delivered(oid)
+        STATE["tg_ask"].get(chat, {}).pop(oid, None)
+        if ok:
+            _tg_edit_msg(chat, pend["msg"],
+                         f"✅ Записано: <b>{addr}</b> доставлен. Спасибо!")
+            _tg_answer_cb(cbid, "Заказ закрыт ✓")
+        else:
+            _tg_edit_msg(chat, pend["msg"], "Не получилось закрыть — уже неактуален.")
+            _tg_answer_cb(cbid, "Уже неактуально")
+    else:  # «нет» или «отменить» — заказ остаётся в развозке
+        STATE["tg_ask"].get(chat, {}).pop(oid, None)
+        _tg_edit_msg(chat, pend["msg"],
+                     f"Понял: <b>{addr}</b> ещё в развозке. "
+                     "Закроет диспетчер или спросим позже.")
+        _tg_answer_cb(cbid)
+        _ev("cour", f"{courier['name']}: «{order.get('address') or oid}» ещё в развозке")
+
+
 def _tg_handle_update(u):
-    """Один апдейт от Telegram: текст (/start) или геолокация (в т.ч. live)."""
+    """Один апдейт от Telegram: текст (/start), геолокация или кнопка."""
+    cb = u.get("callback_query")
+    if cb:
+        _tg_callback(cb)
+        return
     msg = u.get("message") or u.get("edited_message") or {}
     chat_id = str((msg.get("chat") or {}).get("id") or "")
     if not chat_id:
@@ -1902,7 +2108,8 @@ def _tg_poll_loop():
             r = requests.get(
                 _tg_api("getUpdates"),
                 params={"offset": STATE["tg_offset"], "timeout": 25,
-                        "allowed_updates": json.dumps(["message", "edited_message"])},
+                        "allowed_updates": json.dumps(
+                            ["message", "edited_message", "callback_query"])},
                 timeout=30)
             data = r.json()
             if not data.get("ok"):
@@ -1944,6 +2151,14 @@ def _tg_start_polling():
     threading.Thread(target=_tg_poll_loop, daemon=True).start()
 
 
+def _ev(actor, text):
+    """Лента активности в UI: bot=бот, disp=диспетчер, cour=курьер, sys=система."""
+    STATE["events"].append({"t": int(time.time()), "actor": actor,
+                            "text": str(text)[:200]})
+    del STATE["events"][:-60]  # храним только свежие
+    _bump()
+
+
 def _payload():
     """Ответ после мутации: состояние + квота ORS + счётчики дня + текущий пользователь."""
     me = _me()
@@ -1952,6 +2167,7 @@ def _payload():
     couriers = []
     for c in STATE["couriers"]:
         cc = dict(c)
+        home = _home_point(c)
         pos = STATE["tg_pos"].get(c.get("tg_chat_id") or "")
         if pos and now - pos["ts"] < TG_POS_TTL:
             cc["pos"] = {k: v for k, v in pos.items() if k != "hist"}
@@ -1961,9 +2177,32 @@ def _payload():
         avg_kmh, avg_src = _courier_speed(c)
         cc["avg_kmh"] = round(avg_kmh, 1)
         cc["speed_src"] = avg_src
-        geo = _courier_geo(c, _home_point(c), now)
+        geo = _courier_geo(c, home, now)
         if geo:
             cc["geo"] = geo
+        # активная развозка: выданные заказы в порядке выдачи (маршрут мог
+        # уже уйти из плана — карта рисует его пунктиром по этим данным)
+        outs = sorted((o for o in STATE["orders"]
+                       if o.get("assigned") == c["id"]
+                       and (o.get("status") or "ready") == "out"),
+                      key=lambda o: (o.get("out_no", float("inf")),
+                                     o.get("out_at") or "", o["id"]))
+        if outs:
+            cc["out_route"] = {
+                # [lat, lng, order_id]: id нужен фронту, чтобы красить точки
+                # доставки выбранного курьера в его цвет
+                "stops": [[o["lat"], o["lng"], o["id"]] for o in outs],
+                "home": {"lat": home["lat"], "lng": home["lng"]} if home else None,
+            }
+            if c.get("out_geom"):
+                cc["out_route"]["geom"] = c["out_geom"]
+        elif c.get("status") == "away" and c.get("ret_geom"):
+            # возврат на базу: обратная трасса без точек доставки
+            cc["out_route"] = {
+                "stops": [],
+                "home": {"lat": home["lat"], "lng": home["lng"]} if home else None,
+                "geom": c["ret_geom"],
+            }
         couriers.append(cc)
     # курьеры видны всем депо, но свои — первыми (стабильно по исходному порядку)
     couriers.sort(key=lambda cc: 0 if _obj_point(cc) == myp else 1)
@@ -2237,6 +2476,29 @@ def sim_geo():
     return jsonify({"ok": True})
 
 
+@app.post("/api/sim/tgcb")
+def sim_tgcb():
+    """Симулятор кнопок бота: «курьер нажал» инлайн-кнопку (для демо без TG).
+
+    Только администратор. Пример: {"chat_id": 9100000, "data": "dlv:<oid>:y"}.
+    Проходит через тот же _tg_callback, что и настоящие нажатия.
+    """
+    me = _me()
+    if not me or not me["is_admin"]:
+        return jsonify({"error": "Только администратор"}), 403
+    data = _json()
+    try:
+        chat_id = str(int(str(data.get("chat_id"))))
+        cb_data = str(data["data"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "Нужны chat_id (числом) и data"}), 400
+    _tg_callback({"id": f"sim{int(time.time() * 1000) % 10 ** 9}",
+                  "from": {"username": str(data.get("login") or "sim")},
+                  "message": {"chat": {"id": int(chat_id)}, "message_id": 0},
+                  "data": cb_data})
+    return jsonify({"ok": True})
+
+
 @app.delete("/api/couriers/<cid>")
 def del_courier(cid):
     courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
@@ -2287,6 +2549,8 @@ def add_order():
     })
     _persist_orders()
     _invalidate_plan()
+    _ev("disp", "добавил заказ «" +
+        ((data.get("address") or "").strip() or f"без адреса ({oid[:4]})") + "»")
     return _payload()
 
 
@@ -2333,9 +2597,14 @@ def del_order(oid):
                     break
         opid = _obj_point(order)
         _archive_order(order, outcome, courier_name, courier_id)
+        _ev("disp", ("закрыл как доставленный «" if outcome == "delivered"
+                     else "отменил «") + (order.get("address") or oid) + "»")
     else:
         opid = None
     STATE["orders"] = [o for o in STATE["orders"] if o["id"] != oid]
+    # доставлен последний заказ развозки — курьер едет домой по улицам
+    if outcome == "delivered" and courier_id:
+        _flip_return_route(courier_id)
     _persist_orders()
     _invalidate_plan(drop_plan=True, pid=opid)
     return _payload()
@@ -2375,6 +2644,36 @@ def _patch_plan_after_assign(oids, cid=None):
         return False
     oidset = set(oids)
     touched = set()
+    # порядок выданных остановок — в сами заказы, а дорожную геометрию выданной
+    # части трипа (до последней выданной остановки) сохраняем курьеру: по ней
+    # карта рисует активную развозку по дорогам, когда маршрут ушёл из плана
+    order_by_id = {o["id"]: o for o in STATE["orders"]}
+    k = 0
+    out_geom = []
+    if courier:
+        courier.pop("ret_geom", None)  # новая выдача отменяет возврат
+        for r in plan["routes"]:
+            if r["courier_id"] != courier["id"]:
+                continue
+            for tr in r.get("trips", []):
+                geom = tr.get("geometry") or []
+                last_idx = -1
+                for s in tr["stops"]:
+                    if s["order_id"] not in oidset:
+                        continue
+                    o = order_by_id.get(s["order_id"])
+                    if o is not None:
+                        o["out_no"] = k
+                        k += 1
+                    if geom:
+                        gi = min(range(len(geom)),
+                                 key=lambda i: (geom[i][0] - s["lat"]) ** 2
+                                               + (geom[i][1] - s["lng"]) ** 2)
+                        last_idx = max(last_idx, gi)
+                if last_idx >= 0:
+                    out_geom.extend(geom[:last_idx + 1])
+    if out_geom:
+        courier["out_geom"] = (courier.get("out_geom") or []) + out_geom
     for r in plan["routes"]:
         for tr in r.get("trips", []):
             before = len(tr["stops"])
@@ -2526,6 +2825,7 @@ def assign_orders():
     if not _patch_plan_after_assign(oids, cid=cid):
         _invalidate_plan(drop_plan=True, pid=courier_pid)
     log.info("assign: %d заказ(ов) -> %s", given, courier["name"])
+    _ev("disp", f"выдал {given} заказ(ов) → {courier['name']}")
     return _payload()
 
 
@@ -2544,6 +2844,7 @@ def return_order(oid):
     order["out_at"] = ""
     _persist_orders()
     _invalidate_plan(pid=_obj_point(order))
+    _ev("disp", f"вернул «{order.get('address') or oid}» в очередь")
     return _payload()
 
 
@@ -2562,10 +2863,14 @@ def courier_returned(cid):
                        if not (o.get("assigned") == cid and o.get("status") == "out")]
     courier["status"] = "base"
     courier["back_min"] = 0
+    courier.pop("out_geom", None)  # развозка завершена — трассу больше не рисуем
+    courier.pop("ret_geom", None)
     _persist_orders()
     _persist_couriers()
     _invalidate_plan(courier_id=cid)
     log.info("courier returned: %s, доставлено %d", courier["name"], delivered)
+    _ev("cour", f"{courier['name']} вернулся на базу" +
+        (f" — доставлено {delivered}" if delivered else ""))
     return _payload()
 
 
@@ -2639,6 +2944,9 @@ def solve():
         log.warning("solve failed: %s", e)
         return jsonify({"error": str(e)}), 400
     _persist_meta()
+    counts = ", ".join(f'{r["courier_name"]}: {r["count"]}'
+                       for r in plan["routes"]) or "нечего везти"
+    _ev("disp", f"рассчитал развозку — {counts}")
     return _payload()
 
 
@@ -3013,7 +3321,7 @@ def notify_tg():
             f"https://api.telegram.org/bot{CFG['tg_bot_token']}/sendMessage",
             json={"chat_id": chat, "text": text}, timeout=10)
         data = resp.json()
-    except requests.RequestException as e:
+    except (requests.RequestException, ValueError) as e:
         return jsonify({"error": f"Telegram недоступен: {e}"}), 502
     if not data.get("ok"):
         return jsonify({"error": f"Telegram: {data.get('description', 'ошибка')}"}), 400
