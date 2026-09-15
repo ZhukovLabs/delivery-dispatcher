@@ -3,9 +3,9 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, fmtCoords, type AppState, type Courier, type Order, type Route, type Advice } from "@/lib/api";
+import { api, fmtCoords, fmtAge, type AppState, type Courier, type Order, type Route, type Advice } from "@/lib/api";
 import GeoInput, { type GeoItem } from "./GeoInput";
-import { ArrowRight, Bike, ChartColumn, Check, ChevronDown, CircleHelp, ClipboardCopy, Clock, Download, FileSpreadsheet, FileText, Flame, Gauge, Hand, Hourglass, House, Link2, Loader2, LogOut, MapPin, Moon, Package, PackageOpen, Paperclip, Pause, Pencil, Plus, RefreshCw, Route as RouteIcon, Scale, Send, Settings, ShieldCheck, SlidersHorizontal, Sun, Timer, Trash2, TriangleAlert, Undo2, Unlink, User, Users, X, Zap } from "lucide-react";
+import { ArrowRight, Bike, ChartColumn, Check, ChevronDown, CircleHelp, ClipboardCopy, Clock, Copy, Download, FileSpreadsheet, FileText, Flame, Gauge, Hand, Hourglass, House, Link2, Loader2, LogOut, MapPin, Moon, Package, PackageOpen, Paperclip, Pause, Pencil, Plus, RefreshCw, Route as RouteIcon, Scale, Send, Settings, ShieldCheck, SlidersHorizontal, Sun, Timer, Trash2, TriangleAlert, Undo2, Unlink, User, Users, X, Zap } from "lucide-react";
 
 const MapView = dynamic(() => import("./MapView"), {
   ssr: false,
@@ -79,7 +79,6 @@ function declName(n: string) {
   if (n.endsWith("я")) return n.slice(0, -1) + "и";  if (n.endsWith("а")) return n.slice(0, -1) + "ы";
   return n + "а";
 }
-const posAgeMin = (ts: number) => Math.max(0, Math.round((Date.now() - ts * 1000) / 60000));
 const shortAddr = (s: string) =>
   s.replace(/,?\s*Гомель$/i, "").replace(/\s*сельский Совет$/i, "").replace(/(^|\s)улица\s/i, "$1").trim();
 
@@ -205,10 +204,25 @@ export default function Console() {
     void api("/api/workpoint", "POST", { point_id: workPoint })
       .catch(() => { try { localStorage.removeItem("workPoint"); } catch {} });
   }, [workPoint, st?.points]);
+  const [wpSwitching, setWpSwitching] = useState(false);
   const onWorkPoint = (pid: string) => {
+    if (pid === workPoint || wpSwitching) return;
+    setWpSwitching(true);
     setWorkPoint(pid);
     wpSynced.current = false;
-    void api("/api/workpoint", "POST", { point_id: pid }).catch(() => {});
+    setHoverOid(null);   // подсветка/балун старого депо больше не актуальны
+    setCardHl(null);
+    void (async () => {
+      try {
+        await api("/api/workpoint", "POST", { point_id: pid });
+        wpSynced.current = true; // эффект выше не должен постить повторно
+      } catch { /* точка могла стать мёртвой — эффекто выше подменит и повторит */ }
+      // заказы, план и счётчики приходят из /api/state уже для новой точки —
+      // без рефетча UI показывал бы старое депо (#1/#7)
+      await qc.invalidateQueries({ queryKey: ["state"] });
+      setWpSwitching(false);
+      setFitSignal(s => s + 1); // пересобрать кадр карты под новое депо
+    })();
   };
   const curPoint = st?.points?.find(p => p.id === workPoint) || st?.points?.[0] || null;
 
@@ -538,6 +552,14 @@ export default function Console() {
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
   const readyOrders = st.orders.filter(o => (o.status || "ready") === "ready");
   const outOrders = st.orders.filter(o => o.status === "out");
+  // дубли адресов: два диспетчера могут добавить один адрес одновременно (#3)
+  const addrKey = (a: string) => a.trim().toLowerCase().replace(/\s+/g, " ").replace(/,?\s*гомель$/i, "");
+  const dupOids = useMemo(() => {
+    const n = new Map<string, number>();
+    st.orders.forEach(o => { const k = addrKey(o.address); n.set(k, (n.get(k) || 0) + 1); });
+    return new Set(st.orders.filter(o => (n.get(addrKey(o.address)) || 0) > 1).map(o => o.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [st.orders]);
   const carrying: Record<string, number> = {};
   st.orders.forEach(o => { if (o.status === "out" && o.assigned) carrying[o.assigned] = (carrying[o.assigned] || 0) + 1; });
   const courName = (id: string) => st.couriers.find(c => c.id === id)?.name || "";
@@ -764,7 +786,7 @@ export default function Console() {
                     return (
                       <div
                         key={o.id}
-                        className={`ent ocard${o.prio ? " prio" : ""}${late > 0 ? " burning" : ""}${cardHl === o.id ? " hl" : ""}${pinning === o.id ? " adding" : ""}`}
+                        className={`ent ocard${o.prio ? " prio" : ""}${late > 0 ? " burning" : ""}${cardHl === o.id ? " hl" : ""}${pinning === o.id ? " adding" : ""}${dupOids.has(o.id) ? " dup" : ""}`}
                         data-oid={o.id}
                         draggable={pinning !== o.id}
                         title={`${o.address} · перетащите на курьера, чтобы выдать сразу`}
@@ -781,6 +803,7 @@ export default function Console() {
                           {(st.points?.length || 0) > 1 && o.point_id && st.points?.some(p => p.id === o.point_id) && (
                             <span className="opt-tag" title="Место выдачи заказа">{st.points.find(p => p.id === o.point_id)!.name}</span>
                           )}
+                          {dupOids.has(o.id) && <span className="dup-chip" title="Такой адрес уже есть в списке — проверьте, не дубль ли"><Copy size={11} /> дубль</span>}
                           {o.deadline && <span className="dl-chip" title="Обещали к этому времени"><Timer size={11} /> {o.deadline}</span>}
                           {late > 0
                             ? <span className="burn-chip" title="По текущему плану к обещанному времени не успеваем"><Flame size={11} /> опоздание ~{late} мин</span>
@@ -891,7 +914,7 @@ export default function Console() {
                     const foreign = (st.points || []).length > 1 && c.point_id !== st.my_point;
                     return (
                       <div key={c.id}
-                        className={"ent crow" + (dragOverCourier === c.id ? " drop-hint" : "")}
+                        className={"ent crow" + (foreign ? " dim" : "") + (dragOverCourier === c.id ? " drop-hint" : "")}
                         draggable={!foreign}
                         title={foreign
                           ? `${c.name}: курьер другого депо — виден только для отслеживания`
@@ -1017,7 +1040,7 @@ export default function Console() {
                               : <button className="tg-btn" title="Привязать Telegram-аккаунт курьера" onClick={() => setBindFor(c)}><Link2 size={11} /> Telegram</button>}
                             {c.pos && (
                               <span className="tg-pos" title={`Геолокация обновлена${c.pos.live ? " (live-трансляция)" : ""}`}>
-                                <MapPin size={11} /> {posAgeMin(c.pos.ts)} назад{c.pos.live ? " · live" : ""}
+                                <MapPin size={11} /> {fmtAge(c.pos.ts)} назад{c.pos.live ? " · live" : ""}
                               </span>
                             )}
                           </div>
@@ -1054,7 +1077,13 @@ export default function Console() {
             fitSignal={fitSignal}
             hoverOid={hoverOid}
             onMarkerClick={onMarkerClick}
+            dupOids={dupOids}
           />
+          {wpSwitching && (
+            <div className="map-loading" role="status" aria-live="polite">
+              <Loader2 size={18} className="spin" /> Синхронизация места работы…
+            </div>
+          )}
           <button className="fit-btn" title="Показать все точки в кадре"
             style={{ position: "absolute", right: 12, bottom: 12, zIndex: 800 }}
             onClick={() => setFitSignal(s => s + 1)}>⤢</button>
@@ -1304,7 +1333,7 @@ function BindModal({ courier, bot, seen, onDone, onClose }: {
                   onClick={() => void bind(u.chat_id, u.login)}>
                   <span className="bind-user-l">
                     <b>@{u.login}</b>
-                    <small>ID {u.chat_id} · {posAgeMin(u.ts) < 1 ? "только что" : posAgeMin(u.ts) + " мин назад"}</small>
+                    <small>ID {u.chat_id} · {fmtAge(u.ts)} назад</small>
                   </span>
                   <ArrowRight size={14} />
                 </button>

@@ -75,3 +75,13 @@ export async function api<T = AppState>(path: string, method = "GET", body?: unk
 
 export const fmtCoords = (ll?: { lat: number; lng: number } | null) =>
   ll ? ll.lat.toFixed(5) + ", " + ll.lng.toFixed(5) : "";
+
+/** Возраст метки времени: «25 с», «3 мин», «2 ч 5 мин» (секунды — эпоха). */
+export const fmtAge = (ts: number) => {
+  const s = Math.max(0, Math.round((Date.now() - ts * 1000) / 1000));
+  if (s < 60) return `${s} с`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h} ч ${m % 60} мин` : `${h} ч`;
+};

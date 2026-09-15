@@ -1306,13 +1306,29 @@ def _courier_plan(c):
 
 
 def _touch_online(pt=None):
-    """Отметить активность текущей сессии; pt задаёт её рабочую точку."""
+    """Отметить активность текущей сессии; pt задаёт её рабочую точку.
+
+    Если запись стёрлась (долго висевший long-poll / фоновая вкладка),
+    восстанавливаем её из сессии — иначе диспетчер «пропадал» из онлайн-пробок.
+    """
     sid = session.get("sid")
     if not sid:
         return
     with _ONLINE_LOCK:
         rec = ONLINE.get(sid)
         if rec is None:
+            uid = session.get("uid")
+            if not uid:
+                return
+            with _db_lock, _db() as c:
+                r = c.execute("SELECT email FROM users WHERE id = ?", (uid,)).fetchone()
+            if not r:
+                return
+            ONLINE[sid] = {
+                "uid": uid, "email": r["email"],
+                "point_id": (pt if pt is not None else session.get("point"))
+                or (STATE.get("points") or [{}])[0].get("id") or "",
+                "last": time.time()}
             return
         rec["last"] = time.time()
         if pt is not None:
