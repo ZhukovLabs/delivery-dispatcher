@@ -28,8 +28,8 @@ def _now() -> datetime:
 from logging.handlers import RotatingFileHandler
 
 import requests
-from flask import (Flask, after_this_request, jsonify, redirect,
-                   render_template, request, send_file, session, url_for)
+from flask import (Flask, after_this_request, jsonify,
+                   request, send_file, session)
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1239,9 +1239,8 @@ def _drop_online():
 @app.post("/login")
 def login():
     data = request.get_json(silent=True) or {}
-    wants_json = request.accept_mimetypes.best == "application/json"
-    email = (request.form.get("email") or data.get("email") or "").strip().lower()
-    pwd = request.form.get("password") or data.get("password") or ""
+    email = (data.get("email") or "").strip().lower()
+    pwd = data.get("password") or ""
     ip = request.remote_addr or "?"
     now = time.time()
     fails = _LOGIN_FAILS.get(ip)
@@ -1250,10 +1249,7 @@ def login():
     if fails and fails[1] > now:
         wait = int(fails[1] - now) + 1
         log.warning("login locked: %s (%ds left)", ip, wait)
-        if wants_json:
-            return jsonify(error=f"Слишком много попыток входа. Подождите {wait} с"), 429
-        return render_template("login.html",
-                               error=f"Слишком много попыток входа. Подождите {wait} с"), 429
+        return jsonify(error=f"Слишком много попыток входа. Подождите {wait} с"), 429
     with _db_lock, _db() as c:
         r = c.execute("SELECT id, pwd_hash FROM users WHERE email = ?", (email,)).fetchone()
     if r and _verify_pwd(pwd, r["pwd_hash"]):
@@ -1266,32 +1262,12 @@ def login():
                                       "last": time.time()}
         _LOGIN_FAILS.pop(ip, None)
         log.info("login ok: %s", email)
-        if wants_json:
-            return jsonify(ok=True)
-        return redirect(url_for("index"))
+        return jsonify(ok=True)
     time.sleep(0.3)  # тормозим перебор паролей
     n = (fails[0] + 1) if fails else 1
     _LOGIN_FAILS[ip] = [n, now + _LOGIN_LOCK_SEC] if n >= _LOGIN_MAX_FAILS else [n, 0]
     log.warning("login failed: %s (attempt %d from %s)", email or "?", n, ip)
-    if wants_json:
-        return jsonify(error="Неверный email или пароль"), 401
-    return render_template("login.html", error="Неверный email или пароль"), 401
-
-
-@app.get("/login")
-def login_page():
-    if _me():
-        return redirect(url_for("index"))
-    return render_template("login.html", error=None)
-
-
-@app.get("/logout")
-def logout():
-    _drop_online()
-    session.clear()
-    if request.accept_mimetypes.best == "application/json":
-        return jsonify(ok=True)
-    return redirect(url_for("login_page"))
+    return jsonify(error="Неверный email или пароль"), 401
 
 
 @app.post("/api/login")
@@ -1365,15 +1341,12 @@ def _bump():
 
 @app.before_request
 def _guard():
-    if request.path in ("/login", "/api/login", "/health", "/favicon.ico") \
-            or request.path.startswith("/static/"):
+    if request.path in ("/login", "/api/login", "/health", "/"):
         return None
     if _me():
         _touch_online()  # любое действие админа продлевает его «онлайн»
         return None
-    if request.path.startswith("/api/"):
-        return jsonify({"error": "Требуется вход"}), 401
-    return redirect(url_for("login_page"))
+    return jsonify({"error": "Требуется вход"}), 401
 
 
 # ---------- управление пользователями (только админ) ----------
@@ -1496,22 +1469,11 @@ def _unhandled(e):
     return jsonify({"error": f"Внутренняя ошибка: {e}"}), 500
 
 
-# ---------- страницы ----------
+# ---------- api ----------
 
 @app.get("/")
-def index():
-    return render_template("index.html")
-
-
-@app.get("/favicon.ico")
-def favicon():
-    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
-           '<circle cx="16" cy="16" r="15" fill="#e8482b"/>'
-           '<text x="16" y="22" font-size="17" text-anchor="middle">🛵</text></svg>')
-    return svg, 200, {"Content-Type": "image/svg+xml"}
-
-
-# ---------- api ----------
+def root():
+    return jsonify(service="dispatcher-api", time=_now().isoformat())
 
 def _json():
     """Тело запроса как dict. Битый/пустой JSON => {} (валидацию делают ручки)."""
@@ -2779,14 +2741,18 @@ def stats_week():
                     "on_time": on_time, "on_time_total": on_time_total})
 
 
-@app.get("/report/day")
-def report_day():
-    """Отчёт дня для печати (Ctrl+P -> сохранить в PDF)."""
+@app.get("/api/report/day")
+def api_report_day():
+    """Данные отчёта дня (печатную версию рендерит фронт)."""
     hist = _history_period(1)
-    return render_template("report_day.html", hist=hist,
-                           plan=STATE.get("plan") or {},
-                           today=_now().strftime("%d.%m.%Y"),
-                           now=_now().strftime("%H:%M"))
+    plan = STATE.get("plan") or {}
+    routes = [{"courier_name": r.get("courier_name"), "status": r.get("status"),
+               "stops": [s.get("address") for s in (r.get("stops") or [])]}
+              for r in (plan.get("routes") or [])]
+    return jsonify({"rows": hist["rows"], "summary": hist.get("summary") or {},
+                    "routes": routes,
+                    "today": _now().strftime("%d.%m.%Y"),
+                    "now": _now().strftime("%H:%M")})
 
 
 def _strip_street_type(s):
