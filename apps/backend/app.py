@@ -2178,6 +2178,36 @@ def unbind_courier(cid):
     return jsonify({"error": "Курьер не найден"}), 404
 
 
+@app.post("/api/sim/geo")
+def sim_geo():
+    """Симулятор live-гео: подсунуть поллеру апдейт Telegram от курьера.
+
+    Только администратор. Синтетический апдейт проходит тот же конвейер,
+    что и настоящая геолокация (_tg_handle_update): сглаживание медианой,
+    замер скорости, трекеры выдачи/доставки/авто-статусов, пинок картам.
+    """
+    me = _me()
+    if not me or not me["is_admin"]:
+        return jsonify({"error": "Только администратор"}), 403
+    data = _json()
+    try:
+        chat_id = str(int(str(data.get("chat_id"))))
+        lat, lng = float(data["lat"]), float(data["lng"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "Нужны chat_id (числом), lat, lng"}), 400
+    if not _valid_latlng(lat, lng):
+        return jsonify({"error": "Координаты вне диапазона"}), 400
+    u = {"edited_message": {
+        "chat": {"id": int(chat_id)},
+        "from": {"username": str(data.get("login") or f"sim_{chat_id[-4:]}")},
+        "location": {"latitude": lat, "longitude": lng,
+                     "live_period": 31536000,
+                     "horizontal_accuracy": 12},
+        "date": int(time.time())}}
+    _tg_handle_update(u)
+    return jsonify({"ok": True})
+
+
 @app.delete("/api/couriers/<cid>")
 def del_courier(cid):
     courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
