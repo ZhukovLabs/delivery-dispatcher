@@ -75,10 +75,26 @@ export const API_URL =
     ? "https://zhukovlabs.taila8c324.ts.net:8443"
     : "");
 
+/** Токен REST-сессии: кросс-доменный фронт + браузеры, режущие
+ *  third-party cookie (инкогнито и др.), — cookie не доходит, поэтому
+ *  подписанная сессия из /api/login ходит заголовком Authorization. */
+const TOKEN_KEY = "apiToken";
+export function setApiToken(t: string | null): void {
+  try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch { /* private mode */ }
+}
+export function getApiToken(): string | null {
+  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+}
+
 /** Сырой fetch к API с базой и cookie: для мест, где нужен сам Response
- *  (login проверяет статус, ws-token не должен редиректить на 401). */
+ *  (login проверяет статус, ws-token не должен редиректить на 401).
+ *  Authorization добавляем всегда, когда токен известен — работает там,
+ *  где third-party cookie заблокированы. */
 export function fetchApi(path: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(API_URL + path, { ...init, credentials: "include" });
+  const t = getApiToken();
+  const headers = new Headers(init.headers || {});
+  if (t && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${t}`);
+  return fetch(API_URL + path, { ...init, credentials: "include", headers });
 }
 
 export class NetworkError extends Error {
@@ -109,6 +125,7 @@ export async function api<T = AppState>(path: string, method = "GET", body?: unk
     signal?.removeEventListener("abort", onOuterAbort);
   }
   if (res.status === 401 && typeof window !== "undefined") {
+    setApiToken(null); // токен протух/отозван — не таскать мёртвый по кругу
     window.location.href = "/login";
     throw new Error("Требуется вход");
   }
