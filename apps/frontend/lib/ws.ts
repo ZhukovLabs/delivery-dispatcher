@@ -22,6 +22,23 @@ const WS_URL =
 let socket: Socket | null = null;
 let token: string | null = null;
 
+/* Статус соединения для индикатора в шапке */
+export type WsConnState = "connecting" | "online" | "offline";
+
+let connState: WsConnState = "connecting";
+const connListeners = new Set<(s: WsConnState) => void>();
+
+export function subscribeConn(fn: (s: WsConnState) => void): () => void {
+  connListeners.add(fn);
+  fn(connState);
+  return () => { connListeners.delete(fn); };
+}
+
+function setConn(s: WsConnState): void {
+  connState = s;
+  connListeners.forEach((fn) => fn(s));
+}
+
 export function setWsToken(t: string | null): void {
   token = t ?? null;
 }
@@ -50,7 +67,10 @@ export function getSocket(): Socket {
     transports: ["websocket", "polling"],
     reconnection: true,
   });
+  socket.on("connect", () => setConn("online"));
+  socket.on("disconnect", () => setConn("offline"));
   socket.on("connect_error", (err: Error & { message?: string }) => {
+    setConn("offline");
     // протухший токен (сессия умерла, а cookie ещё жив?) — перевыпустим
     if (/unauthorized|token|auth/i.test(err.message || "")) token = null;
   });
@@ -66,4 +86,5 @@ export function dropSocket(): void {
   socket?.disconnect();
   socket = null;
   token = null;
+  setConn("connecting");
 }

@@ -1,8 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Check, CircleHelp, LogOut, MapPin, Moon, Route as RouteIcon, Settings, Sun, Timer, Undo2, User, X } from "lucide-react";
 import type { AppState } from "@/lib/api";
-import { dropSocket } from "@/lib/ws";
+import { dropSocket, subscribeConn, type WsConnState } from "@/lib/ws";
 
 /* ---------- шапка: бренд, выбор места работы, счётчики дня, отмена/тема/справка/профиль ---------- */
 
@@ -23,12 +24,24 @@ export default function TopBar({ st, workPoint, firstPid, onWorkPoint,
 }) {
   const me: NonNullable<AppState["me"]> = st.me || { id: "", email: "" };
   const today: NonNullable<AppState["today"]> = st.today || {};
+  const [conn, setConn] = useState<WsConnState>("connecting");
+  useEffect(() => subscribeConn(setConn), []);
+  const CONN_META: Record<WsConnState, { cls: string; title: string; label: string }> = {
+    online: { cls: "ws-on", title: "Живая связь с сервером установлена", label: "онлайн" },
+    connecting: { cls: "ws-wait", title: "Подключаемся к серверу…", label: "связь…" },
+    offline: { cls: "ws-off", title: "Нет связи с сервером — переподключаемся", label: "нет связи" },
+  };
+  const cm = CONN_META[conn];
   return (
     <header className="topbar">
       <div className="brand">
         <span className="brand-mark"><RouteIcon size={16} strokeWidth={2.25} /></span>
         <span className="brand-name">Диспетчер доставки</span>
       </div>
+      <span className={`wsdot ${cm.cls}`} role="status" aria-live="polite" title={cm.title}>
+        <span className="wsdot-dot" aria-hidden="true" />
+        {cm.label}
+      </span>
       {(st.points?.length || 0) > 0 && (
         <label className="pp-hsel" title="Точка выдачи, в которой вы работаете: новые заказы попадают к курьерам этой точки">
           <MapPin size={13} />

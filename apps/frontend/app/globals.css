@@ -33,6 +33,16 @@ html.dark .login-card input{background:#141c29;border-color:var(--line2);color:v
 .dchip.ok{color:#8fceaa;border-color:#2b4636}
 .dchip.no{color:#e39a9a;border-color:#4d2f31}
 .topbar .spacer{flex:1}
+
+/* индикатор живой связи (WS) в шапке */
+.wsdot{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;line-height:1;border-radius:99px;padding:4px 10px;background:#1d2839;border:1px solid #293649;color:#9aa7bc;white-space:nowrap}
+.wsdot-dot{width:8px;height:8px;border-radius:50%;background:#566582;flex-shrink:0}
+.wsdot.ws-on{color:#8fceaa;border-color:#2b4636}
+.wsdot.ws-on .wsdot-dot{background:#38c172;box-shadow:0 0 6px rgba(56,193,114,.7)}
+.wsdot.ws-wait .wsdot-dot{background:#e6b450;animation:wsPulse 1s ease-in-out infinite}
+.wsdot.ws-off{color:#e39a9a;border-color:#4d2f31}
+.wsdot.ws-off .wsdot-dot{background:#e8482b;animation:wsPulse 1s ease-in-out infinite}
+@keyframes wsPulse{50%{opacity:.35}}
 .iconbtn{border:none;background:transparent;color:#aab6c9;cursor:pointer;font-size:14px;padding:6px;border-radius:8px;line-height:0;display:inline-flex;align-items:center;justify-content:center}
 .iconbtn:hover{background:#222d42;color:#fff}
 .iconbtn:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
