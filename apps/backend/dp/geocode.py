@@ -21,7 +21,9 @@ from .shims import flaskish, jsonify, request
 
 r = APIRouter()
 
-UA = {"User-Agent": "delivery-dispatcher/1.0 (local admin tool)"}
+UA = {"User-Agent": "delivery-dispatcher/1.0 (local admin tool)",
+      # ключ ограничен по Referer — серверный геокодер шлёт заголовок сам
+      "Referer": "https://barak-dispatcher.vercel.app"}
 GEO_HEDGE_S = 2.0    # столько ждём провайдера, прежде чем подстраховать следующим
 GEO_FINAL_S = 4.0    # максимум ожидания после старта последнего провайдера
 YANDEX_KEY = os.environ.get("YANDEX_GEOCODER_KEY", "")
