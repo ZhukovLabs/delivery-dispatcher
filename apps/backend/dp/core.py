@@ -564,7 +564,7 @@ def load_state():
              "address": "ул. Барыкина 230Б, Гомель",
              "lat": 52.4231538, "lng": 30.9336801},
         ]
-        _persist_state()
+        _persist_meta()
     STATE["depot"] = _depot_view()
     _pt_ids = {p["id"] for p in STATE["points"]}
     _first = STATE["points"][0]["id"]
