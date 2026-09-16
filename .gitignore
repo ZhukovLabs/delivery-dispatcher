@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 .env
 houses_cache.json
+
+.vercel/
+apps/backend/dispatcher.db.bak-*
