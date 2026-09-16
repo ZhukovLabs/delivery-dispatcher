@@ -202,14 +202,16 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   const d = state.depot;
   const pickPts = state.points?.length ? state.points
     : d ? [{ id: "", name: "Основная", address: d.address, lat: d.lat, lng: d.lng }] : [];
-  /* содержимое балуна заказа: адрес → курьер → ETA → радиус простоя →
+  /* содержимое балуна заказа: адрес/заказ → курьер → время прибытия →
      приоритет → дедлайн → опоздание (см. требование к точке доставки) */
   const popupHtml = (p: { address: string; courier?: string; eta?: string;
-                          lateMin?: number; prio?: boolean; deadline?: string;
-                          note?: string }) =>
+                          inMin?: number; lateMin?: number; prio?: boolean;
+                          deadline?: string; note?: string }) =>
     `<b>${esc(p.address)}</b>` +
-    (p.courier ? `<br>🛍 ${esc(p.courier)}` : "") +
-    (p.eta ? `<br>≈${esc(p.eta)}${p.lateMin ? ` · <span style="color:#b3261e">опоздание ~${p.lateMin} мин</span>` : ""}` : "") +
+    (p.courier ? `<br>Курьер: ${esc(p.courier)}` : "") +
+    (p.eta ? `<br>Время прибытия ≈${esc(p.eta)}` +
+      (p.inMin != null ? ` (через ${p.inMin} мин)` : "") +
+      (p.lateMin ? ` · <span style="color:#b3261e">опоздание ~${p.lateMin} мин</span>` : "") : "") +
     (p.prio ? "<br>⭐ приоритетный" : "") +
     (p.deadline ? `<br>⏰ до ${esc(p.deadline)}` : "") +
     (p.note ? `<br>${p.note}` : "");
@@ -241,7 +243,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         color: r.color,
         label: String(k),
         popup: popupHtml({ address: s.address, courier: r.courier_name,
-                           eta: s.eta_clock, lateMin: s.late_min,
+                           eta: s.eta_clock, inMin: s.eta_min, lateMin: s.late_min,
                            prio: s.prio, deadline: s.deadline }),
       };
     }));
@@ -420,6 +422,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         const etaMin = outEtaMin(o, oCour);
         content = popupHtml({ address: o.address, courier: oCour.name,
           eta: etaMin != null ? clockIn(etaMin) : undefined,
+          inMin: etaMin != null ? Math.round(etaMin) : undefined,
           lateMin: etaMin != null ? (lateByDeadline(o.deadline, etaMin) ?? undefined) : undefined,
           prio: o.prio, deadline: o.deadline });
       } else {
