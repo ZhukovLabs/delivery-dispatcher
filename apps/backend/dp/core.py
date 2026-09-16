@@ -943,17 +943,25 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
     orders = [o for o in STATE["orders"]
               if (o.get("status") or "ready") == "ready" and _obj_point(o) == point_id]
     mine = [c for c in STATE["couriers"] if _obj_point(c) == point_id]
+    # курьер с открытыми заказами — в развозке, новые ему не отдаём:
+    # сначала закрыть текущие, вернуться на базу (статус сам станет «base»)
+    busy = {c["id"] for c in STATE["couriers"] if _courier_out_orders(c)}
     active = [c for c in mine
-              if c["status"] == "base" or (include_away and c["status"] == "away")]
+              if c["id"] not in busy
+              and (c["status"] == "base" or (include_away and c["status"] == "away"))]
     helper_ids = {cid for cid in helpers
                   if any(c["id"] == cid for c in STATE["couriers"])}
     couriers = active + [c for c in STATE["couriers"]
-                         if c["id"] in helper_ids and c not in active]
+                         if c["id"] in helper_ids and c not in active
+                         and c["id"] not in busy]
     if not STATE.get("points"):
         raise ValueError("Сначала задайте место выдачи заказов (точку на карте)")
     if not orders:
         raise ValueError("Нет готовых заказов, добавьте хотя бы один")
     if not couriers:
+        if busy:
+            raise ValueError("Все курьеры точки ещё в развозке — дождитесь "
+                             "закрытия заказов (статус сам вернётся на «на базе»)")
         raise ValueError("Нет активных курьеров, добавьте курьера")
 
     def _eff_home(c):
@@ -1620,11 +1628,9 @@ def _auto_status_track(c, pos, now=None):
         STATE["tg_away"].pop(chat, None)
         return
     now = now or time.time()
-    rec = STATE["tg_away"].setdefault(chat, {"since": None, "went_out": False})
+    rec = STATE["tg_away"].setdefault(chat, {"since": None})
     d = haversine_km(pos, home)
     out = _courier_out_orders(c)
-    if out:
-        rec["went_out"] = True
     if status == "base":
         # с заказами порог ниже и подтверждение короче — курьер уже развозит
         if out:
@@ -1634,17 +1640,17 @@ def _auto_status_track(c, pos, now=None):
         if d > away_km:
             rec["since"] = rec["since"] or now
             if now - rec["since"] >= _AWAY_DWELL_S:
-                rec["since"], rec["went_out"] = None, False
+                rec["since"] = None
                 log.info("auto-away: %s уехал от точки «%s» (%.0f м) — статус «в пути»",
                          c.get("name"), home.get("name"), d * 1000)
                 _auto_status_apply(c, "away")
         elif d <= TG_GEO_AT_PLACE:
             rec["since"] = None  # у точки — отсчёт заново
-            rec["went_out"] = False
         return
-    # статус «в пути»
+    # статус «в пути»: вернулся к точке без открытых заказов и простоял —
+    # «на базе». Открытые заказы держат «в пути» (закроет диспетчер/диалог).
     if d <= TG_GEO_AT_PLACE:
-        if not out and rec["went_out"]:
+        if not out:
             rec["since"] = rec["since"] or now
             if now - rec["since"] >= _BACK_DWELL_S:
                 STATE["tg_away"].pop(chat, None)
@@ -1652,7 +1658,7 @@ def _auto_status_track(c, pos, now=None):
                          c.get("name"), home.get("name"))
                 _auto_status_apply(c, "base")
         else:
-            rec["since"] = None  # ждёт выдачи или ещё развозит — не возврат
+            rec["since"] = None  # ещё развозит — не возврат
     else:
         rec["since"] = None     # снова уехал — счётчик простоя сброшен
 
