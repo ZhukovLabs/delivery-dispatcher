@@ -145,7 +145,7 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                       >
                         <span className="s-n" style={{ background: r.color }}>{stopNo}</span>
                         <span className="s-a">
-                          {s.prio && (
+                          {!!s.prio && (
                             <span className="s-prio" title={`Приоритетный${s.auto ? ", поднялся сам по возрасту" : ""}`}><Zap size={11} /></span>
                           )} {s.address} {s.deadline && <span className="s-dl" title="Обещанное время доставки"><Timer size={11} />{s.deadline}</span>}
                           {!!s.late_min && s.late_min > 0 && (

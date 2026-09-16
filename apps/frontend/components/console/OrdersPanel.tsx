@@ -163,7 +163,7 @@ export default function OrdersPanel({ st, tick, open, onToggle, mutate, showToas
                     : (soon !== null && 0 <= soon && soon <= 15)
                       ? <span className="soon-chip" title="Дедлайн на подходе, а заказа ещё нет в маршруте"><Hourglass size={11} /> скоро {o.deadline}</span>
                       : null}
-                  {o.prio && <span className="prio-tag"><Zap size={11} /> приоритет</span>}
+                   {!!o.prio && <span className="prio-tag"><Zap size={11} /> приоритет</span>}
                   {auto && <span className="age-tag" title="Долго в очереди: в плане будет как приоритетный"><Hourglass size={11} /> {age} мин</span>}
                   {dlEdit === o.id && (
                     <DlPop
