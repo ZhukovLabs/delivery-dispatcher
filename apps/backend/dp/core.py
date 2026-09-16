@@ -597,6 +597,12 @@ def load_state():
                     STATE[key].update(saved)
             except ValueError:
                 pass
+    # сверка: если бот уже спросил (asked), а диалог не восстановился —
+    # сбрасываем asked, чтобы переспросил заново свежим сообщением
+    for _chat, _recs in (STATE["tg_deliv"] or {}).items():
+        for _oid, _rec in list((_recs or {}).items()):
+            if _rec.get("asked") and _oid not in (STATE["tg_ask"].get(_chat) or {}):
+                _rec.pop("asked", None)
     STATE["couriers"] = [{"id": r["id"], "name": r["name"], "status": r["status"],
                           "color": r["color"] or None,
                           "back_min": int(r["back_min"] if r["back_min"] is not None else 15),
