@@ -70,6 +70,17 @@ async def flask_compat(request: Request, call_next):
             sess.update(unsign_session(cookie))
         except Exception:  # noqa: BLE001 — битая/просроченная = аноним
             pass
+    if not sess.get("uid"):
+        # кросс-доменный фронт (vercel.app → ts.net): браузер может блокировать
+        # third-party cookie даже с SameSite=None — принимаем ту же подписанную
+        # сессию в Authorization: Bearer (фронт кладёт токен из /api/login)
+        auth = request.headers.get("authorization") or ""
+        if auth.lower().startswith("bearer "):
+            try:
+                sess.update(unsign_session(auth[7:].strip()))
+                sess.modified = False  # сессия из заголовка — не эхоить Set-Cookie
+            except Exception:  # noqa: BLE001 — битый токен = аноним
+                pass
     token = set_request_ctx(request, parsed, sess)
 
     # 3) guard: эквивалент before_request (вход/health открыты);
