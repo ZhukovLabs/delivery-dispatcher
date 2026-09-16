@@ -1091,7 +1091,6 @@ def plan_move():
     g_x = node[oid]
 
     best = None  # (удлинение, индекс заезда, позиция вставки)
-    max_orders = int(STATE["settings"]["max_orders"])
     now = _now()
     hour_on = bool(int(STATE["settings"].get("hour_traffic", 1)))
     base_traffic = max(1.0, float(STATE["settings"].get("traffic", 1.3)))
@@ -1109,8 +1108,9 @@ def plan_move():
         return t / base_traffic * f
 
     for ti, tr in enumerate(dst.get("trips", [])):
-        if len(tr["stops"]) >= max_orders:  # заезд полон — не вклиниваться
-            continue
+        # лимит max_orders соблюдает только решатель; ручной перенос из
+        # «Готовых адресов» разрешён и сверх лимита — диспетчер видит,
+        # что делает (ограничение вернётся при следующем пересчёте)
         seq = [h_dst] + [node[s["order_id"]] for s in tr["stops"]] + [h_dst]
         for pos in range(1, len(seq)):
             a, b = seq[pos - 1], seq[pos]
@@ -1142,9 +1142,8 @@ def plan_move():
         dst["trips"] = [{"stops": [], "total_min": 0, "start_delay_min": 0,
                          "start_clock": "", "end_clock": "", "distance_km": None}]
         best = (0, 0, 0)
-    if best is None:
-        return jsonify({"error": f"У «{dst['courier_name']}» все заезды "
-                                 f"заполнены до лимита ({max_orders}) — "
+    if best is None:  # недостижимо: заезды без лимита всегда принимают вставку
+        return jsonify({"error": f"У «{dst['courier_name']}» нет заездов — "
                                  "перенесите другому или пересчитайте план"}), 400
     dst["trips"][best[1]]["stops"].insert(best[2], stop)
     order["pin"] = target  # закрепляем и на будущие пересчёты плана
