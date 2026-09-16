@@ -27,7 +27,13 @@ export function useDispatchState() {
     void (async () => {
       if (!(await ensureWsToken()) || cancelled) return;
       const s = getSocket();
-      const onState = (d: AppState) => { qc.setQueryData(["state"], d); };
+      // payload бродкаста собирается без сессии (me=null, users=[]) —
+      // сессионные поля не затираем, иначе админские вкладки гаснут
+      // на первом же живом обновлении
+      const onState = (d: AppState) => {
+        qc.setQueryData<AppState>(["state"], (old) =>
+          old ? { ...d, me: old.me, users: old.users, my_point: old.my_point } : d);
+      };
       const onConnect = () => { void qc.invalidateQueries({ queryKey: ["state"] }); }; // подтянуть пропущенное за простой
       s.on("state", onState);
       s.on("connect", onConnect);
