@@ -202,15 +202,16 @@ def search_photon(q, lat, lng):
 
 # ---------- обратный геокодинг тем же каскадом ----------
 
-def suggest_yandex(q):
+def suggest_yandex(q, lat, lng):
     """Подсказки Геосаджеста при печати: только тексты, координат нет —
     их добирает геокодер, когда пользователь выбрал подсказку.
-    Формат ответа JSONP: suggest.apply([запрос, [[«maps», токены, адрес?], …]])"""
+    Эндпоинт v1 suggest-geo (v2 у этого ключа отвечает 400), ll+spn держат
+    подсказки в Гомеле. Формат JSONP: suggest.apply([запрос, [[«maps», токены], …]])."""
     if not YANDEX_KEY:
         raise RuntimeError("не задан YANDEX_GEOCODER_KEY")
-    resp = requests.get("https://suggest-maps.yandex.ru/v2/suggest",
+    resp = requests.get("https://suggest-maps.yandex.ru/suggest-geo",
                         params={"apikey": YANDEX_KEY, "text": q, "lang": "ru_RU",
-                                "print_address": 1},
+                                "ll": f"{lng},{lat}", "spn": "0.4,0.4"},
                         headers=UA, timeout=3.0)
     resp.raise_for_status()
     raw = resp.text.strip()
@@ -232,10 +233,17 @@ def suggest_yandex(q):
     for it in (data[1] if isinstance(data, list) and len(data) > 1 else []):
         if not isinstance(it, (list, tuple)) or len(it) < 2:
             continue
-        title = _flat(it[1])
-        addr = it[2] if len(it) > 2 and isinstance(it[2], str) and it[2].strip() else title
-        if title:
-            res.append(addr)
+        # «1, улица Тельмана, Гомель» -> «Гомель, ул. Тельмана, 1»
+        parts = [p.strip() for p in _flat(it[1]).split(",") if p.strip()]
+        if not parts:
+            continue
+        if len(parts) >= 2 and not re.match(r"^\d", parts[0]):
+            parts = parts[1:] + [parts[0]]          # город — в конец не смотрим, просто порядок
+        if len(parts) >= 3 and re.match(r"^\d", parts[1]):
+            parts = [parts[0], parts[2], parts[1]]  # номер дома — в конец
+        label = ", ".join(re.sub(r"^улица\s+", "ул. ", p) for p in parts if p)
+        if label:
+            res.append(label)
     return res
 
 def _reverse_yandex(lat, lng):
@@ -342,9 +350,9 @@ def _tok(s):
     return [t.replace("ё", "е") for t in re.split(r"[^а-яёa-z0-9]+", (s or "").lower()) if len(t) >= 3]
 
 
-def _suggest_safe(q):
+def _suggest_safe(q, lat, lng):
     try:
-        return suggest_yandex(q)[:3]
+        return suggest_yandex(q, lat, lng)[:3]
     except Exception as exc:  # noqa: BLE001
         log.warning("geosuggest: %s", exc)
         return []
@@ -364,7 +372,8 @@ def geocode():
     qnum = _extract_house(q)
     q_words = _tok(re.sub(r"\d+[а-яa-z]*", " ", q))  # слова запроса без номера дома
     sugg_box = []  # подсказки саджеста гоняются параллельно каскаду геокодеров
-    th = threading.Thread(target=lambda: sugg_box.extend(_suggest_safe(q)), daemon=True)
+    th = threading.Thread(target=lambda: sugg_box.extend(_suggest_safe(q, lat, lng)),
+                          daemon=True)
     th.start()
     try:
         items = _hedged([lambda: search_yandex(q, lat, lng),
