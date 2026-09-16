@@ -1,8 +1,8 @@
-﻿# -*- coding: utf-8 -*-
-"""Ð¯Ð´Ñ€Ð¾ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€ÑÐºÐ¾Ð¹: ÐºÐ¾Ð½Ñ„Ð¸Ð³, ÑÐ¾ÑÑ‚Ð¾ÑÐ½Ð¸Ðµ, Ð‘Ð”, ÑÐºÐ¾Ñ€Ð¾ÑÑ‚Ð¸, ORS/OSRM, TG-Ð±Ð¾Ñ‚, payload.
+# -*- coding: utf-8 -*-
+"""Ядро диспетчерской: конфиг, состояние, БД, скорости, ORS/OSRM, TG-бот, payload.
 
-ÐŸÐµÑ€ÐµÐ½ÐµÑÐµÐ½Ð¾ Ñ Flask-Ð¼Ð¾Ð½Ð¾Ð»Ð¸Ñ‚Ð° Ð±ÐµÐ· Ð¸Ð·Ð¼ÐµÐ½ÐµÐ½Ð¸Ñ Ð»Ð¾Ð³Ð¸ÐºÐ¸; Flask-Ð·Ð°Ð²Ð¸ÑÐ¸Ð¼Ð¾ÑÑ‚Ð¸
-Ð·Ð°Ð¼ÐµÑ‰ÐµÐ½Ñ‹ ÑˆÐ¸Ð¼Ð°Ð¼Ð¸ dp.shims.
+Перенесено с Flask-монолита без изменения логики; Flask-зависимости
+замещены шимами dp.shims.
 """
 import configparser
 import hashlib
@@ -28,10 +28,10 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from .shims import g, jsonify, request, send_file, session
 
-# ÐœÐ¸Ð½ÑÐº: UTC+3, Ð±ÐµÐ· Ð¿ÐµÑ€ÐµÑ…Ð¾Ð´Ð° Ð½Ð° Ð»ÐµÑ‚Ð½ÐµÐµ Ð²Ñ€ÐµÐ¼Ñ. Ð’ÑÐµ Â«Ð½Ð°ÑÑ‚ÐµÐ½Ð½Ñ‹ÐµÂ» Ð²Ñ€ÐµÐ¼ÐµÐ½Ð°
-# (Ñ‡Ð°ÑÑ‹ Ð¿Ð»Ð°Ð½Ð°, Ð¸ÑÑ‚Ð¾Ñ€Ð¸Ñ, Ð´ÐµÐ´Ð»Ð°Ð¹Ð½Ñ‹, ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ñ) Ð¿Ð¸ÑˆÐµÐ¼ Ð¿Ð¾ ÐœÐ¸Ð½ÑÐºÑƒ Ð½ÐµÐ·Ð°Ð²Ð¸ÑÐ¸Ð¼Ð¾
-# Ð¾Ñ‚ Ñ‡Ð°ÑÐ¾Ð²Ð¾Ð³Ð¾ Ð¿Ð¾ÑÑÐ° ÑÐµÑ€Ð²ÐµÑ€Ð°. Ð—Ð½Ð°Ñ‡ÐµÐ½Ð¸Ñ Ð¾ÑÑ‚Ð°ÑŽÑ‚ÑÑ Ð½Ð°Ð¸Ð²Ð½Ñ‹Ð¼Ð¸ (Ð±ÐµÐ· Ð¾Ñ„Ñ„ÑÐµÑ‚Ð°),
-# Ñ‡Ñ‚Ð¾Ð±Ñ‹ Ð½Ðµ Ð»Ð¾Ð¼Ð°Ñ‚ÑŒ ÑÑ€Ð°Ð²Ð½ÐµÐ½Ð¸Ñ Ñ ÑƒÐ¶Ðµ Ð·Ð°Ð¿Ð¸ÑÐ°Ð½Ð½Ñ‹Ð¼Ð¸ Ð´Ð°Ð½Ð½Ñ‹Ð¼Ð¸.
+# Минск: UTC+3, без перехода на летнее время. Все «настенные» времена
+# (часы плана, история, дедлайны, сообщения) пишем по Минску независимо
+# от часового пояса сервера. Значения остаются наивными (без оффсета),
+# чтобы не ломать сравнения с уже записанными данными.
 _MN = timezone(timedelta(hours=3))
 
 
@@ -42,12 +42,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # apps/b
 
 from itsdangerous import URLSafeTimedSerializer
 
-# BASE_DIR Ð·Ð°Ð´Ð°Ñ‘Ñ‚ÑÑ Ð² ÑˆÐ°Ð¿ÐºÐµ Ð¼Ð¾Ð´ÑƒÐ»Ñ (Ñ€Ð¾Ð´Ð¸Ñ‚ÐµÐ»ÑŒ dp/, Ñ‡Ñ‚Ð¾Ð±Ñ‹ config.ini/db Ð»ÐµÐ¶Ð°Ð»Ð¸ ÐºÐ°Ðº Ñ€Ð°Ð½ÑŒÑˆÐµ)
+# BASE_DIR задаётся в шапке модуля (родитель dp/, чтобы config.ini/db лежали как раньше)
 
 
 def _pick_data_dir():
-    """ÐŸÐµÑ€Ð²Ñ‹Ð¹ ÐºÐ°Ñ‚Ð°Ð»Ð¾Ð³, Ð´Ð¾ÑÑ‚ÑƒÐ¿Ð½Ñ‹Ð¹ Ð½Ð° Ð·Ð°Ð¿Ð¸ÑÑŒ: Ñ€ÑÐ´Ð¾Ð¼ Ñ ÐºÐ¾Ð´Ð¾Ð¼ -> DISPATCHER_DATA -> temp.
-    ÐÐ° PaaS Ñ read-only FS (Belmo) ÐºÐ¾Ð´ Ð»ÐµÐ¶Ð¸Ñ‚ Ð² /app Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð´Ð»Ñ Ñ‡Ñ‚ÐµÐ½Ð¸Ñ."""
+    """Первый каталог, доступный на запись: рядом с кодом -> DISPATCHER_DATA -> temp.
+    На PaaS с read-only FS (Belmo) код лежит в /app только для чтения."""
     import tempfile
     cands = [BASE_DIR,
              os.environ.get("DISPATCHER_DATA", ""),
@@ -69,7 +69,7 @@ def _pick_data_dir():
 
 DATA_DIR = _pick_data_dir()
 
-# ---------- ÐºÐ¾Ð½Ñ„Ð¸Ð³ÑƒÑ€Ð°Ñ†Ð¸Ñ (config.ini Ñ€ÑÐ´Ð¾Ð¼ Ñ app.py) ----------
+# ---------- конфигурация (config.ini рядом с app.py) ----------
 
 CFG = {"ors_key": "", "host": "127.0.0.1", "port": 5050,
         "admin_email": "admin@local", "admin_password": "admin",
@@ -97,11 +97,11 @@ if _cp.read(os.path.join(BASE_DIR, "config.ini"), encoding="utf-8"):
     if _db:
         CFG["db_path"] = _db if os.path.isabs(_db) else os.path.join(BASE_DIR, _db)
 
-# ÐžÐºÑ€ÑƒÐ¶ÐµÐ½Ð¸Ðµ Ð¿ÐµÑ€ÐµÐºÑ€Ñ‹Ð²Ð°ÐµÑ‚ config.ini (Ð´ÐµÐ¿Ð»Ð¾Ð¹ Ð² Ð¾Ð±Ð»Ð°ÐºÐ¾: Render Ð¸ Ñ‚.Ð¿.)
+# Окружение перекрывает config.ini (деплой в облако: Render и т.п.)
 CFG["ors_key"] = os.environ.get("ORS_KEY", "").strip() or CFG["ors_key"]
 CFG["tg_bot_token"] = os.environ.get("TG_BOT_TOKEN", "").strip() or CFG["tg_bot_token"]
-# tg_poll=0 â€” ÑÑ‚Ð¾Ñ‚ Ð¸Ð½ÑÑ‚Ð°Ð½Ñ ÐÐ• ÑÐ»ÑƒÑˆÐ°ÐµÑ‚ Ð±Ð¾Ñ‚Ð° (ÐºÐ¾Ð³Ð´Ð° Ð±Ð¾Ñ‚ Ð·Ð°Ð½ÑÑ‚ Ð´Ñ€ÑƒÐ³Ð¸Ð¼ ÑÐµÑ€Ð²ÐµÑ€Ð¾Ð¼,
-# Ð½Ð°Ð¿Ñ€Ð¸Ð¼ÐµÑ€ Ð»Ð¾ÐºÐ°Ð»ÑŒÐ½Ñ‹Ð¹ + Ð¾Ð±Ð»Ð°Ñ‡Ð½Ñ‹Ð¹ Ð¾Ð´Ð½Ð¾Ð²Ñ€ÐµÐ¼ÐµÐ½Ð½Ð¾; Telegram Ð¾Ñ‚Ð´Ð°Ñ‘Ñ‚ getUpdates Ð¾Ð´Ð½Ð¾Ð¼Ñƒ)
+# tg_poll=0 — этот инстанс НЕ слушает бота (когда бот занят другим сервером,
+# например локальный + облачный одновременно; Telegram отдаёт getUpdates одному)
 if os.environ.get("TG_POLL", "").strip():
     try:
         CFG["tg_poll"] = 1 if os.environ["TG_POLL"].strip() not in ("0", "false", "no") else 0
@@ -109,7 +109,7 @@ if os.environ.get("TG_POLL", "").strip():
         pass
 CFG["admin_email"] = (os.environ.get("ADMIN_EMAIL", "").strip() or CFG["admin_email"]).lower()
 CFG["admin_password"] = os.environ.get("ADMIN_PASSWORD", "").strip() or CFG["admin_password"]
-for _pn in ("PORT", "SERVER_PORT", "P_SERVER_PORT"):  # PaaS/Pterodactyl Ð¾Ñ‚Ð´Ð°ÑŽÑ‚ Ð¿Ð¾Ñ€Ñ‚ Ð¿Ð¾-Ñ€Ð°Ð·Ð½Ð¾Ð¼Ñƒ
+for _pn in ("PORT", "SERVER_PORT", "P_SERVER_PORT"):  # PaaS/Pterodactyl отдают порт по-разному
     _pv = os.environ.get(_pn, "").strip()
     if _pv:
         try:
@@ -124,58 +124,58 @@ if CFG.get("tz"):
         time.tzset()
 
 
-# ---------- Ð»Ð¾Ð³Ð¸Ñ€Ð¾Ð²Ð°Ð½Ð¸Ðµ ----------
+# ---------- логирование ----------
 
-_handlers = [logging.StreamHandler()]  # Ð²ÑÐµÐ³Ð´Ð°: stderr (Ð´Ð¾ÑÑ‚ÑƒÐ¿ÐµÐ½ Ð½Ð° Ð»ÑŽÐ±Ð¾Ð¼ PaaS)
+_handlers = [logging.StreamHandler()]  # всегда: stderr (доступен на любом PaaS)
 try:
     _handlers.insert(0, RotatingFileHandler(os.path.join(DATA_DIR, "dispatcher.log"),
                                             maxBytes=1_000_000, backupCount=3,
                                             encoding="utf-8"))
 except OSError:
-    pass  # read-only FS: Ð¶Ð¸Ð²Ñ‘Ð¼ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð² stderr
+    pass  # read-only FS: живём только в stderr
 logging.basicConfig(
     handlers=_handlers,
     level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logging.getLogger("waitress").setLevel(logging.WARNING)
 log = logging.getLogger("dispatcher")
 
-DEFAULT_DEPOT = {"address": "ÑƒÐ». ÐŸÐ¾Ð´Ð³Ð¾Ñ€Ð½Ð°Ñ 12/1, Ð“Ð¾Ð¼ÐµÐ»ÑŒ", "lat": 52.44146, "lng": 31.01476}
+DEFAULT_DEPOT = {"address": "ул. Подгорная 12/1, Гомель", "lat": 52.44146, "lng": 31.01476}
 
 STATE = {
-    "rev": 0,            # ÑÑ‡ÐµÑ‚Ñ‡Ð¸Ðº Ð¸Ð·Ð¼ÐµÐ½ÐµÐ½Ð¸Ð¹ Ð´Ð»Ñ long-poll /api/rev
-    "depot": dict(DEFAULT_DEPOT),  # ÑÐ¾Ð²Ð¼ÐµÑÑ‚Ð¸Ð¼Ñ‹Ð¹ Ð²Ð¸Ð´ Ð¿ÐµÑ€Ð²Ð¾Ð¹ Ñ‚Ð¾Ñ‡ÐºÐ¸ {address, lat, lng}
-    "points": [],        # Ð¼ÐµÑÑ‚Ð° Ð²Ñ‹Ð´Ð°Ñ‡Ð¸: {"id", "name", "address", "lat", "lng"}
+    "rev": 0,            # счетчик изменений для long-poll /api/rev
+    "depot": dict(DEFAULT_DEPOT),  # совместимый вид первой точки {address, lat, lng}
+    "points": [],        # места выдачи: {"id", "name", "address", "lat", "lng"}
     "couriers": [],      # {"id", "name", "status": base|away|off, "color", "back_min", "point_id"}
     "orders": [],        # {"id", "address", "lat", "lng"}
     "settings": {"speed_kmh": 60, "handover_min": 5, "max_orders": 5, "traffic": 1.25,
                  "lights_sec_per_km": 15, "auto_prio_min": 0, "reload_min": 10,
                  "hour_traffic": 1, "approach_center_min": 4, "approach_far_min": 2},
-    "plans": {},         # pid -> Ð¿Ð»Ð°Ð½ Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐ¸ (Ñƒ ÐºÐ°Ð¶Ð´Ð¾Ð³Ð¾ Ð´ÐµÐ¿Ð¾ ÑÐ²Ð¾Ð¹)
-    "advice_modes": {},  # pid -> Ñ€ÑƒÑ‡Ð½Ð¾Ð¹ Ð²Ñ‹Ð±Ð¾Ñ€ Â«Ð¶Ð´Ð°Ñ‚ÑŒ/Ð½Ðµ Ð¶Ð´Ð°Ñ‚ÑŒÂ» (now|split)
-    "solving": {},       # pid -> True: Ð² Ð´ÐµÐ¿Ð¾ Ð¸Ð´Ñ‘Ñ‚ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚ Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐ¸ (ÐºÐ»Ð¸ÐµÐ½Ñ‚Ñ‹
-                         # Ð±Ð»Ð¾ÐºÐ¸Ñ€ÑƒÑŽÑ‚ UI, Ð¿Ð¾Ð²Ñ‚Ð¾Ñ€Ð½Ñ‹Ð¹ Ð·Ð°Ð¿ÑƒÑÐº Ð¾Ñ‚ÐºÐ»Ð¾Ð½ÑÐµÑ‚ÑÑ)
-    "color_seq": 0,      # Ð¼Ð¾Ð½Ð¾Ñ‚Ð¾Ð½Ð½Ñ‹Ð¹ ÑÑ‡Ñ‘Ñ‚Ñ‡Ð¸Ðº: Ñ†Ð²ÐµÑ‚Ð° Ð½Ðµ Ð¿ÐµÑ€ÐµÐ¼ÐµÑˆÐ¸Ð²Ð°ÑŽÑ‚ÑÑ Ð¿Ñ€Ð¸ ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸ÑÑ…
-    # Telegram: ÐºÑ‚Ð¾ Ð¿Ð¸ÑÐ°Ð» Ð±Ð¾Ñ‚Ñƒ (Ð´Ð»Ñ Ð¿Ñ€Ð¸Ð²ÑÐ·ÐºÐ¸), Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ Ð»Ð¾ÐºÐ°Ñ†Ð¸Ð¸ ÐºÑƒÑ€ÑŒÐµÑ€Ð¾Ð², ÐºÑƒÑ€ÑÐ¾Ñ€ getUpdates
+    "plans": {},         # pid -> план развозки (у каждого депо свой)
+    "advice_modes": {},  # pid -> ручной выбор «ждать/не ждать» (now|split)
+    "solving": {},       # pid -> True: в депо идёт расчёт развозки (клиенты
+                         # блокируют UI, повторный запуск отклоняется)
+    "color_seq": 0,      # монотонный счётчик: цвета не перемешиваются при удалениях
+    # Telegram: кто писал боту (для привязки), последние локации курьеров, курсор getUpdates
     "tg_seen": {},       # chat_id -> {"chat_id", "login", "ts"}
     "tg_pos": {},        # chat_id -> {"lat", "lng", "ts", "live"}
-    "tg_nagged": {},     # chat_id -> ts Ð¿Ð¾ÑÐ»ÐµÐ´Ð½ÐµÐ³Ð¾ Â«Ð½Ðµ Ð¿Ñ€Ð¸Ð²ÑÐ·Ð°Ð½Â» (Ð°Ð½Ñ‚Ð¸ÑÐ¿Ð°Ð¼ live-Ð¿Ñ€Ð°Ð²Ð¾Ðº)
-    "tg_load": {},       # chat_id -> {"since", "loaded_at"} â€” Ñ‚Ñ€ÐµÐºÐµÑ€ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ Ð·Ð°ÐºÐ°Ð·Ð¾Ð²
-    "tg_deliv": {},      # chat_id -> {order_id: {"since", "at"}} â€” Ð²Ñ‹Ð²Ð¾Ð´ Â«Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½Â»
-                         # Ð¢ÐžÐ›Ð¬ÐšÐž Ð´Ð»Ñ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚Ð° Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‚Ð°; ÑÑ‚Ð°Ñ‚ÑƒÑ Ð·Ð°ÐºÐ°Ð·Ð° Ð½Ðµ Ð¼ÐµÐ½ÑÐµÑ‚
-    "tg_away": {},       # chat_id -> {"since"} â€” Ð°Ð²Ñ‚Ð¾-Â«Ð² Ð¿ÑƒÑ‚Ð¸Â» Ð¿Ñ€Ð¸ Ð¾Ñ‚ÑŠÐµÐ·Ð´Ðµ Ð¾Ñ‚ Ñ‚Ð¾Ñ‡ÐºÐ¸
-    "tg_ask": {},        # chat_id -> {order_id: {"msg", "stage"}} â€” Ð±Ð¾Ñ‚ Ð¶Ð´Ñ‘Ñ‚ Â«Ð´Ð¾ÑÑ‚Ð°Ð²Ð¸Ð»?Â»
+    "tg_nagged": {},     # chat_id -> ts последнего «не привязан» (антиспам live-правок)
+    "tg_load": {},       # chat_id -> {"since", "loaded_at"} — трекер выдачи заказов
+    "tg_deliv": {},      # chat_id -> {order_id: {"since", "at"}} — вывод «доставлен»
+                         # ТОЛЬКО для расчёта возврата; статус заказа не меняет
+    "tg_away": {},       # chat_id -> {"since"} — авто-«в пути» при отъезде от точки
+    "tg_ask": {},        # chat_id -> {order_id: {"msg", "stage"}} — бот ждёт «доставил?»
     "tg_offset": 0,
-    "tg_bot": "",        # @username Ð±Ð¾Ñ‚Ð° (Ð´Ð»Ñ Ð¿Ð¾Ð´ÑÐºÐ°Ð·Ð¾Ðº Ð² Ð¸Ð½Ñ‚ÐµÑ€Ñ„ÐµÐ¹ÑÐµ)
-    "events": [],        # Ð»ÐµÐ½Ñ‚Ð° Ð°ÐºÑ‚Ð¸Ð²Ð½Ð¾ÑÑ‚Ð¸: {"t", "actor": bot|disp|cour|sys, "text"}
+    "tg_bot": "",        # @username бота (для подсказок в интерфейсе)
+    "events": [],        # лента активности: {"t", "actor": bot|disp|cour|sys, "text"}
 }
 
-ROAD_FACTOR = 1.4  # Ð·Ð°Ð¿Ð°ÑÐ½Ð¾Ð¹ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚ (ÐµÑÐ»Ð¸ OSRM Ð½ÐµÐ´Ð¾ÑÑ‚ÑƒÐ¿ÐµÐ½): Ð¿Ñ€ÑÐ¼Ð°Ñ -> Ð´Ð¾Ñ€Ð¾Ð³Ð°
-_PRIO_WEIGHT = 60  # Ð²ÐµÑ Ð¼Ð¸Ð½ÑƒÑ‚Ñ‹ Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÐ¸ Ð¿Ñ€Ð¸Ð¾Ñ€Ð¸Ñ‚ÐµÑ‚Ð½Ð¾Ð³Ð¾ Ð·Ð°ÐºÐ°Ð·Ð° (Ð¿Ñ€Ð¾Ñ‚Ð¸Ð² 1 Ñƒ Ð¾Ð±Ñ‹Ñ‡Ð½Ð¾Ð³Ð¾)
-MAX_POINTS = 10    # Ð¼Ð°ÐºÑÐ¸Ð¼ÑƒÐ¼ Ð¼ÐµÑÑ‚ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸
+ROAD_FACTOR = 1.4  # запасной расчёт (если OSRM недоступен): прямая -> дорога
+_PRIO_WEIGHT = 60  # вес минуты доставки приоритетного заказа (против 1 у обычного)
+MAX_POINTS = 10    # максимум мест выдачи
 
 
 def _depot_view():
-    """Ð¡Ð¾Ð²Ð¼ÐµÑÑ‚Ð¸Ð¼Ñ‹Ð¹ ÑÐ¾ ÑÑ‚Ð°Ñ€Ñ‹Ð¼ API Ð²Ð¸Ð´ Ð¿ÐµÑ€Ð²Ð¾Ð¹ Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ ({"address","lat","lng"})."""
+    """Совместимый со старым API вид первой точки выдачи ({"address","lat","lng"})."""
     p = (STATE.get("points") or [None])[0]
     if not p:
         return dict(DEFAULT_DEPOT)
@@ -183,7 +183,7 @@ def _depot_view():
 
 
 def _home_point(courier):
-    """Ð¢Ð¾Ñ‡ÐºÐ° Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ ÐºÑƒÑ€ÑŒÐµÑ€Ð° (Ð¸Ð»Ð¸ Ð¿ÐµÑ€Ð²Ð°Ñ, ÐµÑÐ»Ð¸ Ð¿Ñ€Ð¸Ð²ÑÐ·ÐºÐ° Ð½Ðµ Ð·Ð°Ð´Ð°Ð½Ð°/Ð±Ð¸Ñ‚Ð°Ñ)."""
+    """Точка выдачи курьера (или первая, если привязка не задана/битая)."""
     pid = (courier.get("point_id") or "").strip()
     for p in STATE.get("points") or []:
         if p["id"] == pid:
@@ -192,33 +192,33 @@ def _home_point(courier):
 
 
 def _obj_point(x):
-    """Ð¢Ð¾Ñ‡ÐºÐ° Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ Ð·Ð°ÐºÐ°Ð·Ð°/ÐºÑƒÑ€ÑŒÐµÑ€Ð°: Ð¿ÑƒÑÑ‚Ð°Ñ Ð¿Ñ€Ð¸Ð²ÑÐ·ÐºÐ° = Ð¿ÐµÑ€Ð²Ð°Ñ Ñ‚Ð¾Ñ‡ÐºÐ°."""
+    """Точка выдачи заказа/курьера: пустая привязка = первая точка."""
     pid = (x.get("point_id") or "").strip()
     if pid and any(p["id"] == pid for p in STATE.get("points") or []):
         return pid
     return (STATE.get("points") or [{}])[0].get("id") or ""
 
 OSRM_URLS = [
-    "https://routing.openstreetmap.de/routed-car",  # ÑÐµÑ€Ð²ÐµÑ€Ñ‹ ÑÐ¾Ð¾Ð±Ñ‰ÐµÑÑ‚Ð²Ð° OSM (FOSSGIS) â€” Ð½Ð°Ð´Ñ‘Ð¶Ð½ÐµÐµ
-    "http://router.project-osrm.org",               # Ð¾Ñ„Ð¸Ñ†Ð¸Ð°Ð»ÑŒÐ½Ñ‹Ð¹ Ð´ÐµÐ¼Ð¾-ÑÐµÑ€Ð²ÐµÑ€ â€” Ð·Ð°Ð¿Ð°ÑÐ½Ð¾Ð¹
+    "https://routing.openstreetmap.de/routed-car",  # серверы сообщества OSM (FOSSGIS) — надёжнее
+    "http://router.project-osrm.org",               # официальный демо-сервер — запасной
 ]
-_osrm_base = None  # Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ð¹ Ñ€Ð°Ð±Ð¾Ñ‡Ð¸Ð¹ ÑÐµÑ€Ð²ÐµÑ€ (Ð¿Ñ€Ð¾Ð²ÐµÑ€ÑÐµÑ‚ÑÑ Ð¿ÐµÑ€Ð²Ñ‹Ð¼)
+_osrm_base = None  # последний рабочий сервер (проверяется первым)
 
-# OpenRouteService: Ð¾ÑÐ½Ð¾Ð²Ð½Ð¾Ð¹ Ð¸ÑÑ‚Ð¾Ñ‡Ð½Ð¸Ðº Ð¼Ð°Ñ‚Ñ€Ð¸Ñ†/Ð³ÐµÐ¾Ð¼ÐµÑ‚Ñ€Ð¸Ð¸ (Ð¿Ð¾ ÐºÐ»ÑŽÑ‡Ñƒ, Ð±ÐµÑÐ¿Ð»Ð°Ñ‚Ð½Ñ‹Ð¹ Ñ‚Ð°Ñ€Ð¸Ñ„).
-# ÐšÐ²Ð¾Ñ‚Ð° ÑÑƒÑ‚Ð¾Ðº Ð¾Ð³Ñ€Ð°Ð½Ð¸Ñ‡ÐµÐ½Ð°, Ð¿Ð¾ÑÑ‚Ð¾Ð¼Ñƒ: ÑÑ‡Ð¸Ñ‚Ð°ÐµÐ¼ Ð·Ð°Ð¿Ñ€Ð¾ÑÑ‹ ÑÐ°Ð¼Ð¸, Ð¿Ñ€Ð¸ Ð¿Ñ€Ð¸Ð±Ð»Ð¸Ð¶ÐµÐ½Ð¸Ð¸
-# Ðº Ð»Ð¸Ð¼Ð¸Ñ‚Ñƒ Ð·Ð°Ñ€Ð°Ð½ÐµÐµ ÑƒÑ…Ð¾Ð´Ð¸Ð¼ Ð½Ð° OSRM, Ð° Ð¿Ñ€Ð¸ 429/403 Ð¾Ñ‚ÐºÐ»ÑŽÑ‡Ð°ÐµÐ¼ ORS Ð´Ð¾
-# Ð²Ð¾ÑÑÑ‚Ð°Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ñ (ÑÑƒÑ‚ÐºÐ¸ â€” Ð´Ð¾ Ð¿Ð¾Ð»ÑƒÐ½Ð¾Ñ‡Ð¸ UTC, Ð¼Ð¸Ð½ÑƒÑ‚Ð½Ñ‹Ð¹ Ð»Ð¸Ð¼Ð¸Ñ‚ â€” Ð½Ð° 5 Ð¼Ð¸Ð½ÑƒÑ‚).
+# OpenRouteService: основной источник матриц/геометрии (по ключу, бесплатный тариф).
+# Квота суток ограничена, поэтому: считаем запросы сами, при приближении
+# к лимиту заранее уходим на OSRM, а при 429/403 отключаем ORS до
+# восстановления (сутки — до полуночи UTC, минутный лимит — на 5 минут).
 ORS_KEY = CFG["ors_key"]
 ORS_BASE = "https://api.openrouteservice.org"
-ORS_SOFT_LIMIT = 1800   # Ð·Ð°Ð¿Ð°Ñ Ð´Ð¾ Ð¿Ð°ÑÐ¿Ð¾Ñ€Ñ‚Ð½Ñ‹Ñ… 2000/ÑÑƒÑ‚ÐºÐ¸: Ð´Ð°Ð»ÑŒÑˆÐµ Ð½Ðµ Ñ‚Ñ€Ð°Ñ‚Ð¸Ð¼ ÐºÐ²Ð¾Ñ‚Ñƒ
-ORS_MAX_POINTS = 50     # Ð»Ð¸Ð¼Ð¸Ñ‚ Ð±ÐµÑÐ¿Ð»Ð°Ñ‚Ð½Ð¾Ð³Ð¾ Ñ‚Ð°Ñ€Ð¸Ñ„Ð° Ð½Ð° Ñ€Ð°Ð·Ð¼ÐµÑ€ Ð¼Ð°Ñ‚Ñ€Ð¸Ñ†Ñ‹
+ORS_SOFT_LIMIT = 1800   # запас до паспортных 2000/сутки: дальше не тратим квоту
+ORS_MAX_POINTS = 50     # лимит бесплатного тарифа на размер матрицы
 ORS_STATE = {"day": None, "used": 0, "disabled_until": None, "last_error": None}
 
 PALETTE = ["#e8482b", "#2563eb", "#059669", "#9333ea",
            "#d97706", "#0891b2", "#be185d", "#4d7c0f"]
 STATUSES = {"base", "away", "off"}
 
-# ---------- Ð¿ÐµÑ€ÑÐ¸ÑÑ‚ÐµÐ½Ñ‚Ð½Ð¾ÑÑ‚ÑŒ (SQLite) ----------
+# ---------- персистентность (SQLite) ----------
 
 _db_lock = threading.Lock()
 _db_path = CFG["db_path"]
@@ -247,7 +247,7 @@ CREATE TABLE IF NOT EXISTS speed_day(
 """
 
 _DB_MIGRATIONS = [
-    # (Ñ‚Ð°Ð±Ð»Ð¸Ñ†Ð°, ÐºÐ¾Ð»Ð¾Ð½ÐºÐ°, DDL) â€” Ð²Ñ‹Ð¿Ð¾Ð»Ð½ÑÐµÑ‚ÑÑ, ÐµÑÐ»Ð¸ ÐºÐ¾Ð»Ð¾Ð½ÐºÐ¸ ÐµÑ‰Ñ‘ Ð½ÐµÑ‚
+    # (таблица, колонка, DDL) — выполняется, если колонки ещё нет
     ("couriers", "back_min", "ALTER TABLE couriers ADD COLUMN back_min INTEGER DEFAULT 15"),
     ("history", "courier", "ALTER TABLE history ADD COLUMN courier TEXT DEFAULT ''"),
     ("orders", "prio", "ALTER TABLE orders ADD COLUMN prio INTEGER DEFAULT 0"),
@@ -273,7 +273,7 @@ def _db():
     conn = sqlite3.connect(_db_path, timeout=10)
     try:
         conn.row_factory = sqlite3.Row
-        conn.executescript(_DB_SCHEMA)  # Ð¸Ð´ÐµÐ¼Ð¿Ð¾Ñ‚ÐµÐ½Ñ‚Ð½Ð¾; Ð¿ÐµÑ€ÐµÐ¶Ð¸Ð²Ð°ÐµÑ‚ ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ðµ Ñ„Ð°Ð¹Ð»Ð° Ð½Ð° Ñ…Ð¾Ð´Ñƒ
+        conn.executescript(_DB_SCHEMA)  # идемпотентно; переживает удаление файла на ходу
         for table, column, ddl in _DB_MIGRATIONS:
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
             if column not in cols:
@@ -335,7 +335,7 @@ def _persist_orders():
 def _archive_order(order, outcome, courier="", courier_id="", reason=""):
     closed = _now().isoformat(timespec="seconds")
     if outcome == "delivered" and courier_id and order.get("out_at"):
-        try:  # Ñ‚ÐµÐ¼Ð¿ Ð´Ð¾ÑÑ‚Ð°Ð²Ð¾Ðº -> Ñ„Ð¾Ð»Ð»Ð±ÐµÐº-Ð·Ð°Ð¼ÐµÑ€ ÑÐºÐ¾Ñ€Ð¾ÑÑ‚Ð¸
+        try:  # темп доставок -> фоллбек-замер скорости
             cycle_min = (_now() - datetime.fromisoformat(order["out_at"])
                          ).total_seconds() / 60.0
             if 1 <= cycle_min <= 180:
@@ -354,10 +354,10 @@ def _archive_order(order, outcome, courier="", courier_id="", reason=""):
 
 
 def _history_period(days=1, point_id=None):
-    """Ð¡Ñ‚Ñ€Ð¾ÐºÐ¸ Ð¸ÑÑ‚Ð¾Ñ€Ð¸Ð¸ Ð·Ð° Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ðµ `days` Ð´Ð½ÐµÐ¹ + ÑÐ²Ð¾Ð´ÐºÐ° (Ð½Ð¾Ð²Ñ‹Ðµ â€” Ð¿ÐµÑ€Ð²Ñ‹Ð¼Ð¸).
+    """Строки истории за последние `days` дней + сводка (новые — первыми).
 
-    point_id â€” Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð·Ð°ÐºÐ°Ð·Ñ‹ ÑÑ‚Ð¾Ð³Ð¾ Ð´ÐµÐ¿Ð¾ (None = Ð²ÑÐµ; Ð¿ÑƒÑÑ‚Ð°Ñ point_id Ñƒ ÑÑ‚Ð°Ñ€Ñ‹Ñ…
-    ÑÑ‚Ñ€Ð¾Ðº Ñ‚Ñ€Ð°ÐºÑ‚ÑƒÐµÑ‚ÑÑ ÐºÐ°Ðº Ð¿ÐµÑ€Ð²Ð°Ñ Ñ‚Ð¾Ñ‡ÐºÐ°).
+    point_id — только заказы этого депо (None = все; пустая point_id у старых
+    строк трактуется как первая точка).
     """
     since = (_now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
     where, args = "substr(closed_at, 1, 10) >= ?", [since]
@@ -398,20 +398,20 @@ def _history_today(point_id=None):
     return _history_period(1, point_id=point_id)["summary"]
 
 
-# ---------- Ð¸Ð½Ð´Ð¸Ð²Ð¸Ð´ÑƒÐ°Ð»ÑŒÐ½Ð°Ñ ÑÐºÐ¾Ñ€Ð¾ÑÑ‚ÑŒ ÐºÑƒÑ€ÑŒÐµÑ€Ð° ----------
-# Ð—Ð°Ð¼ÐµÑ€ Ð¿Ð¾ Ð³ÐµÐ¾: Ð¿Ð°Ñ€Ñ‹ Ð¡Ð“Ð›ÐÐ–Ð•ÐÐÐ«Ð¥ (Ð¼ÐµÐ´Ð¸Ð°Ð½Ð°) Ñ‚Ð¾Ñ‡ÐµÐº live-Ð»Ð¾ÐºÐ°Ñ†Ð¸Ð¸ Ñ dt >= 15 c,
-# Ð¾Ñ‚Ñ€ÐµÐ·ÐºÐ¾Ð¼ >= 40 Ð¼ Ð¸ ÑÐºÐ¾Ñ€Ð¾ÑÑ‚ÑŒÑŽ 3..80 ÐºÐ¼/Ñ‡ Ð´Ð¾Ð±Ð°Ð²Ð»ÑÑŽÑ‚ Ð¼ÐµÑ‚Ñ€Ñ‹/ÑÐµÐºÑƒÐ½Ð´Ñ‹ Ð² speed_day
-# Ð·Ð° ÑÐµÐ³Ð¾Ð´Ð½Ñ. ÐžÐ´Ð¸Ð½Ð¾Ñ‡Ð½Ñ‹Ð¹ GPS-Ð¿Ñ€Ñ‹Ð¶Ð¾Ðº Ð³Ð°ÑÐ¸Ñ‚ÑÑ Ð¼ÐµÐ´Ð¸Ð°Ð½Ð¾Ð¹ (Ð½Ðµ Ð¿Ð¾Ð¿Ð°Ð´Ð°ÐµÑ‚ Ð² Ñ‚Ñ€ÐµÐº),
-# Ð¼ÐµÐ»ÐºÐ°Ñ Ð´Ñ€Ð¾Ð¶ÑŒ Ð½Ð° Ð¼ÐµÑÑ‚Ðµ â€” Ð¿Ð¾Ñ€Ð¾Ð³Ð¾Ð¼ Ð´Ð¸ÑÑ‚Ð°Ð½Ñ†Ð¸Ð¸, Ð²Ñ‹Ð±Ñ€Ð¾Ñ Â«1000 ÐºÐ¼/Ñ‡Â» â€” Ð¿Ð¾Ñ‚Ð¾Ð»ÐºÐ¾Ð¼,
-# Ð° Ð´Ð½ÐµÐ²Ð½Ð°Ñ ÑÑƒÐ¼Ð¼Ð° ÑƒÑÑ€ÐµÐ´Ð½ÑÐµÑ‚ Ð¾ÑÑ‚Ð°Ñ‚Ð¾Ñ‡Ð½Ñ‹Ð¹ ÑˆÑƒÐ¼.
-# Ð¤Ð¾Ð»Ð»Ð±ÐµÐº Ð¿Ð¾ Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÐ°Ð¼: ÑÑ€ÐµÐ´Ð½Ð¸Ð¹ Ñ†Ð¸ÐºÐ» ÐºÑƒÑ€ÑŒÐµÑ€Ð° Ð¿Ñ€Ð¾Ñ‚Ð¸Ð² ÑÑ€ÐµÐ´Ð½ÐµÐ³Ð¾ Ð¿Ð¾ Ñ„Ð»Ð¾Ñ‚Ñƒ
-# Ð·Ð° Ñ‚Ð¾Ñ‚ Ð¶Ðµ Ð´ÐµÐ½ÑŒ â€” Ð¾Ñ‚Ð½Ð¾ÑˆÐµÐ½Ð¸Ðµ Ð¼Ð°ÑÑˆÑ‚Ð°Ð±Ð¸Ñ€ÑƒÐµÑ‚ ÑÐºÐ¾Ñ€Ð¾ÑÑ‚ÑŒ Ð¿Ð¾ ÑƒÐ¼Ð¾Ð»Ñ‡Ð°Ð½Ð¸ÑŽ.
-_SPEED_MIN_GEO_S = 180.0   # Ð½ÑƒÐ¶Ð½Ð¾ >= 3 Ð¼Ð¸Ð½ÑƒÑ‚ Ð´Ð²Ð¸Ð¶ÐµÐ½Ð¸Ñ, Ñ‡Ñ‚Ð¾Ð±Ñ‹ Ð´Ð¾Ð²ÐµÑ€ÑÑ‚ÑŒ Ð³ÐµÐ¾
-_SPEED_MIN_DEL_N = 2       # Ð½ÑƒÐ¶Ð½Ð¾ >= 2 Ð´Ð¾ÑÑ‚Ð°Ð²Ð¾Ðº, Ñ‡Ñ‚Ð¾Ð±Ñ‹ ÑÑ€Ð°Ð²Ð½Ð¸Ð²Ð°Ñ‚ÑŒ Ñ‚ÐµÐ¼Ð¿
+# ---------- индивидуальная скорость курьера ----------
+# Замер по гео: пары СГЛАЖЕННЫХ (медиана) точек live-локации с dt >= 15 c,
+# отрезком >= 40 м и скоростью 3..80 км/ч добавляют метры/секунды в speed_day
+# за сегодня. Одиночный GPS-прыжок гасится медианой (не попадает в трек),
+# мелкая дрожь на месте — порогом дистанции, выброс «1000 км/ч» — потолком,
+# а дневная сумма усредняет остаточный шум.
+# Фоллбек по доставкам: средний цикл курьера против среднего по флоту
+# за тот же день — отношение масштабирует скорость по умолчанию.
+_SPEED_MIN_GEO_S = 180.0   # нужно >= 3 минут движения, чтобы доверять гео
+_SPEED_MIN_DEL_N = 2       # нужно >= 2 доставок, чтобы сравнивать темп
 _SPEED_KMH_BOUNDS = (5.0, 80.0)
-_SPEED_RATIO_BOUNDS = (0.6, 1.7)  # Ñ„Ð¾Ð»Ð»Ð±ÐµÐº Ð½Ðµ Ð¼Ð¾Ð¶ÐµÑ‚ ÑƒÐ²Ð¾Ð´Ð¸Ñ‚ÑŒ Ð´Ð°Ð»ÐµÐºÐ¾ Ð¾Ñ‚ Ð½Ð¾Ñ€Ð¼Ñ‹
-_SPEED_SEG_MIN_M = 40.0    # ÐºÐ¾Ñ€Ð¾Ñ‡Ðµ 40 Ð¼ â€” Ð´Ñ€Ð¾Ð¶ÑŒ ÑÑ‚Ð¾ÑÐ½Ð¸Ñ, Ð½Ðµ Ð´Ð²Ð¸Ð¶ÐµÐ½Ð¸Ðµ
-_SPEED_MAX_ACC_M = 100.0   # Ñ‚Ð¾Ñ‡Ð½Ð¾ÑÑ‚ÑŒ Ñ…ÑƒÐ¶Ðµ 100 Ð¼ â€” Ñ‚Ð¾Ñ‡ÐºÐ° Ð¼ÑƒÑÐ¾Ñ€Ð½Ð°Ñ
+_SPEED_RATIO_BOUNDS = (0.6, 1.7)  # фоллбек не может уводить далеко от нормы
+_SPEED_SEG_MIN_M = 40.0    # короче 40 м — дрожь стояния, не движение
+_SPEED_MAX_ACC_M = 100.0   # точность хуже 100 м — точка мусорная
 
 
 def _speed_add(courier_id, day=None, geo_m=0.0, geo_s=0.0, del_n=0, del_min=0.0):
@@ -426,27 +426,27 @@ def _speed_add(courier_id, day=None, geo_m=0.0, geo_s=0.0, del_n=0, del_min=0.0)
 
 
 def _speed_geo_sample(courier_id, prev, cur):
-    """Ð¡ÐºÐ»Ð°Ð´Ñ‹Ð²Ð°ÐµÑ‚ Ð¾Ñ‚Ñ€ÐµÐ·Ð¾Ðº Ð¼ÐµÐ¶Ð´Ñƒ Ð´Ð²ÑƒÐ¼Ñ Ð³ÐµÐ¾-Ñ‚Ð¾Ñ‡ÐºÐ°Ð¼Ð¸ Ð² Ð´Ð½ÐµÐ²Ð½Ð¾Ð¹ Ð·Ð°Ð¼ÐµÑ€ (Ð¸Ð»Ð¸ Ð¸Ð³Ð½Ð¾Ñ€)."""
+    """Складывает отрезок между двумя гео-точками в дневной замер (или игнор)."""
     dt = cur["ts"] - prev["ts"]
     if not (15 <= dt <= 600):
         return
     if max(prev.get("acc") or 0, cur.get("acc") or 0) > _SPEED_MAX_ACC_M:
-        return  # Ñ‚Ð¾Ñ‡Ð½Ð¾ÑÑ‚ÑŒ Ñ…ÑƒÐ¶Ðµ 100 Ð¼ â€” Ð²ÐµÑ€Ð¸Ñ‚ÑŒ Ð¾Ñ‚Ñ€ÐµÐ·ÐºÑƒ Ð½ÐµÐ»ÑŒÐ·Ñ
+        return  # точность хуже 100 м — верить отрезку нельзя
     m = haversine_km(prev, cur) * ROAD_FACTOR * 1000.0
     if m < _SPEED_SEG_MIN_M:
-        return  # Ð´Ñ€Ð¾Ð¶ÑŒ Ð½Ð° Ð¼ÐµÑÑ‚Ðµ / ÑˆÐ°Ð³ Ð²Ð½ÑƒÑ‚Ñ€Ð¸ Ð¿Ð¾Ð³Ñ€ÐµÑˆÐ½Ð¾ÑÑ‚Ð¸ GPS
+        return  # дрожь на месте / шаг внутри погрешности GPS
     kmh = m / 1000.0 / (dt / 3600.0)
     if 3.0 <= kmh <= 80.0:
         _speed_add(courier_id, geo_m=m, geo_s=dt)
 
 
-_SPEED_CUR_WINDOW = 240.0  # Ð¾ÐºÐ½Ð¾ Â«Ñ‚ÐµÐºÑƒÑ‰ÐµÐ¹Â» ÑÐºÐ¾Ñ€Ð¾ÑÑ‚Ð¸, ÑÐµÐºÑƒÐ½Ð´Ñ‹
-_SPEED_CUR_MAX_AGE = 300.0  # Ð³ÐµÐ¾ ÑÑ‚Ð°Ñ€ÑˆÐµ 5 Ð¼Ð¸Ð½ÑƒÑ‚ â€” Ñ‚ÐµÐºÑƒÑ‰ÐµÐ¹ ÑÐºÐ¾Ñ€Ð¾ÑÑ‚Ð¸ Ð½ÐµÑ‚
+_SPEED_CUR_WINDOW = 240.0  # окно «текущей» скорости, секунды
+_SPEED_CUR_MAX_AGE = 300.0  # гео старше 5 минут — текущей скорости нет
 
 
 def _speed_current_kmh(pos, now):
-    """Ð¡ÐºÐ¾Ñ€Ð¾ÑÑ‚ÑŒ Â«Ð¿Ñ€ÑÐ¼Ð¾ ÑÐµÐ¹Ñ‡Ð°ÑÂ» Ð¿Ð¾ ÑÐ²ÐµÐ¶ÐµÐ¼Ñƒ Ð³ÐµÐ¾-Ñ‚Ñ€ÐµÐºÑƒ. None â€” Ð³ÐµÐ¾ Ð½ÐµÑ‚/ÑƒÑÑ‚Ð°Ñ€ÐµÐ»Ð¾,
-    0.0 â€” ÑÑ‚Ð¾Ð¸Ñ‚ Ð½Ð° Ð¼ÐµÑÑ‚Ðµ (Ñ‚Ð¾Ñ‡ÐºÐ¸ ÐµÑÑ‚ÑŒ, Ð´Ð²Ð¸Ð¶ÐµÐ½Ð¸Ñ Ð½ÐµÑ‚)."""
+    """Скорость «прямо сейчас» по свежему гео-треку. None — гео нет/устарело,
+    0.0 — стоит на месте (точки есть, движения нет)."""
     if not pos or now - pos["ts"] > _SPEED_CUR_MAX_AGE:
         return None
     hist = [h for h in pos.get("hist", []) if now - h["ts"] <= _SPEED_CUR_WINDOW]
@@ -462,9 +462,9 @@ def _speed_current_kmh(pos, now):
         m = haversine_km(a, b) * ROAD_FACTOR * 1000.0
         kmh = m / 1000.0 / (dt / 3600.0)
         if kmh > 90.0:
-            continue  # GPS-Ð¿Ñ€Ñ‹Ð¶Ð¾Ðº
+            continue  # GPS-прыжок
         if m < 15.0 and kmh < 5.0:
-            t_sum += dt  # ÑÑ‚Ð¾Ð¸Ñ‚ Ð½Ð° Ð¼ÐµÑÑ‚Ðµ: Ð²Ñ€ÐµÐ¼Ñ Ð¸Ð´Ñ‘Ñ‚, Ð¼ÐµÑ‚Ñ€Ñ‹ â€” Ð½ÐµÑ‚
+            t_sum += dt  # стоит на месте: время идёт, метры — нет
             continue
         m_sum += m
         t_sum += dt
@@ -479,7 +479,7 @@ def _speed_rows(courier_id, limit=30):
 
 
 def _speed_fleet_cycle_avg(day):
-    """Ð¡Ñ€ÐµÐ´Ð½Ð¸Ð¹ Ñ†Ð¸ÐºÐ» Ð´Ð¾ÑÑ‚Ð°Ð²Ð¾Ðº Ð¿Ð¾ Ð²ÑÐµÐ¼ ÐºÑƒÑ€ÑŒÐµÑ€Ð°Ð¼ Ð·Ð° Ð´ÐµÐ½ÑŒ (Ð¸Ð»Ð¸ None)."""
+    """Средний цикл доставок по всем курьерам за день (или None)."""
     with _db_lock, _db() as c:
         r = c.execute("SELECT SUM(del_min) AS s, SUM(del_n) AS n FROM speed_day "
                       "WHERE day = ? AND del_n > 0", (day,)).fetchone()
@@ -487,7 +487,7 @@ def _speed_fleet_cycle_avg(day):
 
 
 def _courier_del_avg_min(courier):
-    """Ð¡Ñ€ÐµÐ´Ð½Ð¸Ðµ Ð¼Ð¸Ð½ÑƒÑ‚Ñ‹ Ð½Ð° Ð¾Ð´Ð¸Ð½ Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ð¹ Ð·Ð°ÐºÐ°Ð·: ÑÐ²Ð¾Ð¹ Ñ‚ÐµÐ¼Ð¿, Ð¸Ð½Ð°Ñ‡Ðµ Ñ„Ð»Ð¾Ñ‚, Ð¸Ð½Ð°Ñ‡Ðµ 15."""
+    """Средние минуты на один доставленный заказ: свой темп, иначе флот, иначе 15."""
     rows = _speed_rows(courier.get("id") or "", limit=7)
     for r in rows:
         if (r["del_n"] or 0) >= 1 and (r["del_min"] or 0) > 0:
@@ -502,7 +502,7 @@ def _courier_del_avg_min(courier):
 
 
 def _speed_from_row(row, default_kmh):
-    """Ð¡ÐºÐ¾Ñ€Ð¾ÑÑ‚ÑŒ Ð¸Ð· ÑÑ‚Ñ€Ð¾ÐºÐ¸ Ð´Ð½Ñ: ÑÐ½Ð°Ñ‡Ð°Ð»Ð° Ð³ÐµÐ¾, Ð¸Ð½Ð°Ñ‡Ðµ Ñ‚ÐµÐ¼Ð¿ Ð´Ð¾ÑÑ‚Ð°Ð²Ð¾Ðº. None â€” Ð½ÐµÑ‚ Ð´Ð°Ð½Ð½Ñ‹Ñ…."""
+    """Скорость из строки дня: сначала гео, иначе темп доставок. None — нет данных."""
     if row["geo_s"] >= _SPEED_MIN_GEO_S:
         kmh = row["geo_m"] / row["geo_s"] * 3.6
         if kmh > 0.5:
@@ -511,7 +511,7 @@ def _speed_from_row(row, default_kmh):
         mine = row["del_min"] / row["del_n"]
         fleet = _speed_fleet_cycle_avg(row["day"])
         if fleet and mine > 0:
-            ratio = fleet / mine  # Ñ†Ð¸ÐºÐ» Ð´Ð»Ð¸Ð½Ð½ÐµÐµ ÑÑ€ÐµÐ´Ð½ÐµÐ³Ð¾ -> Ð¼ÐµÐ´Ð»ÐµÐ½Ð½ÐµÐµ
+            ratio = fleet / mine  # цикл длиннее среднего -> медленнее
             ratio = min(_SPEED_RATIO_BOUNDS[1], max(_SPEED_RATIO_BOUNDS[0], ratio))
             return min(_SPEED_KMH_BOUNDS[1],
                        max(_SPEED_KMH_BOUNDS[0], default_kmh * ratio)), "delivery"
@@ -519,10 +519,10 @@ def _speed_from_row(row, default_kmh):
 
 
 def _courier_speed(courier, settings=None):
-    """(ÐºÐ¼/Ñ‡, Ð¸ÑÑ‚Ð¾Ñ‡Ð½Ð¸Ðº) Ð¸Ð½Ð´Ð¸Ð²Ð¸Ð´ÑƒÐ°Ð»ÑŒÐ½Ð¾Ð¹ ÑÐºÐ¾Ñ€Ð¾ÑÑ‚Ð¸ ÐºÑƒÑ€ÑŒÐµÑ€Ð°.
+    """(км/ч, источник) индивидуальной скорости курьера.
 
-    Ð›ÐµÑÑ‚Ð½Ð¸Ñ†Ð°: ÑÐµÐ³Ð¾Ð´Ð½Ñ (Ð³ÐµÐ¾ -> Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÐ¸) -> Ð²Ñ‡ÐµÑ€Ð° -> ÑÐ°Ð¼Ñ‹Ð¹ ÑÐ²ÐµÐ¶Ð¸Ð¹ Ð´ÐµÐ½ÑŒ Ñ Ð·Ð°Ð¼ÐµÑ€Ð¾Ð¼
-    -> Ð½Ð°ÑÑ‚Ñ€Ð¾Ð¹ÐºÐ° speed_kmh (Ð¸ÑÑ‚Ð¾Ñ‡Ð½Ð¸Ðº "default").
+    Лестница: сегодня (гео -> доставки) -> вчера -> самый свежий день с замером
+    -> настройка speed_kmh (источник "default").
     """
     default_kmh = max(5.0, float((settings or STATE["settings"])
                                  .get("speed_kmh", 60)))
@@ -536,7 +536,7 @@ def _courier_speed(courier, settings=None):
 
 
 def load_state():
-    """Ð—Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° ÑÐ¾Ñ…Ñ€Ð°Ð½Ñ‘Ð½Ð½Ð¾Ð³Ð¾ ÑÐ¾ÑÑ‚Ð¾ÑÐ½Ð¸Ñ Ð¿Ñ€Ð¸ ÑÑ‚Ð°Ñ€Ñ‚Ðµ (Ð´Ð°Ð½Ð½Ñ‹Ðµ Ð¿ÐµÑ€ÐµÐ¶Ð¸Ð²Ð°ÑŽÑ‚ Ñ€ÐµÑÑ‚Ð°Ñ€Ñ‚)."""
+    """Загрузка сохранённого состояния при старте (данные переживают рестарт)."""
     with _db_lock, _db() as c:
         c.executescript(_DB_SCHEMA)
         meta = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM meta")}
@@ -559,13 +559,13 @@ def load_state():
         except ValueError:
             pass
     if not STATE.get("points"):
-        # ÑÐ¸Ð´: Ð´Ð²Ðµ Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ Barak (Ð“Ð¾Ð¼ÐµÐ»ÑŒ)
+        # сид: две точки выдачи Barak (Гомель)
         STATE["points"] = [
-            {"id": uuid.uuid4().hex[:8], "name": "ÐŸÐ¾Ð´Ð³Ð¾Ñ€Ð½Ð°Ñ",
-             "address": "ÑƒÐ». ÐŸÐ¾Ð´Ð³Ð¾Ñ€Ð½Ð°Ñ 12/1, Ð“Ð¾Ð¼ÐµÐ»ÑŒ",
+            {"id": uuid.uuid4().hex[:8], "name": "Подгорная",
+             "address": "ул. Подгорная 12/1, Гомель",
              "lat": 52.44175316939852, "lng": 31.01452592124391},
-            {"id": uuid.uuid4().hex[:8], "name": "Ð‘Ð°Ñ€Ñ‹ÐºÐ¸Ð½Ð°",
-             "address": "ÑƒÐ». Ð‘Ð°Ñ€Ñ‹ÐºÐ¸Ð½Ð° 230Ð‘, Ð“Ð¾Ð¼ÐµÐ»ÑŒ",
+            {"id": uuid.uuid4().hex[:8], "name": "Барыкина",
+             "address": "ул. Барыкина 230Б, Гомель",
              "lat": 52.42326517981715, "lng": 30.934015684685928},
         ]
         _persist_meta()
@@ -587,9 +587,9 @@ def load_state():
     except ValueError:
         pass
     for key in ("tg_ask", "tg_deliv"):
-        # Ð´Ð¸Ð°Ð»Ð¾Ð³Ð¸ Â«Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½?Â» Ð¸ Ñ‚Ñ€ÐµÐºÐµÑ€Ñ‹ Ð¿Ñ€Ð¾ÑÑ‚Ð¾Ñ Ð¿ÐµÑ€ÐµÐ¶Ð¸Ð²Ð°ÑŽÑ‚ Ñ€ÐµÑÑ‚Ð°Ñ€Ñ‚:
-        # Ð±ÐµÐ· ÑÑ‚Ð¾Ð³Ð¾ Ð¿Ð¾ÑÐ»Ðµ ÐºÐ°Ð¶Ð´Ð¾Ð³Ð¾ Ð´ÐµÐ¿Ð»Ð¾Ñ Ð±Ð¾Ñ‚ Ð¿ÐµÑ€ÐµÑÐ¿Ñ€Ð°ÑˆÐ¸Ð²Ð°Ð», Ð° Ð½Ð°Ð¶Ð°Ñ‚Ð¸Ñ
-        # ÐºÐ½Ð¾Ð¿Ð¾Ðº Ð½Ð° ÑÑ‚Ð°Ñ€Ñ‹Ñ… ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸ÑÑ… Ð¿Ð¾Ð¿Ð°Ð´Ð°Ð»Ð¸ Ð² Â«ÑƒÐ¶Ðµ Ð½ÐµÐ°ÐºÑ‚ÑƒÐ°Ð»ÑŒÐ½Ð¾Â»
+        # диалоги «доставлен?» и трекеры простоя переживают рестарт:
+        # без этого после каждого деплоя бот переспрашивал, а нажатия
+        # кнопок на старых сообщениях попадали в «уже неактуально»
         if meta.get(key):
             try:
                 saved = json.loads(meta[key])
@@ -597,8 +597,8 @@ def load_state():
                     STATE[key].update(saved)
             except ValueError:
                 pass
-    # ÑÐ²ÐµÑ€ÐºÐ°: ÐµÑÐ»Ð¸ Ð±Ð¾Ñ‚ ÑƒÐ¶Ðµ ÑÐ¿Ñ€Ð¾ÑÐ¸Ð» (asked), Ð° Ð´Ð¸Ð°Ð»Ð¾Ð³ Ð½Ðµ Ð²Ð¾ÑÑÑ‚Ð°Ð½Ð¾Ð²Ð¸Ð»ÑÑ â€”
-    # ÑÐ±Ñ€Ð°ÑÑ‹Ð²Ð°ÐµÐ¼ asked, Ñ‡Ñ‚Ð¾Ð±Ñ‹ Ð¿ÐµÑ€ÐµÑÐ¿Ñ€Ð¾ÑÐ¸Ð» Ð·Ð°Ð½Ð¾Ð²Ð¾ ÑÐ²ÐµÐ¶Ð¸Ð¼ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸ÐµÐ¼
+    # сверка: если бот уже спросил (asked), а диалог не восстановился —
+    # сбрасываем asked, чтобы переспросил заново свежим сообщением
     for _chat, _recs in (STATE["tg_deliv"] or {}).items():
         for _oid, _rec in list((_recs or {}).items()):
             if _rec.get("asked") and _oid not in (STATE["tg_ask"].get(_chat) or {}):
@@ -623,7 +623,7 @@ def load_state():
                                   if isinstance(v, dict) and v.get("routes")}
         except ValueError:
             pass
-    elif meta.get("plan"):  # ÑÑ‚Ð°Ñ€Ñ‹Ð¹ Ñ„Ð¾Ñ€Ð¼Ð°Ñ‚: ÐµÐ´Ð¸Ð½Ñ‹Ð¹ Ð¿Ð»Ð°Ð½ -> Ð¿Ð»Ð°Ð½ Ð¿ÐµÑ€Ð²Ð¾Ð¹ Ñ‚Ð¾Ñ‡ÐºÐ¸
+    elif meta.get("plan"):  # старый формат: единый план -> план первой точки
         try:
             p = json.loads(meta["plan"])
             first = (STATE.get("points") or [{}])[0].get("id")
@@ -634,7 +634,7 @@ def load_state():
     log.info("state loaded: %d couriers, %d orders", len(couriers), len(orders))
 
 
-# ÑÐµÐºÑ€ÐµÑ‚ ÑÐµÑÑÐ¸Ð¹: ÑÑ‚Ð°Ð±Ð¸Ð»ÐµÐ½ Ð¼ÐµÐ¶Ð´Ñƒ Ñ€ÐµÑÑ‚Ð°Ñ€Ñ‚Ð°Ð¼Ð¸, Ð°Ð²Ñ‚Ð¾Ð³ÐµÐ½ÐµÑ€Ð°Ñ†Ð¸Ñ Ð¿Ñ€Ð¸ Ð¿ÐµÑ€Ð²Ð¾Ð¼ ÑÑ‚Ð°Ñ€Ñ‚Ðµ
+# секрет сессий: стабилен между рестартами, автогенерация при первом старте
 def _session_secret():
     with _db_lock, _db() as c:
         row = c.execute("SELECT value FROM meta WHERE key = 'session_secret'").fetchone()
@@ -646,7 +646,7 @@ def _session_secret():
         return secret
 
 
-SESSION_SECRET = _session_secret()  # Ð¿Ð¾Ð´Ð¿Ð¸ÑÑŒ cookie-ÑÐµÑÑÐ¸Ð¹ (ÑˆÐ¸Ð¼Ñ‹ Ð±ÐµÑ€ÑƒÑ‚ Ð¿Ñ€Ð¸ ÑÑ‚Ð°Ñ€Ñ‚Ðµ)
+SESSION_SECRET = _session_secret()  # подпись cookie-сессий (шимы берут при старте)
 _PBKDF_ROUNDS = 200_000
 
 
@@ -671,12 +671,12 @@ def osrm_get(path, params):
                 return data
             log.warning("OSRM %s: code=%s", base, data.get("code"))
         except Exception as e:  # noqa: BLE001
-            log.warning("OSRM %s Ð½ÐµÐ´Ð¾ÑÑ‚ÑƒÐ¿ÐµÐ½: %s", base, e)
+            log.warning("OSRM %s недоступен: %s", base, e)
     return None
 
 
 def osrm_table(points):
-    """ÐœÐ°Ñ‚Ñ€Ð¸Ñ†Ñ‹ Ð²Ñ€ÐµÐ¼ÐµÐ½Ð¸ (ÑÐµÐº) Ð¸ Ñ€Ð°ÑÑÑ‚Ð¾ÑÐ½Ð¸Ñ (Ð¼) Ð¿Ð¾ Ð´Ð¾Ñ€Ð¾Ð³Ð°Ð¼. (None, None), ÐµÑÐ»Ð¸ OSRM Ð½ÐµÐ´Ð¾ÑÑ‚ÑƒÐ¿ÐµÐ½."""
+    """Матрицы времени (сек) и расстояния (м) по дорогам. (None, None), если OSRM недоступен."""
     coords = ";".join(f"{p['lng']:.6f},{p['lat']:.6f}" for p in points)
     data = osrm_get(f"/table/v1/driving/{coords}", {"annotations": "duration,distance"})
     durations = data and data.get("durations")
@@ -689,7 +689,7 @@ def osrm_table(points):
 
 
 def osrm_geometry(points):
-    """Ð“ÐµÐ¾Ð¼ÐµÑ‚Ñ€Ð¸Ñ Ð¼Ð°Ñ€ÑˆÑ€ÑƒÑ‚Ð° Ð¿Ð¾ Ð´Ð¾Ñ€Ð¾Ð³Ð°Ð¼: ÑÐ¿Ð¸ÑÐ¾Ðº [lat, lng]. None Ð¿Ñ€Ð¸ ÑÐ±Ð¾Ðµ."""
+    """Геометрия маршрута по дорогам: список [lat, lng]. None при сбое."""
     coords = ";".join(f"{p['lng']:.6f},{p['lat']:.6f}" for p in points)
     data = osrm_get(f"/route/v1/driving/{coords}",
                     {"overview": "full", "geometries": "geojson"})
@@ -699,7 +699,7 @@ def osrm_geometry(points):
         return None
 
 
-# ---------- OpenRouteService (Ñ Ð·Ð°Ñ‰Ð¸Ñ‚Ð¾Ð¹ Ð¾Ñ‚ Ð¸ÑÑ‡ÐµÑ€Ð¿Ð°Ð½Ð¸Ñ ÐºÐ²Ð¾Ñ‚Ñ‹) ----------
+# ---------- OpenRouteService (с защитой от исчерпания квоты) ----------
 
 def _seconds_to_utc_midnight():
     now = datetime.now(timezone.utc)
@@ -707,7 +707,7 @@ def _seconds_to_utc_midnight():
 
 
 def _ors_available():
-    """Ð¡Ð¼ÐµÐ½Ð° ÑÑƒÑ‚Ð¾Ðº Ð¾Ð±Ð½ÑƒÐ»ÑÐµÑ‚ ÑÑ‡Ñ‘Ñ‚Ñ‡Ð¸Ðº Ð¸ ÑÐ½Ð¸Ð¼Ð°ÐµÑ‚ Ð¾Ñ‚ÐºÐ»ÑŽÑ‡ÐµÐ½Ð¸Ðµ."""
+    """Смена суток обнуляет счётчик и снимает отключение."""
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if ORS_STATE["day"] != day:
         ORS_STATE.update(day=day, used=0, disabled_until=None, last_error=None)
@@ -717,7 +717,7 @@ def _ors_available():
 
 
 def ors_post(path, body):
-    """POST Ðº ORS. None => ORS Ð½ÐµÐ´Ð¾ÑÑ‚ÑƒÐ¿ÐµÐ½ Ð¸Ð»Ð¸ ÐºÐ²Ð¾Ñ‚Ð° Ð¸ÑÑ‡ÐµÑ€Ð¿Ð°Ð½Ð° (ÑƒÑ…Ð¾Ð´Ð¸Ð¼ Ð½Ð° OSRM)."""
+    """POST к ORS. None => ORS недоступен или квота исчерпана (уходим на OSRM)."""
     if not _ors_available():
         return None
     try:
@@ -735,7 +735,7 @@ def ors_post(path, body):
             return None
         resp.raise_for_status()
         data = resp.json()
-    except Exception as exc:  # ÑÐµÑ‚ÑŒ/Ñ‚Ð°Ð¹Ð¼Ð°ÑƒÑ‚ â€” ÐºÐ¾Ñ€Ð¾Ñ‚ÐºÐ°Ñ Ð¿Ð°ÑƒÐ·Ð° Ð¸ Ñ„Ð¾Ð»Ð±ÑÐº
+    except Exception as exc:  # сеть/таймаут — короткая пауза и фолбэк
         ORS_STATE["disabled_until"] = time.time() + 60
         ORS_STATE["last_error"] = f"{type(exc).__name__}: {exc}"[:160]
         return None
@@ -766,37 +766,37 @@ def ors_geometry(points):
 
 
 def ors_status():
-    _ors_available()  # Ð¾Ð±Ð½Ð¾Ð²Ð»ÑÐµÑ‚ ÑÑ‡Ñ‘Ñ‚Ñ‡Ð¸ÐºÐ¸ Ð¿Ñ€Ð¸ ÑÐ¼ÐµÐ½Ðµ ÑÑƒÑ‚Ð¾Ðº
+    _ors_available()  # обновляет счётчики при смене суток
     paused = bool(ORS_STATE["disabled_until"] and time.time() < ORS_STATE["disabled_until"])
     return {"used": ORS_STATE["used"], "soft_limit": ORS_SOFT_LIMIT,
             "paused": paused, "last_error": ORS_STATE["last_error"]}
 
 
-_MATRIX_CACHE = {}          # ÐºÐ»ÑŽÑ‡(Ñ‚Ð¾Ñ‡ÐºÐ¸) -> (ts, durations, distances, provider)
-_MATRIX_TTL = 1800          # 30 Ð¼Ð¸Ð½ÑƒÑ‚: Ð´Ð¾Ñ€Ð¾Ð¶Ð½Ð°Ñ ÑÐµÑ‚ÑŒ Ð½Ðµ Ð¼ÐµÐ½ÑÐµÑ‚ÑÑ Ñ‚Ð°Ðº Ð±Ñ‹ÑÑ‚Ñ€Ð¾
+_MATRIX_CACHE = {}          # ключ(точки) -> (ts, durations, distances, provider)
+_MATRIX_TTL = 1800          # 30 минут: дорожная сеть не меняется так быстро
 _MATRIX_CACHE_MAX = 40
 
 
 def _matrix_key(points):
-    # Ð´ÐµÐ¿Ð¾ â€” Ð½Ð° ÑÐ²Ð¾Ñ‘Ð¼ Ð¼ÐµÑÑ‚Ðµ: Ð¼Ð°Ñ‚Ñ€Ð¸Ñ†Ð° Ð¸Ð½Ð´ÐµÐºÑÐ½Ð°, Ð¾Ð´Ð¸Ð½Ð°ÐºÐ¾Ð²Ñ‹Ð¹ Ð½Ð°Ð±Ð¾Ñ€ Ñ‚Ð¾Ñ‡ÐµÐº
-    # Ñ Ð´Ñ€ÑƒÐ³Ð¸Ð¼ Ð´ÐµÐ¿Ð¾ (Ð´ÐµÐ¿Ð¾ = Ñ‡ÐµÐ¹-Ñ‚Ð¾ Ð°Ð´Ñ€ÐµÑ) Ð½Ðµ Ð´Ð¾Ð»Ð¶ÐµÐ½ Ð¿Ð¾Ð¿Ð°Ð´Ð°Ñ‚ÑŒ Ð½Ð° Ñ‡ÑƒÐ¶Ð¾Ð¹ ÐºÑÑˆ
+    # депо — на своём месте: матрица индексна, одинаковый набор точек
+    # с другим депо (депо = чей-то адрес) не должен попадать на чужой кэш
     return (tuple((round(points[0]["lat"], 5), round(points[0]["lng"], 5))),
             tuple(sorted((round(p["lat"], 5), round(p["lng"], 5)) for p in points[1:])))
 
 
 def _cache_matrix(key, value):
-    if len(_MATRIX_CACHE) >= _MATRIX_CACHE_MAX:  # Ð¿Ñ€Ð¾ÑÑ‚Ð°Ñ Ð²Ñ‹Ñ‚ÐµÑÐ½ÑÑŽÑ‰Ð°Ñ Ñ‡Ð¸ÑÑ‚ÐºÐ°
+    if len(_MATRIX_CACHE) >= _MATRIX_CACHE_MAX:  # простая вытесняющая чистка
         oldest = min(_MATRIX_CACHE, key=lambda k: _MATRIX_CACHE[k][0])
         _MATRIX_CACHE.pop(oldest, None)
     _MATRIX_CACHE[key] = (time.time(), *value)
 
 
 def routing_table(points):
-    """ÐœÐ°Ñ‚Ñ€Ð¸Ñ†Ð° Ð²Ñ€ÐµÐ¼ÐµÐ½Ð¸/Ñ€Ð°ÑÑÑ‚Ð¾ÑÐ½Ð¸Ñ: ORS -> OSRM (FOSSGIS -> Ð´ÐµÐ¼Ð¾) -> offline.
+    """Матрица времени/расстояния: ORS -> OSRM (FOSSGIS -> демо) -> offline.
 
-    Ð ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚ ÐºÑÑˆÐ¸Ñ€ÑƒÐµÑ‚ÑÑ Ð¿Ð¾ Ð½Ð°Ð±Ð¾Ñ€Ñƒ Ñ‚Ð¾Ñ‡ÐµÐº (30 Ð¼Ð¸Ð½): Ð¿Ð¾Ð²Ñ‚Ð¾Ñ€Ð½Ñ‹Ð¹ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚ Ñ‚Ð¾Ð³Ð¾ Ð¶Ðµ
-    Ð½Ð°Ð±Ð¾Ñ€Ð° Ð½Ðµ Ñ‚Ñ€Ð°Ñ‚Ð¸Ñ‚ ÐºÐ²Ð¾Ñ‚Ñƒ Ð²Ð½ÐµÑˆÐ½Ð¸Ñ… ÑÐµÑ€Ð²Ð¸ÑÐ¾Ð² Ð¸ Ð·Ð°Ð½Ð¸Ð¼Ð°ÐµÑ‚ Ð¼Ð¸Ð»Ð»Ð¸ÑÐµÐºÑƒÐ½Ð´Ñ‹.
-    Ð’Ð¾Ð·Ð²Ñ€Ð°Ñ‰Ð°ÐµÑ‚ (durations|None, distances|None, provider).
+    Результат кэшируется по набору точек (30 мин): повторный расчёт того же
+    набора не тратит квоту внешних сервисов и занимает миллисекунды.
+    Возвращает (durations|None, distances|None, provider).
     """
     key = _matrix_key(points)
     hit = _MATRIX_CACHE.get(key)
@@ -818,7 +818,7 @@ def routing_table(points):
 
 
 def routing_geometry(points):
-    """Ð“ÐµÐ¾Ð¼ÐµÑ‚Ñ€Ð¸Ñ Ð¼Ð°Ñ€ÑˆÑ€ÑƒÑ‚Ð°: ORS -> OSRM. None Ð¿Ñ€Ð¸ Ð¿Ð¾Ð»Ð½Ð¾Ð¼ ÑÐ±Ð¾Ðµ."""
+    """Геометрия маршрута: ORS -> OSRM. None при полном сбое."""
     if len(points) <= ORS_MAX_POINTS:
         geom = ors_geometry(points)
         if geom:
@@ -827,20 +827,20 @@ def routing_geometry(points):
 
 
 def build_time_matrix(points, settings):
-    """ÐœÐ°Ñ‚Ñ€Ð¸Ñ†Ð° Ð²Ñ€ÐµÐ¼ÐµÐ½Ð¸ Ð² Ð¼Ð¸Ð½ÑƒÑ‚Ð°Ñ….
+    """Матрица времени в минутах.
 
-    Ð’Ñ€ÐµÐ¼Ñ Ð´ÑƒÐ³Ð¸ = (OSRM-Ð²Ñ€ÐµÐ¼Ñ Ã— ÐºÐ¾ÑÑ„Ñ„Ð¸Ñ†Ð¸ÐµÐ½Ñ‚ Ð¿Ñ€Ð¾Ð±Ð¾Ðº)
-               + (Ñ€Ð°ÑÑÑ‚Ð¾ÑÐ½Ð¸Ðµ Ã— Ð·Ð°Ð´ÐµÑ€Ð¶ÐºÐ° Ð½Ð° ÑÐ²ÐµÑ‚Ð¾Ñ„Ð¾Ñ€Ð°Ñ…, Ñ/ÐºÐ¼)
-               + Ð²Ñ€ÑƒÑ‡ÐµÐ½Ð¸Ðµ (Ð½Ð° Ð´ÑƒÐ³Ðµ Ð¿Ñ€Ð¸Ð±Ñ‹Ñ‚Ð¸Ñ Ð² Ð·Ð°ÐºÐ°Ð·).
-    OSRM Ð¾Ñ‚Ð´Ð°Ñ‘Ñ‚ Ð²Ñ€ÐµÐ¼Ñ ÑÐ²Ð¾Ð±Ð¾Ð´Ð½Ð¾Ð³Ð¾ Ð¿Ð¾Ñ‚Ð¾ÐºÐ°: Ð±ÐµÐ· Ð¿Ñ€Ð¾Ð±Ð¾Ðº Ð¸ Ð±ÐµÐ· Ð¾ÑÑ‚Ð°Ð½Ð¾Ð²Ð¾Ðº Ð½Ð°
-    Ñ€ÐµÐ³ÑƒÐ»Ð¸Ñ€ÑƒÐµÐ¼Ñ‹Ñ… Ð¿ÐµÑ€ÐµÐºÑ€Ñ‘ÑÑ‚ÐºÐ°Ñ…, Ð¿Ð¾ÑÑ‚Ð¾Ð¼Ñƒ ÑÐ²ÐµÑ‚Ð¾Ñ„Ð¾Ñ€Ñ‹ Ð¼Ð¾Ð´ÐµÐ»Ð¸Ñ€ÑƒÑŽÑ‚ÑÑ Ð¾Ñ‚Ð´ÐµÐ»ÑŒÐ½Ð¾Ð¹
-    Ð½Ð°Ð´Ð±Ð°Ð²ÐºÐ¾Ð¹ Ð·Ð° ÐºÐ¸Ð»Ð¾Ð¼ÐµÑ‚Ñ€ Ð¿ÑƒÑ‚Ð¸ (Ð¿Ð¾ ÑƒÐ¼Ð¾Ð»Ñ‡Ð°Ð½Ð¸ÑŽ 15 Ñ/ÐºÐ¼ â‰ˆ ÑÐ²ÐµÑ‚Ð¾Ñ„Ð¾Ñ€ ÐºÐ°Ð¶Ð´Ñ‹Ðµ
-    ~1.2 ÐºÐ¼ Ð¸ ~18 Ñ Ð¾Ð¶Ð¸Ð´Ð°Ð½Ð¸Ñ). Ð’Ð¾Ð·Ð²Ñ€Ð°Ñ‚ Ð² Ð´ÐµÐ¿Ð¾ ÑƒÑ‡Ð¸Ñ‚Ñ‹Ð²Ð°ÐµÑ‚ÑÑ.
-    Ð’Ð¾Ð·Ð²Ñ€Ð°Ñ‰Ð°ÐµÑ‚ (Ð¼Ð°Ñ‚Ñ€Ð¸Ñ†Ð°, Ð´Ð¾Ñ€Ð¾Ð³Ð¸_Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ð½Ñ‹, Ð¼Ð°Ñ‚Ñ€Ð¸Ñ†Ð°_Ñ€Ð°ÑÑÑ‚Ð¾ÑÐ½Ð¸Ð¹_Ð¼|None, Ð¿Ñ€Ð¾Ð²Ð°Ð¹Ð´ÐµÑ€).
+    Время дуги = (OSRM-время × коэффициент пробок)
+               + (расстояние × задержка на светофорах, с/км)
+               + вручение (на дуге прибытия в заказ).
+    OSRM отдаёт время свободного потока: без пробок и без остановок на
+    регулируемых перекрёстках, поэтому светофоры моделируются отдельной
+    надбавкой за километр пути (по умолчанию 15 с/км ≈ светофор каждые
+    ~1.2 км и ~18 с ожидания). Возврат в депо учитывается.
+    Возвращает (матрица, дороги_использованы, матрица_расстояний_м|None, провайдер).
     """
     handover = max(0, int(settings["handover_min"]))
     traffic = max(1.0, float(settings.get("traffic", 1.3)))
-    lights = max(0.0, float(settings.get("lights_sec_per_km", 24))) / 60.0  # Ð¼Ð¸Ð½/ÐºÐ¼
+    lights = max(0.0, float(settings.get("lights_sec_per_km", 24))) / 60.0  # мин/км
     speed = max(5.0, float(settings["speed_kmh"]))
     n = len(points)
     durations, distances, provider = (routing_table(points) if n >= 2
@@ -854,7 +854,7 @@ def build_time_matrix(points, settings):
                 minutes = durations[i][j] / 60.0 * traffic
                 km = (distances[i][j] / 1000.0 if distances
                       else haversine_km(points[i], points[j]) * ROAD_FACTOR)
-            else:  # Ð·Ð°Ð¿Ð°ÑÐ½Ð¾Ð¹ Ð²Ð°Ñ€Ð¸Ð°Ð½Ñ‚: Ð¾Ñ†ÐµÐ½ÐºÐ° Ð¿Ð¾ Ð¿Ñ€ÑÐ¼Ð¾Ð¹
+            else:  # запасной вариант: оценка по прямой
                 km = haversine_km(points[i], points[j]) * ROAD_FACTOR
                 minutes = km / speed * 60
             minutes += km * lights
@@ -865,35 +865,35 @@ def build_time_matrix(points, settings):
     return m, durations is not None, distances, provider
 
 
-# ÐŸÐ¾Ñ‡Ð°ÑÐ¾Ð²Ñ‹Ðµ ÐºÐ¾ÑÑ„Ñ„Ð¸Ñ†Ð¸ÐµÐ½Ñ‚Ñ‹ Ð´Ð¾Ñ€Ð¾Ð¶Ð½Ð¾Ð¹ Ð½Ð°Ð³Ñ€ÑƒÐ·ÐºÐ¸ (Ð“Ð¾Ð¼ÐµÐ»ÑŒ). Ð£Ñ‚Ñ€ÐµÐ½Ð½Ð¸Ð¹ Ð¿Ð¸Ðº Ñ€ÐµÐ·ÐºÐ¸Ð¹:
-# Ñ ~7:05 (Ð¿Ñ€Ð¸Ð³Ð¾Ñ€Ð¾Ð´Ð½Ñ‹Ðµ Ð¿Ð¾Ñ‚Ð¾ÐºÐ¸ ÐÐ¾Ð²Ð¾Ð±ÐµÐ»Ð¸Ñ†Ñ‹/Ð Ð¾Ð¼Ð°Ð½Ð¾Ð²Ð¸Ñ‡ÐµÐ¹, ÑˆÐºÐ¾Ð»Ñ‹), ÑÐ°Ð¼Ñ‹Ð¹ Ð¿Ð»Ð¾Ñ‚Ð½Ñ‹Ð¹
-# 7:15-8:40; Ð²ÐµÑ‡ÐµÑ€Ð½Ð¸Ð¹ 17:00-19:00 (Ñ†ÐµÐ½Ñ‚Ñ€, Ð¼Ð¾ÑÑ‚, Ð²Ð¾ÐºÐ·Ð°Ð»); Ð¾Ð±ÐµÐ´ÐµÐ½Ð½Ñ‹Ð¹ Ð¼Ð¸Ð½Ð¸-Ð¿Ð¸Ðº.
-# Ð˜ÑÑ‚Ð¾Ñ‡Ð½Ð¸ÐºÐ¸: Ð¼ÐµÑÑ‚Ð½Ñ‹Ðµ Ð¡ÐœÐ˜ (BGmedia, ÑÐµÐ½Ñ‚ÑÐ±Ñ€ÑŒ 2026), Ñ€Ð°Ð·Ð±Ð¾Ñ€Ñ‹ Ð¿Ñ€Ð¾ÑÐ¿ÐµÐºÑ‚Ð° Ð›ÐµÐ½Ð¸Ð½Ð°.
-# Ð¨ÐºÐ°Ð»Ð° ÐºÐ¾Ð½ÑÐµÑ€Ð²Ð°Ñ‚Ð¸Ð²Ð½Ð°Ñ: Ð¿Ð¸Ðº +35%, Ð¼ÐµÐ¶Ð¿Ð¸Ðº -5..-10%.
+# Почасовые коэффициенты дорожной нагрузки (Гомель). Утренний пик резкий:
+# с ~7:05 (пригородные потоки Новобелицы/Романовичей, школы), самый плотный
+# 7:15-8:40; вечерний 17:00-19:00 (центр, мост, вокзал); обеденный мини-пик.
+# Источники: местные СМИ (BGmedia, сентябрь 2026), разборы проспекта Ленина.
+# Шкала консервативная: пик +35%, межпик -5..-10%.
 _HOURLY_TRAFFIC = {0: 0.90, 1: 0.90, 2: 0.90, 3: 0.90, 4: 0.90, 5: 0.90,
                    6: 1.00, 7: 1.20, 8: 1.35, 9: 1.15, 10: 1.00, 11: 1.00,
                    12: 1.10, 13: 1.05, 14: 1.00, 15: 1.00, 16: 1.05,
                    17: 1.20, 18: 1.35, 19: 1.15, 20: 1.00, 21: 0.95,
                    22: 0.95, 23: 0.90}
-_LATE_WEIGHT = 25    # ÑˆÑ‚Ñ€Ð°Ñ„ Ð·Ð° Ð¼Ð¸Ð½ÑƒÑ‚Ñƒ Ð¾Ð¿Ð¾Ð·Ð´Ð°Ð½Ð¸Ñ Ðº Ð´ÐµÐ´Ð»Ð°Ð¹Ð½Ñƒ
-_MAX_ROUNDS = 3      # Ð¼Ð°ÐºÑÐ¸Ð¼Ð°Ð»ÑŒÐ½Ð¾Ðµ Ñ‡Ð¸ÑÐ»Ð¾ Â«Ð·Ð°ÐµÐ·Ð´Ð¾Ð²Â» Ð½Ð° ÐºÑƒÑ€ÑŒÐµÑ€Ð°
+_LATE_WEIGHT = 25    # штраф за минуту опоздания к дедлайну
+_MAX_ROUNDS = 3      # максимальное число «заездов» на курьера
 
 
 def _deadline_rel_min(hhmm, now_hm):
-    """Ð”ÐµÐ´Ð»Ð°Ð¹Ð½ Â«Ð¾Ð±ÐµÑ‰Ð°Ð»Ð¸ Ðº HH:MMÂ» Ð² Ð¼Ð¸Ð½ÑƒÑ‚Ð°Ñ… Ð¾Ñ‚ Ñ‚ÐµÐºÑƒÑ‰ÐµÐ³Ð¾ Ð¼Ð¾Ð¼ÐµÐ½Ñ‚Ð°. None, ÐµÑÐ»Ð¸ Ð½Ðµ Ð·Ð°Ð´Ð°Ð½."""
+    """Дедлайн «обещали к HH:MM» в минутах от текущего момента. None, если не задан."""
     m = re.match(r"^([01]?\d|2[0-3]):([0-5]\d)$", (hhmm or "").strip())
     if not m:
         return None
     return (int(m.group(1)) * 60 + int(m.group(2))) - now_hm
 
 
-_APPROACH_RADIUS_KM = 2.5  # Ð±Ð»Ð¸Ð¶Ðµ Ðº Ñ†ÐµÐ½Ñ‚Ñ€Ñƒ â€” Ð¿Ð»Ð¾Ñ‚Ð½Ð°Ñ Ð·Ð°ÑÑ‚Ñ€Ð¾Ð¹ÐºÐ°, Ð¿Ð°Ñ€ÐºÐ¾Ð²ÐºÐ° Ð´Ð¾Ð»ÑŒÑˆÐµ
+_APPROACH_RADIUS_KM = 2.5  # ближе к центру — плотная застройка, парковка дольше
 
 
 def _approach_map(points, home, k_orders, settings):
-    """Ð”Ð¾Ð±Ð°Ð²ÐºÐ° Ð½Ð° Ð¿Ð°Ñ€ÐºÐ¾Ð²ÐºÑƒ/Ð¿Ð¾Ð´ÑŠÐµÐ·Ð´ Ð´Ð»Ñ Ð·Ð°ÐºÐ°Ð·Ð¾Ð² (ÑƒÐ·Ð»Ñ‹ k_orders..) Ð¾Ñ‚ Ñ‚Ð¾Ñ‡ÐºÐ¸ home.
+    """Добавка на парковку/подъезд для заказов (узлы k_orders..) от точки home.
 
-    Ð’Ð¾Ð·Ð²Ñ€Ð°Ñ‰Ð°ÐµÑ‚ {ÑƒÐ·ÐµÐ»_Ð·Ð°ÐºÐ°Ð·Ð°: Ð¼Ð¸Ð½ÑƒÑ‚Ñ‹}; Ñ†ÐµÐ½Ñ‚Ñ€Ñƒ Ð±Ð»Ð¸Ð¶Ðµ _APPROACH_RADIUS_KM - Â«Ñ†ÐµÐ½Ñ‚Ñ€Â».
+    Возвращает {узел_заказа: минуты}; центру ближе _APPROACH_RADIUS_KM - «центр».
     """
     near = max(0, int(settings.get("approach_center_min", 4)))
     far = max(0, int(settings.get("approach_far_min", 2)))
@@ -906,12 +906,12 @@ def _approach_map(points, home, k_orders, settings):
 
 def _eta_pass(stop_nodes, delay, matrix, settings, solved_dt, appr=None, home=0,
               spd_factor=1.0):
-    """ETA Ð¾ÑÑ‚Ð°Ð½Ð¾Ð²Ð¾Ðº Ð¿Ð¾ÐµÐ·Ð´ÐºÐ¸ (Ð¼Ð¸Ð½ÑƒÑ‚Ñ‹ Ð¾Ñ‚ solved_dt) Ñ Ð¿Ð¾Ñ‡Ð°ÑÐ¾Ð²Ñ‹Ð¼Ð¸ ÐºÐ¾ÑÑ„Ñ„Ð¸Ñ†Ð¸ÐµÐ½Ñ‚Ð°Ð¼Ð¸.
+    """ETA остановок поездки (минуты от solved_dt) с почасовыми коэффициентами.
 
-    ÐœÐ°Ñ‚Ñ€Ð¸Ñ†Ð° Ð¿Ð¾ÑÑ‚Ñ€Ð¾ÐµÐ½Ð° Ñ Ð±Ð°Ð·Ð¾Ð²Ñ‹Ð¼ ÐºÐ¾ÑÑ„Ñ„Ð¸Ñ†Ð¸ÐµÐ½Ñ‚Ð¾Ð¼ traffic: Ð´ÑƒÐ³Ð° Ð¾Ñ‡Ð¸Ñ‰Ð°ÐµÑ‚ÑÑ Ð¾Ñ‚ Ð½ÐµÐ³Ð¾
-    Ð¸ Ð´Ð¾Ð¼Ð½Ð¾Ð¶Ð°ÐµÑ‚ÑÑ Ð½Ð° ÐºÐ¾ÑÑ„Ñ„Ð¸Ñ†Ð¸ÐµÐ½Ñ‚ Ñ‡Ð°ÑÐ° Ñ„Ð°ÐºÑ‚Ð¸Ñ‡ÐµÑÐºÐ¾Ð³Ð¾ Ð²Ñ‹ÐµÐ·Ð´Ð° Ð½Ð° Ð´ÑƒÐ³Ñƒ.
-    spd_factor â€” Ð¸Ð½Ð´Ð¸Ð²Ð¸Ð´ÑƒÐ°Ð»ÑŒÐ½Ñ‹Ð¹ Ð¼Ð½Ð¾Ð¶Ð¸Ñ‚ÐµÐ»ÑŒ ÐºÑƒÑ€ÑŒÐµÑ€Ð° (Ð·Ð°Ð¼ÐµÐ´Ð»ÐµÐ½Ð½Ð°Ñ/Ð±Ñ‹ÑÑ‚Ñ€Ð°Ñ ÐµÐ·Ð´Ð°).
-    Ð’Ð¾Ð·Ð²Ñ€Ð°Ñ‰Ð°ÐµÑ‚ (ÑÐ¿Ð¸ÑÐ¾Ðº ETA Ð¾ÑÑ‚Ð°Ð½Ð¾Ð²Ð¾Ðº, Ð¿Ð¾Ð»Ð½Ð°Ñ Ð´Ð»Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ð¾ÑÑ‚ÑŒ Ð¿Ð¾ÐµÐ·Ð´ÐºÐ¸).
+    Матрица построена с базовым коэффициентом traffic: дуга очищается от него
+    и домножается на коэффициент часа фактического выезда на дугу.
+    spd_factor — индивидуальный множитель курьера (замедленная/быстрая езда).
+    Возвращает (список ETA остановок, полная длительность поездки).
     """
     hourly = int(settings.get("hour_traffic", 1))
     base_traffic = max(1.0, float(settings.get("traffic", 1.3)))
@@ -934,17 +934,17 @@ def _eta_pass(stop_nodes, delay, matrix, settings, solved_dt, appr=None, home=0,
 
 def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
                point_id=None):
-    """Ð Ð°Ð·Ð²Ð¾Ð·ÐºÐ° ÐžÐ”ÐÐžÐ“Ðž Ð´ÐµÐ¿Ð¾ (point_id; None = Ñ‚Ð¾Ñ‡ÐºÐ° Ð²Ñ‹Ð·Ñ‹Ð²Ð°ÑŽÑ‰ÐµÐ³Ð¾).
+    """Развозка ОДНОГО депо (point_id; None = точка вызывающего).
 
-    include_away=False â€” ÑÑ†ÐµÐ½Ð°Ñ€Ð¸Ð¹ Â«Ð½Ðµ Ð¶Ð´Ð°Ñ‚ÑŒÂ»: Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÐºÑƒÑ€ÑŒÐµÑ€Ñ‹ Ð½Ð° Ð±Ð°Ð·Ðµ.
+    include_away=False — сценарий «не ждать»: только курьеры на базе.
 
-    Ð—Ð°ÐºÐ°Ð·Ð¾Ð² Ð±Ð¾Ð»ÑŒÑˆÐµ, Ñ‡ÐµÐ¼ Ð²Ð»ÐµÐ·Ð°ÐµÑ‚ Ð² Ð¾Ð´Ð¸Ð½ Ð·Ð°ÐµÐ·Ð´ (Ð²Ð¼ÐµÑÑ‚Ð¸Ð¼Ð¾ÑÑ‚ÑŒ x ÐºÑƒÑ€ÑŒÐµÑ€Ñ‹), Ñ€ÐµÑˆÐ°ÐµÑ‚ÑÑ
-    Ð½ÐµÑÐºÐ¾Ð»ÑŒÐºÐ¸Ð¼Ð¸ Ñ€Ð°ÑƒÐ½Ð´Ð°Ð¼Ð¸: ÐºÑƒÑ€ÑŒÐµÑ€ Ð²ÐµÑ€Ð½Ñ‘Ñ‚ÑÑ Ð½Ð° Ð±Ð°Ð·Ñƒ Ð¸ Ð¿Ð¾ÐµÐ´ÐµÑ‚ Ð²Ñ‚Ð¾Ñ€Ñ‹Ð¼ Ð·Ð°ÐµÐ·Ð´Ð¾Ð¼
-    (Ð·Ð°Ð´ÐµÑ€Ð¶ÐºÐ° ÑÑ‚Ð°Ñ€Ñ‚Ð° = Ð´Ð»Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ð¾ÑÑ‚ÑŒ Ð¿ÐµÑ€Ð²Ð¾Ð³Ð¾ Ð·Ð°ÐµÐ·Ð´Ð° + Ð¿ÐµÑ€ÐµÐ·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ°).
+    Заказов больше, чем влезает в один заезд (вместимость x курьеры), решается
+    несколькими раундами: курьер вернётся на базу и поедет вторым заездом
+    (задержка старта = длительность первого заезда + перезагрузка).
 
-    helpers: {courier_id: point_id} â€” Ñ€Ð°Ð·Ð¾Ð²Ð°Ñ Â«Ð¿Ð¾Ð¼Ð¾Ñ‰ÑŒÂ»: ÐºÑƒÑ€ÑŒÐµÑ€ Ð² ÑÑ‚Ð¾Ð¼ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚Ðµ
-    ÑÑ‚Ð°Ñ€Ñ‚ÑƒÐµÑ‚ Ñ Ñ‡ÑƒÐ¶Ð¾Ð¹ Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ Ð¸ Ð±ÐµÑ€Ñ‘Ñ‚ Ð¼Ð°ÐºÑÐ¸Ð¼ÑƒÐ¼ Ð¾Ð´Ð¸Ð½ Ð·Ð°ÐºÐ°Ð·. Ð•Ð³Ð¾ ÑÐ¾Ð±ÑÑ‚Ð²ÐµÐ½Ð½Ð°Ñ
-    Ñ‚Ð¾Ñ‡ÐºÐ° Ð¸ ÑÑ‚Ð°Ñ‚ÑƒÑ Ð½Ðµ Ð¼ÐµÐ½ÑÑŽÑ‚ÑÑ.
+    helpers: {courier_id: point_id} — разовая «помощь»: курьер в этом расчёте
+    стартует с чужой точки выдачи и берёт максимум один заказ. Его собственная
+    точка и статус не меняются.
     """
     helpers = helpers or {}
     point_id = point_id or _my_point()
@@ -961,14 +961,14 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
     couriers = active + [c for c in STATE["couriers"]
                          if c["id"] in helper_ids and c not in active]
     if not STATE.get("points"):
-        raise ValueError("Ð¡Ð½Ð°Ñ‡Ð°Ð»Ð° Ð·Ð°Ð´Ð°Ð¹Ñ‚Ðµ Ð¼ÐµÑÑ‚Ð¾ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ Ð·Ð°ÐºÐ°Ð·Ð¾Ð² (Ñ‚Ð¾Ñ‡ÐºÑƒ Ð½Ð° ÐºÐ°Ñ€Ñ‚Ðµ)")
+        raise ValueError("Сначала задайте место выдачи заказов (точку на карте)")
     if not orders:
-        raise ValueError("ÐÐµÑ‚ Ð³Ð¾Ñ‚Ð¾Ð²Ñ‹Ñ… Ð·Ð°ÐºÐ°Ð·Ð¾Ð², Ð´Ð¾Ð±Ð°Ð²ÑŒÑ‚Ðµ Ñ…Ð¾Ñ‚Ñ Ð±Ñ‹ Ð¾Ð´Ð¸Ð½")
+        raise ValueError("Нет готовых заказов, добавьте хотя бы один")
     if not couriers:
-        raise ValueError("ÐÐµÑ‚ Ð°ÐºÑ‚Ð¸Ð²Ð½Ñ‹Ñ… ÐºÑƒÑ€ÑŒÐµÑ€Ð¾Ð², Ð´Ð¾Ð±Ð°Ð²ÑŒÑ‚Ðµ ÐºÑƒÑ€ÑŒÐµÑ€Ð°")
+        raise ValueError("Нет активных курьеров, добавьте курьера")
 
     def _eff_home(c):
-        """Ð¢Ð¾Ñ‡ÐºÐ° ÑÑ‚Ð°Ñ€Ñ‚Ð° ÐºÑƒÑ€ÑŒÐµÑ€Ð° Ð² ÑÑ‚Ð¾Ð¼ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚Ðµ (Ð¿Ð¾Ð¼Ð¾Ñ‰Ð½Ð¸Ðº ÐµÐ´ÐµÑ‚ Ñ Ñ‡ÑƒÐ¶Ð¾Ð¹ Ñ‚Ð¾Ñ‡ÐºÐ¸)."""
+        """Точка старта курьера в этом расчёте (помощник едет с чужой точки)."""
         hp = helpers.get(c["id"])
         if hp:
             p = next((p for p in STATE["points"] if p["id"] == hp), None)
@@ -976,8 +976,8 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
                 return p
         return _home_point(c)
 
-    # Ð£Ð·Ð»Ñ‹ Ð¼Ð°Ñ‚Ñ€Ð¸Ñ†Ñ‹: 0..K-1 - ÑƒÐ½Ð¸ÐºÐ°Ð»ÑŒÐ½Ñ‹Ðµ Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ Ð°ÐºÑ‚Ð¸Ð²Ð½Ñ‹Ñ… ÐºÑƒÑ€ÑŒÐµÑ€Ð¾Ð², Ð´Ð°Ð»ÑŒÑˆÐµ Ð·Ð°ÐºÐ°Ð·Ñ‹.
-    # ÐšÐ°Ð¶Ð´Ñ‹Ð¹ ÐºÑƒÑ€ÑŒÐµÑ€ ÑÑ‚Ð°Ñ€Ñ‚ÑƒÐµÑ‚ Ð¸ Ñ„Ð¸Ð½Ð¸ÑˆÐ¸Ñ€ÑƒÐµÑ‚ Ð² Ð¡Ð’ÐžÐ•Ð™ Ñ‚Ð¾Ñ‡ÐºÐµ (RoutingIndexManager starts).
+    # Узлы матрицы: 0..K-1 - уникальные точки выдачи активных курьеров, дальше заказы.
+    # Каждый курьер стартует и финиширует в СВОЕЙ точке (RoutingIndexManager starts).
     homes, home_idx = [], {}
     for c in couriers:
         hp = _eff_home(c)
@@ -995,7 +995,7 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
     max_orders = int(settings["max_orders"])
     reload_min = max(0, int(settings.get("reload_min", 10)))
 
-    # Ð˜Ð½Ð´Ð¸Ð²Ð¸Ð´ÑƒÐ°Ð»ÑŒÐ½Ð°Ñ ÑÐºÐ¾Ñ€Ð¾ÑÑ‚ÑŒ: Ð´Ð¾Ñ€Ð¾Ð¶Ð½Ð¾Ðµ Ð²Ñ€ÐµÐ¼Ñ Ð¼Ð°ÑÑˆÑ‚Ð°Ð±Ð¸Ñ€ÑƒÐµÑ‚ÑÑ Ð½Ð° default/Ð·Ð°Ð¼ÐµÑ€.
+    # Индивидуальная скорость: дорожное время масштабируется на default/замер.
     default_kmh = max(5.0, float(settings.get("speed_kmh", 60)))
     speeds = {c["id"]: _courier_speed(c, settings) for c in couriers}
     spd_factor = {cid: max(0.25, min(4.0, default_kmh / kmh))
@@ -1015,20 +1015,20 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
         eff_prio[g] = bool(o.get("prio") or auto_flag[g])
 
     def _start_delay(c):
-        """ÐšÐ¾Ð³Ð´Ð° ÐºÑƒÑ€ÑŒÐµÑ€ ÑÐ¼Ð¾Ð¶ÐµÑ‚ Ð²Ñ‹ÐµÑ…Ð°Ñ‚ÑŒ ÑÐ¾ ÑÐ²Ð¾ÐµÐ¹ Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ Ñ Ð½Ð¾Ð²Ð¾Ð¹ Ð¿Ð°Ñ€Ñ‚Ð¸ÐµÐ¹."""
+        """Когда курьер сможет выехать со своей точки выдачи с новой партией."""
         if c["status"] != "away":
             return 0
         g = _courier_geo(c, _home_point(c))
-        if g:  # Ð¶Ð¸Ð²Ð°Ñ Ð³ÐµÐ¾ Ñ‚Ð¾Ñ‡Ð½ÐµÐµ Ñ€ÑƒÑ‡Ð½Ð¾Ð¹ Ð¾Ñ†ÐµÐ½ÐºÐ¸
+        if g:  # живая гео точнее ручной оценки
             if g.get("to_point_min") is not None:
-                # Ð·Ð°ÐºÐ°Ð·Ñ‹ Ð¿Ñ€ÐµÐ¶Ð½ÐµÐ¹ Ð¿Ð°Ñ€Ñ‚Ð¸Ð¸ ÐµÑ‰Ñ‘ Ð½Ðµ Ð·Ð°Ð±Ñ€Ð°Ð½Ñ‹: Ð´Ð¾ÐµÑ…Ð°Ñ‚ÑŒ + Ð¿Ð¾Ð³Ñ€ÑƒÐ·Ð¸Ñ‚ÑŒÑÑ
+                # заказы прежней партии ещё не забраны: доехать + погрузиться
                 return min(480, g["to_point_min"] + reload_min)
             return g["back_min"]
         return max(0, int(c.get("back_min", 15)))
 
     avail = {c["id"]: _start_delay(c) for c in couriers}
     home_of = {c["id"]: home_idx[_eff_home(c)["id"]] for c in couriers}
-    # Ð¢Ð¾Ñ‡ÐºÐ° Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ ÐºÐ°Ð¶Ð´Ð¾Ð³Ð¾ Ð·Ð°ÐºÐ°Ð·Ð°: Ð²ÐµÐ·Ñ‚Ð¸ ÐµÐ³Ð¾ Ð¼Ð¾Ð³ÑƒÑ‚ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÐºÑƒÑ€ÑŒÐµÑ€Ñ‹ ÑÑ‚Ð¾Ð¹ Ñ‚Ð¾Ñ‡ÐºÐ¸.
+    # Точка выдачи каждого заказа: везти его могут только курьеры этой точки.
     first_pid = STATE["points"][0]["id"]
     order_pid = {K + i: (o.get("point_id") or first_pid) for i, o in enumerate(orders)}
     home_pid = {c["id"]: _eff_home(c)["id"] for c in couriers}
@@ -1045,7 +1045,7 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
         for c in round_couriers:
             if home_of[c["id"]] not in round_homes:
                 round_homes.append(home_of[c["id"]])
-        sub = round_homes + remaining        # ÑƒÐ·Ð»Ñ‹ Ñ€Ð°ÑƒÐ½Ð´Ð°: Ð´Ð¾Ð¼Ð°, Ð¿Ð¾Ñ‚Ð¾Ð¼ Ð·Ð°ÐºÐ°Ð·Ñ‹
+        sub = round_homes + remaining        # узлы раунда: дома, потом заказы
         pos_of = {a: i for i, a in enumerate(sub)}
         starts = [pos_of[home_of[c["id"]]] for c in round_couriers]
         manager = pywrapcp.RoutingIndexManager(len(sub), n_veh, starts, starts)
@@ -1056,13 +1056,13 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
                 i, j = sub[manager.IndexToNode(from_index)], sub[manager.IndexToNode(to_index)]
                 arc = matrix[i][j]
                 if j != 0 and arc > handover:
-                    # Ð´ÑƒÐ³Ð° Ð¿Ñ€Ð¸Ð±Ñ‹Ñ‚Ð¸Ñ Ð² Ð·Ð°ÐºÐ°Ð· ÑÐ¾Ð´ÐµÑ€Ð¶Ð¸Ñ‚ Ð²Ñ€ÑƒÑ‡ÐµÐ½Ð¸Ðµ â€” ÐµÐ³Ð¾ Ð½Ðµ Ð¼Ð°ÑÑˆÑ‚Ð°Ð±Ð¸Ñ€ÑƒÐµÐ¼
-                    # (arc == 0 â€” Ð¿ÐµÑ‚Ð»Ñ Ð½ÐµÐ¿Ð¾ÑÐµÑ‰Ñ‘Ð½Ð½Ð¾Ð³Ð¾ ÑƒÐ·Ð»Ð°, ÐµÑ‘ Ð½Ðµ Ñ‚Ñ€Ð¾Ð³Ð°ÐµÐ¼)
+                    # дуга прибытия в заказ содержит вручение — его не масштабируем
+                    # (arc == 0 — петля непосещённого узла, её не трогаем)
                     arc = int(round((arc - handover) * factor)) + handover
                 cost = arc + (delay if i == sub[hpos] else 0)
                 if j >= K:
                     cost += appr.get(j, 0)
-                    if j not in allowed:      # Ñ‡ÑƒÐ¶Ð°Ñ Ñ‚Ð¾Ñ‡ÐºÐ° Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ â€” Ð²ÐµÐ·Ñ‚Ð¸ Ð½ÐµÐ»ÑŒÐ·Ñ
+                    if j not in allowed:      # чужая точка выдачи — везти нельзя
                         cost += 1_000_000_000
                 return cost
             return cb
@@ -1081,21 +1081,21 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
         orders_dim = routing.GetDimensionOrDie("Orders")
         for v, c in enumerate(round_couriers):
             if c["id"] in helper_ids:
-                # Ñ€Ð°Ð·Ð¼ÐµÑ€Ð½Ð¾ÑÑ‚ÑŒ ÑÑ‡Ð¸Ñ‚Ð°ÐµÑ‚ Ð´ÑƒÐ³Ð¸: Ð¿Ñ€Ð¾ÑÑ‚Ð¾Ð¹ = 1, Ñ€Ð¾Ð²Ð½Ð¾ Ð¾Ð´Ð¸Ð½ Ð·Ð°ÐºÐ°Ð· = 2
+                # размерность считает дуги: простой = 1, ровно один заказ = 2
                 orders_dim.CumulVar(routing.End(v)).SetRange(2, 2)
             elif round_no == 0 and c["id"] in force_ids:
-                # Ð¿ÐµÑ€ÐµÑ‚Ð°Ñ‰ÐµÐ½ Ð² Ð¿Ð»Ð°Ð½ Ð²Ñ€ÑƒÑ‡Ð½ÑƒÑŽ: Ð¾Ð±ÑÐ·Ð°Ð½ Ð²Ð·ÑÑ‚ÑŒ Ñ…Ð¾Ñ‚Ñ Ð±Ñ‹ Ð¾Ð´Ð¸Ð½ Ð·Ð°ÐºÐ°Ð·
+                # перетащен в план вручную: обязан взять хотя бы один заказ
                 orders_dim.CumulVar(routing.End(v)).SetMin(2)
         routing.AddDimensionWithVehicleTransits(cb_idxs, 0, 24 * 60, True, "Time")
         time_dim = routing.GetDimensionOrDie("Time")
         time_dim.SetGlobalSpanCostCoefficient(200)
 
-        # Ð¨Ñ‚Ñ€Ð°Ñ„ Ð·Ð° Ð¾Ð¶Ð¸Ð´Ð°Ð½Ð¸Ðµ Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÐ¸: Ð¾Ð±Ñ‹Ñ‡Ð½Ñ‹Ð¹ Ð·Ð°ÐºÐ°Ð· 1 Ð¼Ð¸Ð½, Ð¿Ñ€Ð¸Ð¾Ñ€Ð¸Ñ‚ÐµÑ‚Ð½Ñ‹Ð¹ 60,
-        # Ð¿Ñ€Ð¾ÑÑ€Ð¾Ñ‡ÐºÐ° Ð´ÐµÐ´Ð»Ð°Ð¹Ð½Ð° 25 (Ð´ÐµÐ´Ð»Ð°Ð¹Ð½ ÑÐ¸Ð»ÑŒÐ½ÐµÐµ Ð¿Ñ€Ð¸Ð¾Ñ€Ð¸Ñ‚ÐµÑ‚Ð°).
+        # Штраф за ожидание доставки: обычный заказ 1 мин, приоритетный 60,
+        # просрочка дедлайна 25 (дедлайн сильнее приоритета).
         for ln in range(len(sub)):
             g = sub[ln]
             if g < K:
-                continue  # Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ - Ð½Ðµ Ð¾ÑÑ‚Ð°Ð½Ð¾Ð²ÐºÐ¸
+                continue  # точки выдачи - не остановки
             idx = manager.NodeToIndex(ln)
             if deadline_rel[g] is not None:
                 time_dim.SetCumulVarSoftUpperBound(idx, max(0, deadline_rel[g]),
@@ -1105,10 +1105,10 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
             else:
                 time_dim.SetCumulVarSoftUpperBound(idx, 0, 1)
 
-        # Ð Ð°Ð·Ñ€ÐµÑˆÐ°ÐµÐ¼ Ð¾ÑÑ‚Ð°Ð²Ð¸Ñ‚ÑŒ Ð·Ð°ÐºÐ°Ð· Ð½Ð° ÑÐ»ÐµÐ´ÑƒÑŽÑ‰Ð¸Ð¹ Ð·Ð°ÐµÐ·Ð´: Ð´Ñ€Ð¾Ð¿-Ð²Ð¸Ð·Ð¸Ñ‚ Ñ Ð¿Ð¾Ð´Ð°Ð²Ð»ÑÑŽÑ‰Ð¸Ð¼
-        # ÑˆÑ‚Ñ€Ð°Ñ„Ð¾Ð¼. Ð‘ÐµÐ· ÑÑ‚Ð¾Ð³Ð¾ Ñ€Ð°ÑƒÐ½Ð´ Ð±ÐµÐ· Ð¿Ð¾Ð»Ð½Ð¾Ð¹ Ð²Ð¼ÐµÑÑ‚Ð¸Ð¼Ð¾ÑÑ‚Ð¸ Ð±Ñ‹Ð» Ð±Ñ‹ Ð½ÐµÐ¾ÑÑƒÑ‰ÐµÑÑ‚Ð²Ð¸Ð¼.
-        # (ÐŸÑ€Ð¸Ð²ÑÐ·ÐºÐ° Ð·Ð°ÐºÐ°Ð·Ð° Ðº Ñ‚Ð¾Ñ‡ÐºÐµ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ ÑƒÐ¶Ðµ Ð² ÐºÐ¾Ð»Ð±ÑÐºÐµ ÑÑ‚Ð¾Ð¸Ð¼Ð¾ÑÑ‚Ð¸: Ñ‡ÑƒÐ¶Ð¾Ð¹ Ð·Ð°ÐºÐ°Ð·
-        # ÑÑ‚Ð¾Ð¸Ñ‚ Ð¼Ð¸Ð»Ð»Ð¸Ð°Ñ€Ð´ Ð¸ Ð½Ð¸ÐºÐ¾Ð³Ð´Ð° Ð½Ðµ Ð¿Ð¾Ð¿Ð°Ð´Ñ‘Ñ‚ Ðº ÐºÑƒÑ€ÑŒÐµÑ€Ñƒ Ð´Ñ€ÑƒÐ³Ð¾Ð¹ Ñ‚Ð¾Ñ‡ÐºÐ¸.)
+        # Разрешаем оставить заказ на следующий заезд: дроп-визит с подавляющим
+        # штрафом. Без этого раунд без полной вместимости был бы неосуществим.
+        # (Привязка заказа к точке выдачи уже в колбэке стоимости: чужой заказ
+        # стоит миллиард и никогда не попадёт к курьеру другой точки.)
         for ln in range(len(sub)):
             if sub[ln] >= K:
                 routing.AddDisjunction([manager.NodeToIndex(ln)], 1_000_000)
@@ -1124,14 +1124,14 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
             log.warning("solve round %d: no solution (status=%s, veh=%d, nodes=%d)",
                         round_no, routing.status(), n_veh, len(sub))
             if round_no == 0:
-                raise RuntimeError("OR-Tools Ð½Ðµ Ð½Ð°ÑˆÑ‘Ð» Ñ€ÐµÑˆÐµÐ½Ð¸Ðµ, Ð¿Ð¾Ð¿Ñ€Ð¾Ð±ÑƒÐ¹Ñ‚Ðµ ÐµÑ‰Ñ‘ Ñ€Ð°Ð·")
+                raise RuntimeError("OR-Tools не нашёл решение, попробуйте ещё раз")
             break
         round_stops = set()
         for v in range(n_veh):
             idx, stops = routing.Start(v), []
             while not routing.IsEnd(idx):
                 p = manager.IndexToNode(idx)
-                if sub[p] >= K:  # Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ°ÐµÐ¼ ÑÐ²Ð¾ÑŽ Ñ‚Ð¾Ñ‡ÐºÑƒ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ (ÑÑ‚Ð°Ñ€Ñ‚)
+                if sub[p] >= K:  # пропускаем свою точку выдачи (старт)
                     stops.append(sub[p])
                 idx = solution.Value(routing.NextVar(idx))
             if not stops:
@@ -1193,7 +1193,7 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
             "speed_kmh": round(speeds[c["id"]][0], 1),
             "speed_src": speeds[c["id"]][1]})
 
-    # Ð¡Ð½Ð°Ñ‡Ð°Ð»Ð° Â«Ð¾Ñ‚Ð´Ð°Ñ‚ÑŒ ÑÐµÐ¹Ñ‡Ð°ÑÂ» (Ð½Ð° Ð±Ð°Ð·Ðµ), Ð¿Ð¾Ñ‚Ð¾Ð¼ Â«ÑÐ»ÐµÐ´ÑƒÑŽÑ‰Ð¸Ð¼Â»
+    # Сначала «отдать сейчас» (на базе), потом «следующим»
     routes.sort(key=lambda r: 0 if r["status"] == "base" else 1)
     all_etas = [s["eta_min"] for r in routes for s in r["stops"]]
     plan = {
@@ -1216,7 +1216,7 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
 
 
 def _attach_geometry(plan):
-    """Ð“ÐµÐ¾Ð¼ÐµÑ‚Ñ€Ð¸Ñ Ð¼Ð°Ñ€ÑˆÑ€ÑƒÑ‚Ð¾Ð² (Ð´Ð»Ñ Ð»Ð¸Ð½Ð¸Ð¹ Ð½Ð° ÐºÐ°Ñ€Ñ‚Ðµ), Ð¿Ð¾ Ñ‚Ð¾Ñ‡ÐºÐµ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ ÐºÑƒÑ€ÑŒÐµÑ€Ð°."""
+    """Геометрия маршрутов (для линий на карте), по точке выдачи курьера."""
     for r in plan["routes"]:
         home = r.get("home_point") or STATE["depot"]
         for t in r.get("trips", []):
@@ -1225,7 +1225,7 @@ def _attach_geometry(plan):
             t["geometry"] = routing_geometry(seq) if plan["routing"] == "roads" else None
 
 
-# ---------- Ð°ÑƒÑ‚ÐµÐ½Ñ‚Ð¸Ñ„Ð¸ÐºÐ°Ñ†Ð¸Ñ Ð¿Ð¾ email (Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»Ð¸ Ð² Ð‘Ð”) ----------
+# ---------- аутентификация по email (пользователи в БД) ----------
 
 def _hash_pwd(pwd, salt=None):
     salt = salt or os.urandom(16)
@@ -1244,28 +1244,28 @@ def _verify_pwd(pwd, stored):
 
 
 def _check_user_email(email):
-    """ÐÐ¾Ñ€Ð¼Ð°Ð»Ð¸Ð·ÑƒÐµÑ‚ Ð¸ Ð²Ð°Ð»Ð¸Ð´Ð¸Ñ€ÑƒÐµÑ‚ email; Ð±Ñ€Ð¾ÑÐ°ÐµÑ‚ ValueError Ñ Ñ‚ÐµÐºÑÑ‚Ð¾Ð¼ Ð´Ð»Ñ 400."""
+    """Нормализует и валидирует email; бросает ValueError с текстом для 400."""
     email = (email or "").strip().lower()
     if not re.match(r"^[^@\s]{1,64}@[^@\s]{1,190}$", email):
-        raise ValueError("ÐÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ñ‹Ð¹ email")
+        raise ValueError("Некорректный email")
     return email
 
 
 def _check_user_contact(name, phone):
-    """ÐÐ¾Ñ€Ð¼Ð°Ð»Ð¸Ð·ÑƒÐµÑ‚ Ð¸ Ð²Ð°Ð»Ð¸Ð´Ð¸Ñ€ÑƒÐµÑ‚ Ð¸Ð¼Ñ/Ñ‚ÐµÐ»ÐµÑ„Ð¾Ð½ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€Ð°; Ð±Ñ€Ð¾ÑÐ°ÐµÑ‚ ValueError."""
+    """Нормализует и валидирует имя/телефон диспетчера; бросает ValueError."""
     name = (name or "").strip()
     phone = (phone or "").strip()
     if len(name) < 2:
-        raise ValueError("Ð£ÐºÐ°Ð¶Ð¸Ñ‚Ðµ Ð¸Ð¼Ñ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€Ð° (Ð¼Ð¸Ð½Ð¸Ð¼ÑƒÐ¼ 2 ÑÐ¸Ð¼Ð²Ð¾Ð»Ð°)")
+        raise ValueError("Укажите имя диспетчера (минимум 2 символа)")
     if not re.match(r"^\+?[\d\s()-]{7,20}$", phone):
-        raise ValueError("Ð£ÐºÐ°Ð¶Ð¸Ñ‚Ðµ Ñ‚ÐµÐ»ÐµÑ„Ð¾Ð½ Ð´Ð»Ñ ÑÐ²ÑÐ·Ð¸ (Ð½Ð°Ð¿Ñ€Ð¸Ð¼ÐµÑ€, +375291234567)")
+        raise ValueError("Укажите телефон для связи (например, +375291234567)")
     return name, phone
 
 
 def _create_user(email, password, is_admin=0, name="", phone=""):
     email = _check_user_email(email)
     if len(password or "") < 4:
-        raise ValueError("ÐŸÐ°Ñ€Ð¾Ð»ÑŒ: Ð¼Ð¸Ð½Ð¸Ð¼ÑƒÐ¼ 4 ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð²")
+        raise ValueError("Пароль: минимум 4 символов")
     name, phone = _check_user_contact(name, phone)
     uid = uuid.uuid4().hex[:8]
     with _db_lock, _db() as c:
@@ -1275,18 +1275,18 @@ def _create_user(email, password, is_admin=0, name="", phone=""):
                       (uid, email, _hash_pwd(password), int(bool(is_admin)),
                        _now().isoformat(timespec="seconds"), name, phone))
         except sqlite3.IntegrityError:
-            raise ValueError(f"ÐŸÐ¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÑŒ {email} ÑƒÐ¶Ðµ ÑÑƒÑ‰ÐµÑÑ‚Ð²ÑƒÐµÑ‚") from None
+            raise ValueError(f"Пользователь {email} уже существует") from None
     return uid
 
 
 def ensure_default_admin():
-    """ÐŸÐµÑ€Ð²Ñ‹Ð¹ Ð·Ð°Ð¿ÑƒÑÐº: ÑÐ¾Ð·Ð´Ð°Ñ‘Ð¼ Ð°Ð´Ð¼Ð¸Ð½Ð¸ÑÑ‚Ñ€Ð°Ñ‚Ð¾Ñ€Ð° Ð¸Ð· config.ini (Ð¿Ð¾ ÑƒÐ¼Ð¾Ð»Ñ‡Ð°Ð½Ð¸ÑŽ admin@local/admin)."""
+    """Первый запуск: создаём администратора из config.ini (по умолчанию admin@local/admin)."""
     with _db_lock, _db() as c:
         n = c.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
     if not n:
         _create_user(CFG["admin_email"], CFG["admin_password"], is_admin=1,
-                     name="ÐÐ´Ð¼Ð¸Ð½Ð¸ÑÑ‚Ñ€Ð°Ñ‚Ð¾Ñ€", phone="+375000000000")
-        log.info("created default admin %s â€” ÑÐ¼ÐµÐ½Ð¸Ñ‚Ðµ Ð¿Ð°Ñ€Ð¾Ð»ÑŒ Ð¿Ð¾ÑÐ»Ðµ Ð²Ñ…Ð¾Ð´Ð°", CFG["admin_email"])
+                     name="Администратор", phone="+375000000000")
+        log.info("created default admin %s — смените пароль после входа", CFG["admin_email"])
 
 
 def _me():
@@ -1304,24 +1304,24 @@ def _admin_users():
             "SELECT id, email, is_admin, created_at, name, phone FROM users ORDER BY created_at")]
 
 
-_LOGIN_FAILS = {}  # ip -> [Ñ‡Ð¸ÑÐ»Ð¾ Ð¾ÑˆÐ¸Ð±Ð¾Ðº, Ð·Ð°Ð»Ð¾Ñ‡ÐµÐ½Ð¾_Ð´Ð¾_epoch]
+_LOGIN_FAILS = {}  # ip -> [число ошибок, залочено_до_epoch]
 _LOGIN_MAX_FAILS = 5
 _LOGIN_LOCK_SEC = 60
 
-# ---------- ÐºÑ‚Ð¾ Ð¸Ð· Ð°Ð´Ð¼Ð¸Ð½Ð¾Ð² Ð¾Ð½Ð»Ð°Ð¹Ð½ Ð¸ Ð½Ð° ÐºÐ°ÐºÐ¾Ð¹ Ñ‚Ð¾Ñ‡ÐºÐµ Ñ€Ð°Ð±Ð¾Ñ‚Ð°ÐµÑ‚ ----------
-# sid (Ð¸Ð· cookie-ÑÐµÑÑÐ¸Ð¸) -> {"uid", "email", "point_id", "last"}.
-# Â«ÐžÐ½Ð»Ð°Ð¹Ð½Â» = Ð±Ñ‹Ð» Ð»ÑŽÐ±Ð¾Ð¹ Ð·Ð°Ð¿Ñ€Ð¾Ñ Ð·Ð° ONLINE_WINDOW ÑÐµÐºÑƒÐ½Ð´ (long-poll /api/rev
-# Ð²Ð¸ÑÐ¸Ñ‚ Ð´Ð¾ 25 Ñ, Ð¿Ð¾ÑÑ‚Ð¾Ð¼Ñƒ Ð¾ÐºÐ½Ð¾ Ñ Ð·Ð°Ð¿Ð°ÑÐ¾Ð¼).
+# ---------- кто из админов онлайн и на какой точке работает ----------
+# sid (из cookie-сессии) -> {"uid", "email", "point_id", "last"}.
+# «Онлайн» = был любой запрос за ONLINE_WINDOW секунд (long-poll /api/rev
+# висит до 25 с, поэтому окно с запасом).
 ONLINE: dict = {}
 _ONLINE_LOCK = threading.Lock()
 ONLINE_WINDOW = 90
 
 
 def _my_point():
-    """Ð Ð°Ð±Ð¾Ñ‡Ð°Ñ Ñ‚Ð¾Ñ‡ÐºÐ° Ñ‚ÐµÐºÑƒÑ‰ÐµÐ¹ ÑÐµÑÑÐ¸Ð¸ (ÑÐµÐ»ÐµÐºÑ‚Ð¾Ñ€ Â«ÐœÐµÑÑ‚Ð¾ Ñ€Ð°Ð±Ð¾Ñ‚Ñ‹Â» Ð² ÑˆÐ°Ð¿ÐºÐµ).
+    """Рабочая точка текущей сессии (селектор «Место работы» в шапке).
 
-    ÐÐ²Ñ‚Ð¾Ñ€Ð¸Ñ‚ÐµÑ‚Ð½Ð¾Ðµ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ðµ â€” session["point"]: Ð¿ÐµÑ€ÐµÐ¶Ð¸Ð²Ð°ÐµÑ‚ Ð¿Ñ€Ð¾ÑÑ‚Ð¾Ð¹,
-    ONLINE-Ð·Ð°Ð¿Ð¸ÑÑŒ Ð´ÐµÑ€Ð¶Ð¸Ñ‚ Ð»Ð¸ÑˆÑŒ Ð¶Ð¸Ð²Ð¾Ðµ Ð·ÐµÑ€ÐºÐ°Ð»Ð¾ Ð´Ð»Ñ ÑÑ‡Ñ‘Ñ‚Ñ‡Ð¸ÐºÐ¾Ð² Â«Ð¾Ð½Ð»Ð°Ð¹Ð½ Ñƒ Ñ‚Ð¾Ñ‡ÐºÐ¸Â».
+    Авторитетное значение — session["point"]: переживает простой,
+    ONLINE-запись держит лишь живое зеркало для счётчиков «онлайн у точки».
     """
     pt = session.get("point") or ""
     if pt and any(p["id"] == pt for p in STATE.get("points") or []):
@@ -1330,27 +1330,27 @@ def _my_point():
             with _ONLINE_LOCK:
                 rec = ONLINE.get(sid)
                 if rec is not None and rec.get("point_id") != pt:
-                    rec["point_id"] = pt  # Ð·ÐµÑ€ÐºÐ°Ð»Ð¾ Ð´Ð¾Ð³Ð¾Ð½ÑÐµÑ‚ ÑÐµÑÑÐ¸ÑŽ
+                    rec["point_id"] = pt  # зеркало догоняет сессию
         return pt
     return (STATE.get("points") or [{}])[0].get("id") or ""
 
 
 def _plan_for(pid):
-    """ÐŸÐ»Ð°Ð½ Ð´ÐµÐ¿Ð¾ Ð¿Ð¾ id Ñ‚Ð¾Ñ‡ÐºÐ¸."""
+    """План депо по id точки."""
     return STATE["plans"].get(pid)
 
 
 def _courier_plan(c):
-    """ÐŸÐ»Ð°Ð½ Ð´ÐµÐ¿Ð¾, Ðº ÐºÐ¾Ñ‚Ð¾Ñ€Ð¾Ð¼Ñƒ Ð¿Ñ€Ð¸Ð¿Ð¸ÑÐ°Ð½ ÐºÑƒÑ€ÑŒÐµÑ€."""
+    """План депо, к которому приписан курьер."""
     hp = _home_point(c)
     return STATE["plans"].get(hp["id"]) if hp else None
 
 
 def _touch_online(pt=None):
-    """ÐžÑ‚Ð¼ÐµÑ‚Ð¸Ñ‚ÑŒ Ð°ÐºÑ‚Ð¸Ð²Ð½Ð¾ÑÑ‚ÑŒ Ñ‚ÐµÐºÑƒÑ‰ÐµÐ¹ ÑÐµÑÑÐ¸Ð¸; pt Ð·Ð°Ð´Ð°Ñ‘Ñ‚ ÐµÑ‘ Ñ€Ð°Ð±Ð¾Ñ‡ÑƒÑŽ Ñ‚Ð¾Ñ‡ÐºÑƒ.
+    """Отметить активность текущей сессии; pt задаёт её рабочую точку.
 
-    Ð•ÑÐ»Ð¸ Ð·Ð°Ð¿Ð¸ÑÑŒ ÑÑ‚Ñ‘Ñ€Ð»Ð°ÑÑŒ (Ð´Ð¾Ð»Ð³Ð¾ Ð²Ð¸ÑÐµÐ²ÑˆÐ¸Ð¹ long-poll / Ñ„Ð¾Ð½Ð¾Ð²Ð°Ñ Ð²ÐºÐ»Ð°Ð´ÐºÐ°),
-    Ð²Ð¾ÑÑÑ‚Ð°Ð½Ð°Ð²Ð»Ð¸Ð²Ð°ÐµÐ¼ ÐµÑ‘ Ð¸Ð· ÑÐµÑÑÐ¸Ð¸ â€” Ð¸Ð½Ð°Ñ‡Ðµ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€ Â«Ð¿Ñ€Ð¾Ð¿Ð°Ð´Ð°Ð»Â» Ð¸Ð· Ð¾Ð½Ð»Ð°Ð¹Ð½-Ð¿Ñ€Ð¾Ð±Ð¾Ðº.
+    Если запись стёрлась (долго висевший long-poll / фоновая вкладка),
+    восстанавливаем её из сессии — иначе диспетчер «пропадал» из онлайн-пробок.
     """
     sid = session.get("sid")
     if not sid:
@@ -1360,7 +1360,7 @@ def _touch_online(pt=None):
         uid = session.get("uid")
         if not uid:
             return
-        with _db_lock, _db() as c:  # Ñ‡Ñ‚ÐµÐ½Ð¸Ðµ â€” Ð²Ð½Ðµ ONLINE-Ð±Ð»Ð¾ÐºÐ¸Ñ€Ð¾Ð²ÐºÐ¸
+        with _db_lock, _db() as c:  # чтение — вне ONLINE-блокировки
             r = c.execute("SELECT email FROM users WHERE id = ?", (uid,)).fetchone()
         if not r:
             return
@@ -1384,29 +1384,29 @@ def _drop_online():
 
 
 
-# --- Telegram: Ð±Ð¾Ñ‚ Ð¿Ñ€Ð¸Ð½Ð¸Ð¼Ð°ÐµÑ‚ Ð³ÐµÐ¾Ð»Ð¾ÐºÐ°Ñ†Ð¸Ð¸ ÐºÑƒÑ€ÑŒÐµÑ€Ð¾Ð² ---------------------------------
-TG_POS_TTL = 30 * 60  # Ð»Ð¾ÐºÐ°Ñ†Ð¸Ñ ÑÑ‚Ð°Ñ€ÑˆÐµ 30 Ð¼Ð¸Ð½ÑƒÑ‚ ÑÑ‡Ð¸Ñ‚Ð°ÐµÑ‚ÑÑ ÑƒÑÑ‚Ð°Ñ€ÐµÐ²ÑˆÐµÐ¹
+# --- Telegram: бот принимает геолокации курьеров ---------------------------------
+TG_POS_TTL = 30 * 60  # локация старше 30 минут считается устаревшей
 
 
 def _tg_api(method):
     return f"https://api.telegram.org/bot{CFG['tg_bot_token']}/{method}"
 
 
-# Ð¢ÐµÑÑ‚-Ñ€ÐµÐ¶Ð¸Ð¼: Ð²ÑÐµ Ð´Ð¸Ð°Ð»Ð¾Ð³Ð¸ Ð±Ð¾Ñ‚Ð° (Ð³ÐµÐ¾-Ð·Ð°Ð¿Ñ€Ð¾ÑÑ‹, Â«Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½?Â», Ð¿Ñ€Ð¸Ð²ÑÐ·ÐºÐ¸) ÑƒÑ…Ð¾Ð´ÑÑ‚
-# Ð¾Ð´Ð½Ð¾Ð¼Ñƒ Ð¶Ð¸Ð²Ð¾Ð¼Ñƒ Ñ‡ÐµÐ»Ð¾Ð²ÐµÐºÑƒ Ð²Ð¼ÐµÑÑ‚Ð¾ Ñ€ÐµÐ°Ð»ÑŒÐ½Ñ‹Ñ… ÐºÑƒÑ€ÑŒÐµÑ€Ð¾Ð². Ð“ÐµÐ¾-ÐºÐ¾Ð½Ð²ÐµÐ¹ÐµÑ€ Ð¿Ñ€Ð¸ ÑÑ‚Ð¾Ð¼
-# Ð¾ÑÑ‚Ð°Ñ‘Ñ‚ÑÑ Ñ‡ÐµÑÑ‚Ð½Ñ‹Ð¼: ÐºÐ°Ð¶Ð´Ñ‹Ð¹ Ð±Ð¾Ñ‚-ÐºÑƒÑ€ÑŒÐµÑ€ Ð¿Ñ€Ð¸Ð²ÑÐ·Ð°Ð½ Ðº ÑÐ²Ð¾ÐµÐ¼Ñƒ ÑÐ¸Ð½Ñ‚ÐµÑ‚Ð¸Ñ‡ÐµÑÐºÐ¾Ð¼Ñƒ chat_id,
-# Ñ€ÐµÐ´Ð¸Ñ€ÐµÐºÑ‚ Ð¿Ñ€Ð¾Ð¸ÑÑ…Ð¾Ð´Ð¸Ñ‚ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð² Ð¼Ð¾Ð¼ÐµÐ½Ñ‚ Ð¾Ñ‚Ð¿Ñ€Ð°Ð²ÐºÐ¸ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ð¹.
+# Тест-режим: все диалоги бота (гео-запросы, «доставлен?», привязки) уходят
+# одному живому человеку вместо реальных курьеров. Гео-конвейер при этом
+# остаётся честным: каждый бот-курьер привязан к своему синтетическому chat_id,
+# редирект происходит только в момент отправки сообщений.
 TG_TEST_REDIRECT = os.environ.get("TG_TEST_REDIRECT", "").strip()
 
 
 def _tg_out_chat(chat_id):
-    """(Ð°Ð´Ñ€ÐµÑÐ°Ñ‚, Ð¿Ñ€ÐµÑ„Ð¸ÐºÑ) Ð´Ð»Ñ Ð¸ÑÑ…Ð¾Ð´ÑÑ‰ÐµÐ³Ð¾ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ñ: Ð² Ñ‚ÐµÑÑ‚-Ñ€ÐµÐ¶Ð¸Ð¼Ðµ Ð²ÑÑ‘ Ð¾Ð´Ð½Ð¾Ð¼Ñƒ
-    Ñ‡ÐµÐ»Ð¾Ð²ÐµÐºÑƒ, Ñ Ð¿Ð¾Ð¼ÐµÑ‚ÐºÐ¾Ð¹, Ð¾Ñ‚ ÐºÐ°ÐºÐ¾Ð³Ð¾ ÐºÑƒÑ€ÑŒÐµÑ€Ð° ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ."""
+    """(адресат, префикс) для исходящего сообщения: в тест-режиме всё одному
+    человеку, с пометкой, от какого курьера сообщение."""
     cid = str(chat_id)
     if TG_TEST_REDIRECT and cid != TG_TEST_REDIRECT:
         c = next((x for x in STATE["couriers"]
                   if str(x.get("tg_chat_id") or "") == cid), None)
-        pref = f"[{_esc(c['name'])}] " if c else "[Ñ‚ÐµÑÑ‚] "
+        pref = f"[{_esc(c['name'])}] " if c else "[тест] "
         return TG_TEST_REDIRECT, pref
     return cid, ""
     return f"https://api.telegram.org/bot{CFG['tg_bot_token']}/{method}"
@@ -1417,7 +1417,7 @@ def _esc(s):
 
 
 def _plural(n, forms):
-    """Ð ÑƒÑÑÐºÐ¾Ðµ ÑÐºÐ»Ð¾Ð½ÐµÐ½Ð¸Ðµ: _plural(3, ("Ð·Ð°ÐºÐ°Ð·", "Ð·Ð°ÐºÐ°Ð·Ð°", "Ð·Ð°ÐºÐ°Ð·Ð¾Ð²")) -> "Ð·Ð°ÐºÐ°Ð·Ð°"."""
+    """Русское склонение: _plural(3, ("заказ", "заказа", "заказов")) -> "заказа"."""
     n = abs(n)
     if n % 100 in (11, 12, 13, 14):
         return forms[2]
@@ -1429,7 +1429,7 @@ def _plural(n, forms):
 
 
 def _tg_send(chat_id, text):
-    """Ð˜ÑÑ…Ð¾Ð´ÑÑ‰ÐµÐµ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ ÐºÑƒÑ€ÑŒÐµÑ€Ñƒ (Ð¾ÑˆÐ¸Ð±ÐºÐ¸ Ð½Ðµ ÐºÑ€Ð¸Ñ‚Ð¸Ñ‡Ð½Ñ‹ â€” Ð¼Ð¾Ð»Ñ‡Ð° Ð² Ð»Ð¾Ð³)."""
+    """Исходящее сообщение курьеру (ошибки не критичны — молча в лог)."""
     chat_id, pref = _tg_out_chat(chat_id)
     try:
         requests.post(_tg_api("sendMessage"),
@@ -1439,8 +1439,8 @@ def _tg_send(chat_id, text):
 
 
 def _tg_send_kb(chat_id, text, buttons):
-    """Ð¡Ð¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ðµ Ñ Ð¸Ð½Ð»Ð°Ð¹Ð½-ÐºÐ½Ð¾Ð¿ÐºÐ°Ð¼Ð¸. buttons = [[{text, callback_data}, ...], ...].
-    Ð’Ð¾Ð·Ð²Ñ€Ð°Ñ‰Ð°ÐµÑ‚ message_id Ð¸Ð»Ð¸ None (Ð½Ðµ Ð¾Ñ‚Ð¿Ñ€Ð°Ð²Ð¸Ð»Ð¾ÑÑŒ)."""
+    """Сообщение с инлайн-кнопками. buttons = [[{text, callback_data}, ...], ...].
+    Возвращает message_id или None (не отправилось)."""
     chat_id, pref = _tg_out_chat(chat_id)
     try:
         r = requests.post(_tg_api("sendMessage"),
@@ -1456,7 +1456,7 @@ def _tg_send_kb(chat_id, text, buttons):
 
 
 def _tg_edit_msg(chat_id, message_id, text, buttons=None):
-    """ÐŸÑ€Ð°Ð²ÐºÐ° ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ñ Ð±Ð¾Ñ‚Ð° (ÑÐ¼ÐµÐ½Ð° Ñ‚ÐµÐºÑÑ‚Ð°/ÐºÐ½Ð¾Ð¿Ð¾Ðº). ÐžÑˆÐ¸Ð±ÐºÐ¸ Ð¼Ð¾Ð»Ñ‡Ð° Ð² Ð»Ð¾Ð³."""
+    """Правка сообщения бота (смена текста/кнопок). Ошибки молча в лог."""
     chat_id, pref = _tg_out_chat(chat_id)
     payload = {"chat_id": chat_id, "message_id": message_id,
                "text": pref + text, "parse_mode": "HTML"}
@@ -1472,7 +1472,7 @@ def _tg_edit_msg(chat_id, message_id, text, buttons=None):
 
 
 def _tg_answer_cb(callback_id, text=""):
-    """ÐžÑ‚Ð²ÐµÑ‚ Ð½Ð° Ð½Ð°Ð¶Ð°Ñ‚Ð¸Ðµ ÐºÐ½Ð¾Ð¿ÐºÐ¸ (Ð·Ð°ÐºÑ€Ñ‹Ð²Ð°ÐµÑ‚ Â«Ñ‡Ð°ÑÐ¸ÐºÐ¸Â» Ñƒ ÐºÑƒÑ€ÑŒÐµÑ€Ð°)."""
+    """Ответ на нажатие кнопки (закрывает «часики» у курьера)."""
     try:
         requests.post(_tg_api("answerCallbackQuery"),
                       json={"callback_query_id": callback_id, "text": text}, timeout=5)
@@ -1480,16 +1480,16 @@ def _tg_answer_cb(callback_id, text=""):
         log.warning("tg answerCallbackQuery: %s", e)
 
 
-_BOT_ASK_AFTER_S = 30   # ÑÑ‚Ð¾Ð»ÑŒÐºÐ¾ ÑÐµÐºÑƒÐ½Ð´ ÐºÑƒÑ€ÑŒÐµÑ€ ÑÑ‚Ð¾Ð¸Ñ‚ Ñƒ Ð°Ð´Ñ€ÐµÑÐ°, Ð¿Ñ€ÐµÐ¶Ð´Ðµ Ñ‡ÐµÐ¼ Ð±Ð¾Ñ‚ ÑÐ¿Ñ€Ð¾ÑÐ¸Ñ‚
+_BOT_ASK_AFTER_S = 30   # столько секунд курьер стоит у адреса, прежде чем бот спросит
 
 
-TG_GEO_FRESH = 600      # Ð³ÐµÐ¾ ÑÐ²ÐµÐ¶Ð°Ñ Ð´Ð»Ñ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚Ð¾Ð² <= 10 Ð¼Ð¸Ð½
-TG_GEO_AT_PLACE = 0.15  # Ð±Ð»Ð¸Ð¶Ðµ 150 Ð¼ = Â«Ð½Ð° Ð¼ÐµÑÑ‚ÐµÂ» (Ð´ÐµÐ¿Ð¾/Ð·Ð°ÐºÐ°Ð·)
-_LOAD_DWELL_S = 120     # ÑÑ‚Ð¾Ð»ÑŒÐºÐ¾ Ð½ÑƒÐ¶Ð½Ð¾ Ð¿Ñ€Ð¾ÑÑ‚Ð¾Ñ Ñƒ Ñ‚Ð¾Ñ‡ÐºÐ¸, Ñ‡Ñ‚Ð¾Ð±Ñ‹ ÑÑ‡Ð¸Ñ‚Ð°Ñ‚ÑŒ Ð²Ñ‹Ð´Ð°Ñ‡Ñƒ ÑÐ¾ÑÑ‚Ð¾ÑÐ²ÑˆÐµÐ¹ÑÑ
+TG_GEO_FRESH = 600      # гео свежая для расчётов <= 10 мин
+TG_GEO_AT_PLACE = 0.15  # ближе 150 м = «на месте» (депо/заказ)
+_LOAD_DWELL_S = 120     # столько нужно простоя у точки, чтобы считать выдачу состоявшейся
 
 
 def _courier_out_orders(c):
-    """Ð—Ð°ÐºÐ°Ð·Ñ‹ Â«Ñƒ ÐºÑƒÑ€ÑŒÐµÑ€Ð°Â»: Ð²Ñ‹Ð´Ð°Ð½Ñ‹ Ð¸ ÐµÑ‰Ñ‘ Ð½Ðµ Ð·Ð°ÐºÑ€Ñ‹Ñ‚Ñ‹ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€Ð¾Ð¼."""
+    """Заказы «у курьера»: выданы и ещё не закрыты диспетчером."""
     return [o for o in STATE["orders"]
             if (o.get("status") or "ready") == "out"
             and (o.get("assigned") or "") == c.get("id")]
@@ -1500,18 +1500,18 @@ def _courier_has_out(c):
 
 
 def _load_track(c, pos, now=None):
-    """Ð¢Ñ€ÐµÐºÐµÑ€ Â«Ð·Ð°ÐºÐ°Ð·Ñ‹ Ð¾Ñ‚Ð´Ð°Ð»Ð¸Â»: ÐºÑƒÑ€ÑŒÐµÑ€ Ð¾Ð±ÑÐ·Ð°Ð½ Ñ€ÐµÐ°Ð»ÑŒÐ½Ð¾ Ð¿Ð¾ÑÑ‚Ð¾ÑÑ‚ÑŒ Ñƒ ÑÐ²Ð¾ÐµÐ¹ Ñ‚Ð¾Ñ‡ÐºÐ¸.
+    """Трекер «заказы отдали»: курьер обязан реально постоять у своей точки.
 
-    Ð›Ð¾Ð¶Ð½Ñ‹Ðµ ÑÑ€Ð°Ð±Ð°Ñ‚Ñ‹Ð²Ð°Ð½Ð¸Ñ Ð¾Ñ‚ÑÐµÐºÐ°ÑŽÑ‚ÑÑ Ñ‚Ñ€ÐµÐ¼Ñ ÑÐ¿Ð¾ÑÐ¾Ð±Ð°Ð¼Ð¸: Ð¿Ð¾Ð·Ð¸Ñ†Ð¸Ñ ÑÐ³Ð»Ð°Ð¶ÐµÐ½Ð° Ð¼ÐµÐ´Ð¸Ð°Ð½Ð¾Ð¹
-    (GPS-Ð¿Ñ€Ñ‹Ð¶Ð¾Ðº Ð½Ðµ Ð´Ð¾ÐµÐ·Ð¶Ð°ÐµÑ‚ Ð´Ð¾ Ñ‚Ð¾Ñ‡ÐºÐ¸), Ð½ÑƒÐ¶ÐµÐ½ Ð½ÐµÐ¿Ñ€ÐµÑ€Ñ‹Ð²Ð½Ñ‹Ð¹ Ð¿Ñ€Ð¾ÑÑ‚Ð¾Ð¹ _LOAD_DWELL_S
-    (Ð·Ð°ÐµÐ·Ð´ Ð¼Ð¸Ð¼Ð¾ Ð½Ðµ ÑÑ‡Ð¸Ñ‚Ð°ÐµÑ‚ÑÑ), Ð¸ Ñƒ ÐºÑƒÑ€ÑŒÐµÑ€Ð° Ð´Ð¾Ð»Ð¶Ð½Ñ‹ Ð±Ñ‹Ñ‚ÑŒ Ð²Ñ‹Ð´Ð°Ð½Ð½Ñ‹Ðµ Ð·Ð°ÐºÐ°Ð·Ñ‹.
+    Ложные срабатывания отсекаются тремя способами: позиция сглажена медианой
+    (GPS-прыжок не доезжает до точки), нужен непрерывный простой _LOAD_DWELL_S
+    (заезд мимо не считается), и у курьера должны быть выданные заказы.
     """
     chat = c.get("tg_chat_id") or ""
     home = _home_point(c)
     if not chat or not home:
         return
     if not _courier_has_out(c):
-        STATE["tg_load"].pop(chat, None)  # Ð¿Ð°Ñ€Ñ‚Ð¸Ñ Ð·Ð°ÐºÑ€Ñ‹Ñ‚Ð° â€” Ð³Ð¾Ñ‚Ð¾Ð²Ð¸Ð¼ÑÑ Ðº ÑÐ»ÐµÐ´ÑƒÑŽÑ‰ÐµÐ¹
+        STATE["tg_load"].pop(chat, None)  # партия закрыта — готовимся к следующей
         return
     now = now or time.time()
     rec = STATE["tg_load"].setdefault(chat, {"since": None, "loaded_at": None})
@@ -1521,22 +1521,26 @@ def _load_track(c, pos, now=None):
         rec["since"] = rec["since"] or now
         if now - rec["since"] >= _LOAD_DWELL_S:
             rec["loaded_at"] = now
-            log.info("load tracked: %s Ð¿Ð¾Ð»ÑƒÑ‡Ð¸Ð» Ð·Ð°ÐºÐ°Ð·Ñ‹ Ñƒ Ñ‚Ð¾Ñ‡ÐºÐ¸ Â«%sÂ»", c.get("name"), home.get("name"))
+            log.info("load tracked: %s получил заказы у точки «%s»", c.get("name"), home.get("name"))
             _bump()
     else:
-        rec["since"] = None  # Ð¾Ñ‚Ð¾ÑˆÑ‘Ð», Ð½Ðµ Ð´Ð¾Ð¶Ð´Ð°Ð²ÑˆÐ¸ÑÑŒ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ â€” Ð¾Ñ‚ÑÑ‡Ñ‘Ñ‚ Ð·Ð°Ð½Ð¾Ð²Ð¾
+        rec["since"] = None  # отошёл, не дождавшись выдачи — отсчёт заново
 
 
-_DELIVER_DWELL_S = 90  # ÑÐºÐ¾Ð»ÑŒÐºÐ¾ ÑÑ‚Ð¾ÑÑ‚ÑŒ Ñƒ Ð°Ð´Ñ€ÐµÑÐ°, Ñ‡Ñ‚Ð¾Ð±Ñ‹ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚ ÑÑ‡Ñ‘Ð» Ð·Ð°ÐºÐ°Ð· Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ð¼
+_DELIVER_DWELL_S = 90  # сколько стоять у адреса, чтобы расчёт счёл заказ доставленным
 
 
 def _deliver_track(c, pos, now=None):
-    """Ð’Ñ‹Ð²Ð¾Ð´ Â«ÐºÑƒÑ€ÑŒÐµÑ€ Ð¾Ñ‚Ð²Ñ‘Ð· Ð·Ð°ÐºÐ°Ð·Â» ÐŸÐž Ð“Ð•Ðž â€” Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð´Ð»Ñ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚Ð° Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‚Ð°.
+    """Вывод «курьер отвёз заказ» ПО ГЕО — для расчёта возврата и вопросов бота.
 
-    Ð—Ð°ÐºÐ°Ð· ÑÑ‡Ð¸Ñ‚Ð°ÐµÑ‚ÑÑ Ñ€Ð°Ð·Ð²ÐµÐ·Ñ‘Ð½Ð½Ñ‹Ð¼ Ð² Ñ€Ð°ÑÑ‡Ñ‘Ñ‚Ðµ, ÐºÐ¾Ð³Ð´Ð° ÐºÑƒÑ€ÑŒÐµÑ€ Ð½ÐµÐ¿Ñ€ÐµÑ€Ñ‹Ð²Ð½Ð¾ Ð¿Ñ€Ð¾ÑÑ‚Ð¾ÑÐ»
-    _DELIVER_DWELL_S Ð² Ñ€Ð°Ð´Ð¸ÑƒÑÐµ TG_GEO_AT_PLACE Ð¾Ñ‚ Ð°Ð´Ñ€ÐµÑÐ°. Ð¡Ñ‚Ð°Ñ‚ÑƒÑ Ð·Ð°ÐºÐ°Ð·Ð° Ð¿Ñ€Ð¸
-    ÑÑ‚Ð¾Ð¼ ÐÐ• Ð¼ÐµÐ½ÑÐµÑ‚ÑÑ â€” ÐµÐ³Ð¾ Ð¿Ð¾-Ð¿Ñ€ÐµÐ¶Ð½ÐµÐ¼Ñƒ Ð·Ð°ÐºÑ€Ñ‹Ð²Ð°ÐµÑ‚ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€ Ð²Ñ€ÑƒÑ‡Ð½ÑƒÑŽ.
-    Ð—Ð°ÐµÐ·Ð´ Ð¼Ð¸Ð¼Ð¾ Ð±ÐµÐ· Ð¾ÑÑ‚Ð°Ð½Ð¾Ð²ÐºÐ¸ Ð½Ðµ ÑÑ‡Ð¸Ñ‚Ð°ÐµÑ‚ÑÑ (ÑÑ‡Ñ‘Ñ‚Ñ‡Ð¸Ðº Ð¿Ñ€Ð¾ÑÑ‚Ð¾Ñ ÑÐ±Ñ€Ð°ÑÑ‹Ð²Ð°ÐµÑ‚ÑÑ).
+    Заказ считается развезённым в расчёте, когда курьер непрерывно простоял
+    _DELIVER_DWELL_S в радиусе TG_GEO_AT_PLACE от адреса. Статус заказа при
+    этом НЕ меняется — его по-прежнему закрывает диспетчер вручную.
+    Заезд мимо без остановки не считается (счётчик простоя сбрасывается).
+
+    Здесь же бот спрашивает «доставлен?» — раз за заезд: после _BOT_ASK_AFTER_S
+    простоя в радиусе, повторный вопрос только после выезда и нового заезда.
+    Ответ «да, ещё везу» глушит вопрос до конца текущего заезда.
     """
     chat = c.get("tg_chat_id") or ""
     if not chat:
@@ -1544,7 +1548,7 @@ def _deliver_track(c, pos, now=None):
     out_orders = _courier_out_orders(c)
     st = STATE["tg_deliv"].setdefault(chat, {})
     alive = {o["id"] for o in out_orders}
-    for k in list(st):  # Ð·Ð°ÐºÑ€Ñ‹Ñ‚Ñ‹Ðµ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€Ð¾Ð¼ Ð·Ð°Ð¿Ð¸ÑÐ¸ Ñ‡Ð¸ÑÑ‚Ð¸Ð¼
+    for k in list(st):  # закрытые диспетчером записи чистим
         if k not in alive:
             st.pop(k, None)
             STATE["tg_ask"].get(chat, {}).pop(k, None)
@@ -1554,12 +1558,10 @@ def _deliver_track(c, pos, now=None):
     now = now or time.time()
     for o in out_orders:
         if o.get("lat") is None or o.get("lng") is None:
-            continue  # Ð±ÐµÐ· ÐºÐ¾Ð¾Ñ€Ð´Ð¸Ð½Ð°Ñ‚ Ð°Ð´Ñ€ÐµÑ Ð½Ðµ ÑÐ²ÐµÑ€Ð¸Ñ‚ÑŒ â€” Ð¿Ð¾Ð»Ð»ÐµÑ€ ÐºÑ€Ð°ÑˆÐ¸Ñ‚ÑŒ Ð½ÐµÐ»ÑŒÐ·Ñ
+            continue  # без координат адрес не сверить — поллер крашить нельзя
         rec = st.setdefault(o["id"], {})
         if haversine_km(pos, o) <= TG_GEO_AT_PLACE:
             rec["since"] = rec.get("since") or now
-            # Ð±Ð¾Ñ‚ ÑÐ¿Ñ€Ð°ÑˆÐ¸Ð²Ð°ÐµÑ‚ ÐºÑƒÑ€ÑŒÐµÑ€Ð° Â«Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½?Â» â€” Ñ€Ð°Ð· Ð·Ð° Ð·Ð°ÐµÐ·Ð´: ÑÐ½Ð¾Ð²Ð°
-            # ÑÐ¿Ñ€Ð¾ÑÐ¸Ñ‚ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¿Ð¾ÑÐ»Ðµ Ð²Ñ‹ÐµÐ·Ð´Ð° Ð¸Ð· Ñ€Ð°Ð´Ð¸ÑƒÑÐ° Ð¸ Ð½Ð¾Ð²Ð¾Ð³Ð¾ 30-Ñ Ð¿Ñ€Ð¾ÑÑ‚Ð¾Ñ
             if (now - rec["since"] >= _BOT_ASK_AFTER_S and not rec.get("asked")
                     and o["id"] not in STATE["tg_ask"].get(chat, {})):
                 rec["asked"] = True
@@ -1567,50 +1569,50 @@ def _deliver_track(c, pos, now=None):
                 if mid is not None or not CFG["tg_poll"]:
                     STATE["tg_ask"].setdefault(chat, {})[o["id"]] = {
                         "msg": mid or 0, "stage": "ask"}
-                    log.info("bot ask: %s Ñƒ Â«%sÂ» â€” ÑÐ¿Ñ€Ð¾ÑÐ¸Ð»Ð¸ Â«Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½?Â»",
+                    log.info("bot ask: %s у «%s» — спросили «доставлен?»",
                              c.get("name"), o.get("address"))
-                    _ev("bot", f"ÑÐ¿Ñ€Ð¾ÑÐ¸Ð» {c.get('name')}: Â«{o.get('address')}Â» â€” Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½?")
+                    _ev("bot", f"спросил {c.get('name')}: «{o.get('address')}» — доставлен?")
             if not rec.get("at") and now - rec["since"] >= _DELIVER_DWELL_S:
                 rec["at"] = now
-                log.info("deliver tracked: %s Ð±Ñ‹Ð» Ñƒ Ð°Ð´Ñ€ÐµÑÐ° Â«%sÂ» â€” Ð¸Ð· Ñ€Ð°ÑÑ‡Ñ‘Ñ‚Ð° Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‚Ð°",
+                log.info("deliver tracked: %s был у адреса «%s» — из расчёта возврата",
                          c.get("name"), o.get("address"))
-                _ev("sys", f"{c.get('name')} Ð±Ñ‹Ð» Ñƒ Ð°Ð´Ñ€ÐµÑÐ° Â«{o.get('address')}Â»")
+                _ev("sys", f"{c.get('name')} был у адреса «{o.get('address')}»")
                 _bump()
         else:
-            # Ð²Ñ‹ÐµÑ…Ð°Ð» Ð¸Ð· Ñ€Ð°Ð´Ð¸ÑƒÑÐ° â€” Ð·Ð°ÐµÐ·Ð´ Ð·Ð°ÐºÑ€Ñ‹Ñ‚: ÑÐ»ÐµÐ´ÑƒÑŽÑ‰Ð¸Ð¹ Ð·Ð°ÐµÐ·Ð´ ÑÐ¿Ñ€Ð¾ÑÐ¸Ñ‚ Ð·Ð°Ð½Ð¾Ð²Ð¾
+            # выехал из радиуса — заезд закрыт: новый заезд спросит заново
             rec.pop("since", None)
             rec.pop("asked", None)
 
 
-_AWAY_AUTO_KM = 0.5    # Ð´Ð°Ð»ÑŒÑˆÐµ ÑÑ‚Ð¾Ð³Ð¾ Ð¾Ñ‚ ÑÐ²Ð¾ÐµÐ¹ Ñ‚Ð¾Ñ‡ÐºÐ¸ ÐºÑƒÑ€ÑŒÐµÑ€ Â«ÑƒÐµÑ…Ð°Ð»Â»
-_AWAY_DWELL_S = 60     # Ð½ÐµÐ¿Ñ€ÐµÑ€Ñ‹Ð²Ð½Ð¾, ÑÑ‚Ð¾Ð»ÑŒÐºÐ¾ ÑÐµÐºÑƒÐ½Ð´ (Ð³Ð»ÑƒÑˆÐ¸Ñ‚ GPS-Ð¿Ñ€Ñ‹Ð¶Ð¾Ðº Ð¸ Â«Ð¾Ñ‚Ð¾ÑˆÑ‘Ð» Ðº Ð¼Ð°ÑˆÐ¸Ð½ÐµÂ»)
-_BACK_DWELL_S = 120    # Ð¿Ñ€Ð¾ÑÑ‚Ð¾Ð¹ Ñƒ Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð¿Ð¾ÑÐ»Ðµ Ð·Ð°ÐºÑ€Ñ‹Ñ‚Ð¸Ñ Ð²ÑÐµÑ… Ð·Ð°ÐºÐ°Ð·Ð¾Ð² â€” Â«Ð½Ð° Ð±Ð°Ð·ÐµÂ»
+_AWAY_AUTO_KM = 0.5    # дальше этого от своей точки курьер «уехал»
+_AWAY_DWELL_S = 60     # непрерывно, столько секунд (глушит GPS-прыжок и «отошёл к машине»)
+_BACK_DWELL_S = 120    # простой у точки после закрытия всех заказов — «на базе»
 
 
 def _auto_status_apply(c, new_status):
-    """ÐŸÐµÑ€ÐµÐ²Ð¾Ð´ ÑÑ‚Ð°Ñ‚ÑƒÑÐ° ÐºÑƒÑ€ÑŒÐµÑ€Ð° Ð¿Ð¾ Ð³ÐµÐ¾: Ð‘Ð”, ÑÐ±Ñ€Ð¾Ñ ÐµÐ³Ð¾ Ð¼Ð°Ñ€ÑˆÑ€ÑƒÑ‚Ð¾Ð², Ð¿Ð¸Ð½Ð¾Ðº Ð¿Ð¾Ð´Ð¿Ð¸ÑÑ‡Ð¸ÐºÐ°Ð¼."""
+    """Перевод статуса курьера по гео: БД, сброс его маршрутов, пинок подписчикам."""
     was = c.get("status")
     c["status"] = new_status
     _persist_couriers()
     _invalidate_plan(courier_id=c["id"], geo=True)
     if was != new_status:
-        _ev("sys", f"{c['name']}: " + ("ÑƒÐµÑ…Ð°Ð» Ð² Ð¿ÑƒÑ‚ÑŒ" if new_status == "away"
-                                       else "Ð²ÐµÑ€Ð½ÑƒÐ»ÑÑ Ð½Ð° Ð±Ð°Ð·Ñƒ"))
+        _ev("sys", f"{c['name']}: " + ("уехал в путь" if new_status == "away"
+                                       else "вернулся на базу"))
     else:
-        # ÑÑ‚Ð°Ñ‚ÑƒÑ Ð½Ðµ ÑÐ¼ÐµÐ½Ð¸Ð»ÑÑ â€” ÑÑ‚Ð¾ Ð¿Ñ€Ð¾ÑÑ‚Ð¾ Ð³ÐµÐ¾-Ñ‚Ð¸Ðº Ð´Ð²Ð¸Ð¶ÐµÐ½Ð¸Ñ, Ð½Ðµ ÑÐ¾Ð±Ñ‹Ñ‚Ð¸Ðµ
+        # статус не сменился — это просто гео-тик движения, не событие
         _bump(geo=True)
         return
     _bump()
 
 
 def _auto_status_track(c, pos, now=None):
-    """ÐÐ²Ñ‚Ð¾-ÑÑ‚Ð°Ñ‚ÑƒÑÑ‹ Ð¿Ð¾ Ð³ÐµÐ¾ (Ð² Ð¾Ð±Ðµ ÑÑ‚Ð¾Ñ€Ð¾Ð½Ñ‹, Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ñ Ð¶Ð¸Ð²Ñ‹Ð¼ Ð³ÐµÐ¾):
+    """Авто-статусы по гео (в обе стороны, только с живым гео):
 
-    Â«Ð±Ð°Ð·Ð°Â» -> Â«Ð² Ð¿ÑƒÑ‚Ð¸Â»: ÑƒÐµÑ…Ð°Ð» Ð´Ð°Ð»ÑŒÑˆÐµ _AWAY_AUTO_KM Ð¸ Ð´ÐµÑ€Ð¶Ð¸Ñ‚ÑÑ _AWAY_DWELL_S.
-    Â«Ð² Ð¿ÑƒÑ‚Ð¸Â» -> Â«Ð±Ð°Ð·Ð°Â»: Ð‘Ð«Ð› Ð² Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐµ (Ð²Ñ‹Ð´Ð°Ð½Ð½Ñ‹Ðµ Ð·Ð°ÐºÐ°Ð·Ñ‹ Ð·Ð°ÐºÑ€Ñ‹Ñ‚Ñ‹) Ð¸ Ð¿Ñ€Ð¾ÑÑ‚Ð¾ÑÐ»
-    Ñƒ ÑÐ²Ð¾ÐµÐ¹ Ñ‚Ð¾Ñ‡ÐºÐ¸ _BACK_DWELL_S. ÐšÑƒÑ€ÑŒÐµÑ€, ÐºÐ¾Ñ‚Ð¾Ñ€Ñ‹Ð¹ Â«Ð² Ð¿ÑƒÑ‚Ð¸Â» ÑÑ‚Ð¾Ð¸Ñ‚ Ñƒ Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð¸
-    Ð¶Ð´Ñ‘Ñ‚ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸, Ð½Ð°Ð·Ð°Ð´ ÐÐ• Ð¿ÐµÑ€ÐµÐ²Ð¾Ð´Ð¸Ñ‚ÑÑ â€” Ð·Ð°ÐºÐ°Ð·Ð¾Ð² Ð½Ðµ Ð±Ñ‹Ð»Ð¾, Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‚ Ð·Ð° Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€Ð¾Ð¼.
-    Ð—Ð¾Ð½Ð° 150 Ð¼..500 Ð¼ â€” Ð³Ð¸ÑÑ‚ÐµÑ€ÐµÐ·Ð¸Ñ: ÑÑ‡Ñ‘Ñ‚Ñ‡Ð¸Ðº Ð½Ðµ Ñ‚Ð¸ÐºÐ°ÐµÑ‚ Ð¸ Ð½Ðµ ÑÐ±Ñ€Ð°ÑÑ‹Ð²Ð°ÐµÑ‚ÑÑ.
+    «база» -> «в пути»: уехал дальше _AWAY_AUTO_KM и держится _AWAY_DWELL_S.
+    «в пути» -> «база»: БЫЛ в развозке (выданные заказы закрыты) и простоял
+    у своей точки _BACK_DWELL_S. Курьер, который «в пути» стоит у точки и
+    ждёт выдачи, назад НЕ переводится — заказов не было, возврат за диспетчером.
+    Зона 150 м..500 м — гистерезис: счётчик не тикает и не сбрасывается.
     """
     home = _home_point(c)
     chat = c.get("tg_chat_id") or ""
@@ -1631,34 +1633,34 @@ def _auto_status_track(c, pos, now=None):
             rec["since"] = rec["since"] or now
             if now - rec["since"] >= _AWAY_DWELL_S:
                 rec["since"], rec["went_out"] = None, False
-                log.info("auto-away: %s ÑƒÐµÑ…Ð°Ð» Ð¾Ñ‚ Ñ‚Ð¾Ñ‡ÐºÐ¸ Â«%sÂ» (%.0f Ð¼) â€” ÑÑ‚Ð°Ñ‚ÑƒÑ Â«Ð² Ð¿ÑƒÑ‚Ð¸Â»",
+                log.info("auto-away: %s уехал от точки «%s» (%.0f м) — статус «в пути»",
                          c.get("name"), home.get("name"), d * 1000)
                 _auto_status_apply(c, "away")
         elif d <= TG_GEO_AT_PLACE:
-            rec["since"] = None  # Ñƒ Ñ‚Ð¾Ñ‡ÐºÐ¸ â€” Ð¾Ñ‚ÑÑ‡Ñ‘Ñ‚ Ð·Ð°Ð½Ð¾Ð²Ð¾
+            rec["since"] = None  # у точки — отсчёт заново
             rec["went_out"] = False
         return
-    # ÑÑ‚Ð°Ñ‚ÑƒÑ Â«Ð² Ð¿ÑƒÑ‚Ð¸Â»
+    # статус «в пути»
     if d <= TG_GEO_AT_PLACE:
         if not out and rec["went_out"]:
             rec["since"] = rec["since"] or now
             if now - rec["since"] >= _BACK_DWELL_S:
                 STATE["tg_away"].pop(chat, None)
-                log.info("auto-return: %s Ð²ÐµÑ€Ð½ÑƒÐ»ÑÑ Ðº Ñ‚Ð¾Ñ‡ÐºÐµ Â«%sÂ» â€” ÑÑ‚Ð°Ñ‚ÑƒÑ Â«Ð½Ð° Ð±Ð°Ð·ÐµÂ»",
+                log.info("auto-return: %s вернулся к точке «%s» — статус «на базе»",
                          c.get("name"), home.get("name"))
                 _auto_status_apply(c, "base")
         else:
-            rec["since"] = None  # Ð¶Ð´Ñ‘Ñ‚ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ Ð¸Ð»Ð¸ ÐµÑ‰Ñ‘ Ñ€Ð°Ð·Ð²Ð¾Ð·Ð¸Ñ‚ â€” Ð½Ðµ Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‚
+            rec["since"] = None  # ждёт выдачи или ещё развозит — не возврат
     else:
-        rec["since"] = None     # ÑÐ½Ð¾Ð²Ð° ÑƒÐµÑ…Ð°Ð» â€” ÑÑ‡Ñ‘Ñ‚Ñ‡Ð¸Ðº Ð¿Ñ€Ð¾ÑÑ‚Ð¾Ñ ÑÐ±Ñ€Ð¾ÑˆÐµÐ½
+        rec["since"] = None     # снова уехал — счётчик простоя сброшен
 
 
 def _courier_geo(c, depot, now=None):
-    """Ð“ÐµÐ¾-Ð´Ð°Ð½Ð½Ñ‹Ðµ ÐºÑƒÑ€ÑŒÐµÑ€Ð° Ð´Ð»Ñ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚Ð¾Ð²: ÑÐ³Ð»Ð°Ð¶ÐµÐ½Ð½Ð°Ñ Ð¿Ð¾Ð·Ð¸Ñ†Ð¸Ñ + Ð¾Ñ†ÐµÐ½ÐºÐ° Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‚Ð° Ð½Ð° Ð´ÐµÐ¿Ð¾.
+    """Гео-данные курьера для расчётов: сглаженная позиция + оценка возврата на депо.
 
-    Ð’Ð¾Ð·Ð²Ñ€Ð°Ñ‰Ð°ÐµÑ‚ None, ÐµÑÐ»Ð¸ Ð¿Ñ€Ð¸Ð²ÑÐ·ÐºÐ¸ Ð½ÐµÑ‚ Ð¸Ð»Ð¸ Ð³ÐµÐ¾ ÑÑ‚Ð°Ñ€ÑˆÐµ TG_GEO_FRESH.
-    back_min - Ð·Ð° ÑÐºÐ¾Ð»ÑŒÐºÐ¾ ÐºÑƒÑ€ÑŒÐµÑ€ Ñ„Ð¸Ð·Ð¸Ñ‡ÐµÑÐºÐ¸ Ð´Ð¾ÐµÐ´ÐµÑ‚ Ð´Ð¾ Ð´ÐµÐ¿Ð¾ (Ð°Ð½Ñ‚Ð¸-Ð¿Ñ€Ñ‹Ð¶ÐºÐ¸ ÑƒÐ¶Ðµ
-    Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÐµÐ½Ñ‹ Ð¼ÐµÐ´Ð¸Ð°Ð½Ð¾Ð¹ Ð¿Ñ€Ð¸ Ð¿Ñ€Ð¸Ñ‘Ð¼Ðµ Ñ‚Ð¾Ñ‡ÐºÐ¸, Ð·Ð´ÐµÑÑŒ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ñ€Ð°ÑÑÑ‚Ð¾ÑÐ½Ð¸Ðµ).
+    Возвращает None, если привязки нет или гео старше TG_GEO_FRESH.
+    back_min - за сколько курьер физически доедет до депо (анти-прыжки уже
+    применены медианой при приёме точки, здесь только расстояние).
     """
     chat = c.get("tg_chat_id") or ""
     pos = STATE["tg_pos"].get(chat)
@@ -1679,28 +1681,28 @@ def _courier_geo(c, depot, now=None):
         g["at_depot"] = False
         g["back_min"] = int(min(480, max(1, round(
             km * ROAD_FACTOR / kmh * 60))))
-    # Ñ„Ð°Ð·Ð° Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐ¸: Ð·Ð°ÐºÐ°Ð·Ñ‹ Ð²Ñ‹Ð´Ð°Ð½Ñ‹? Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° Ñƒ Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð·Ð°Ñ„Ð¸ÐºÑÐ¸Ñ€Ð¾Ð²Ð°Ð½Ð°?
+    # фаза развозки: заказы выданы? загрузка у точки зафиксирована?
     out_orders = _courier_out_orders(c)
     has_out = bool(out_orders)
     load = STATE["tg_load"].get(chat) or {}
     g["has_out"] = has_out
     g["loaded"] = bool(load.get("loaded_at"))
     if has_out and not g["at_depot"]:
-        g["delivering"] = True   # Ð²Ñ‹Ð´Ð°Ð½Ñ‹ Ð¸ Ð½Ðµ Ñƒ Ñ‚Ð¾Ñ‡ÐºÐ¸ â€” Ð·Ð½Ð°Ñ‡Ð¸Ñ‚, ÐµÐ´ÐµÑ‚ Ñ Ð·Ð°ÐºÐ°Ð·Ð°Ð¼Ð¸
-        # Ñ‡ÐµÑÑ‚Ð½Ñ‹Ð¹ Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‚: Ð´Ð¾Ñ€Ð¾Ð³Ð° Ð´Ð¾ Ñ‚Ð¾Ñ‡ÐºÐ¸ + Ñ€Ð°Ð·Ð²Ð¾Ð· Ð½ÐµÐ²Ñ‹Ð´Ð°Ð½Ð½Ñ‹Ñ…-Ð½ÐµÐ´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ñ….
-        # Â«Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹ÐµÂ» Ð²Ñ‹Ð²Ð¾Ð´Ð¸Ð¼ Ð¿Ð¾ Ð³ÐµÐ¾ (Ð´Ð¾Ð»Ð³Ð¾ ÑÑ‚Ð¾ÑÐ» Ñƒ Ð°Ð´Ñ€ÐµÑÐ°) â€” Ð´Ð»Ñ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚Ð°
-        # Ð¸Ñ… ÑÑ‡Ð¸Ñ‚Ð°ÐµÐ¼ Ñ€Ð°Ð·Ð²ÐµÐ·Ñ‘Ð½Ð½Ñ‹Ð¼Ð¸; ÑÑ‚Ð°Ñ‚ÑƒÑ Ð·Ð°ÐºÐ°Ð·Ð° Ð½Ðµ Ñ‚Ñ€Ð¾Ð³Ð°ÐµÐ¼
+        g["delivering"] = True   # выданы и не у точки — значит, едет с заказами
+        # честный возврат: дорога до точки + развоз невыданных-недоставленных.
+        # «доставленные» выводим по гео (долго стоял у адреса) — для расчёта
+        # их считаем развезёнными; статус заказа не трогаем
         dst = STATE["tg_deliv"].get(chat) or {}
         rem = sum(1 for o in out_orders
                   if not dst.get(o["id"], {}).get("at"))
         per = _courier_del_avg_min(c)
         g["back_min"] = int(min(480, g["back_min"] + rem * per))
     if not has_out and not g["at_depot"]:
-        # Ð·Ð°ÐºÐ°Ð·Ñ‹ ÐµÑ‰Ñ‘ Ð½Ðµ Ð² Ð¼Ð°ÑˆÐ¸Ð½Ðµ: Ñ‡ÐµÑÑ‚Ð½Ñ‹Ð¹ ETA â€” ÑÐ½Ð°Ñ‡Ð°Ð»Ð° Ð´Ð¾ÐµÑ…Ð°Ñ‚ÑŒ Ð´Ð¾ Ñ‚Ð¾Ñ‡ÐºÐ¸
+        # заказы ещё не в машине: честный ETA — сначала доехать до точки
         kmh2, _ = _courier_speed(c)
         g["to_point_min"] = int(min(240, max(1, round(
             km * ROAD_FACTOR / kmh2 * 60))))
-    # ÑÑ‚Ð¾Ð¸Ñ‚ Ð»Ð¸ ÐºÑƒÑ€ÑŒÐµÑ€ Ð¿Ñ€ÑÐ¼Ð¾ ÑÐµÐ¹Ñ‡Ð°Ñ Ñƒ Ð¾Ð´Ð½Ð¾Ð³Ð¾ Ð¸Ð· ÑÐ²Ð¾Ð¸Ñ… Ð²Ñ‹Ð´Ð°Ð½Ð½Ñ‹Ñ… Ð·Ð°ÐºÐ°Ð·Ð¾Ð²
+    # стоит ли курьер прямо сейчас у одного из своих выданных заказов
     best, best_km = None, None
     for o in out_orders:
         d = haversine_km(pos, o)
@@ -1712,8 +1714,8 @@ def _courier_geo(c, depot, now=None):
 
 
 def _flip_return_route(courier_id):
-    """Ð’ÑÐµ Ð·Ð°ÐºÐ°Ð·Ñ‹ Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐ¸ Ð·Ð°ÐºÑ€Ñ‹Ñ‚Ñ‹: Ñ€Ð°Ð·Ð²Ð¾Ñ€Ð°Ñ‡Ð¸Ð²Ð°ÐµÐ¼ Ñ‚Ñ€Ð°ÑÑÑƒ â€” ÐºÑƒÑ€ÑŒÐµÑ€ ÐµÐ´ÐµÑ‚ Ð´Ð¾Ð¼Ð¾Ð¹
-    Ð¿Ð¾ ÑƒÐ»Ð¸Ñ†Ð°Ð¼, ÐºÐ°Ñ€Ñ‚Ð° Ñ€Ð¸ÑÑƒÐµÑ‚ Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‚ (ret_geom Ð²Ð¼ÐµÑÑ‚Ð¾ out_geom)."""
+    """Все заказы развозки закрыты: разворачиваем трассу — курьер едет домой
+    по улицам, карта рисует возврат (ret_geom вместо out_geom)."""
     c = next((x for x in STATE["couriers"] if x["id"] == courier_id), None)
     if c and c.get("out_geom") and not any(
             o.get("assigned") == courier_id and o.get("status") == "out"
@@ -1723,11 +1725,11 @@ def _flip_return_route(courier_id):
 
 
 def _bot_close_delivered(oid, outcome="delivered", reason=""):
-    """Ð—Ð°ÐºÑ€Ñ‹Ñ‚ÑŒ Ð·Ð°ÐºÐ°Ð· Ð¿Ð¾ Ð¿Ð¾Ð´Ñ‚Ð²ÐµÑ€Ð¶Ð´ÐµÐ½Ð¸ÑŽ ÐšÐ£Ð Ð¬Ð•Ð Ð (Ð±ÐµÐ· ÑÐµÑÑÐ¸Ð¸): Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½ Ð¸Ð»Ð¸
-    Ð¾Ñ‚Ð¼ÐµÐ½Ñ‘Ð½ (Ñ Ð¿Ñ€Ð¸Ñ‡Ð¸Ð½Ð¾Ð¹ Ð¸Ð· Ð´Ð¸Ð°Ð»Ð¾Ð³Ð° Ð±Ð¾Ñ‚Ð°).
+    """Закрыть заказ по подтверждению КУРЬЕРА (без сессии): доставлен или
+    отменён (с причиной из диалога бота).
 
-    Ð¢Ð¾Ñ‚ Ð¶Ðµ ÑÐ»ÐµÐ´, Ñ‡Ñ‚Ð¾ Ñƒ Ñ€ÑƒÑ‡Ð½Ð¾Ð³Ð¾ Ð·Ð°ÐºÑ€Ñ‹Ñ‚Ð¸Ñ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€Ð¾Ð¼: Ð°Ñ€Ñ…Ð¸Ð², ÑÐ½ÑÑ‚Ð¸Ðµ Ð¸Ð·
-    Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐ¸, Ñ€Ð°Ð·Ð²Ð¾Ñ€Ð¾Ñ‚ Ñ‚Ñ€Ð°ÑÑÑ‹ Ð½Ð° Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‚, Ð¸Ð½Ð²Ð°Ð»Ð¸Ð´Ð°Ñ†Ð¸Ñ Ð¿Ð»Ð°Ð½Ð°.
+    Тот же след, что у ручного закрытия диспетчером: архив, снятие из
+    развозки, разворот трассы на возврат, инвалидация плана.
     """
     order = next((o for o in STATE["orders"] if o["id"] == oid), None)
     if not order or (order.get("status") or "ready") != "out":
@@ -1740,40 +1742,61 @@ def _bot_close_delivered(oid, outcome="delivered", reason=""):
     _persist_orders()
     _invalidate_plan(drop_plan=True, pid=_obj_point(order))
     _bump()
-    log.info("bot confirm: Ð·Ð°ÐºÐ°Ð· %s (%s) Ð·Ð°ÐºÑ€Ñ‹Ñ‚ ÐºÑƒÑ€ÑŒÐµÑ€Ð¾Ð¼ %s (%s)",
+    log.info("bot confirm: заказ %s (%s) закрыт курьером %s (%s)",
              oid, order.get("address"), c.get("name") if c else cid, outcome)
     who = c.get("name") if c else cid
-    _ev("bot", (f"Ð¾Ñ‚Ð¼ÐµÐ½Ð¸Ð» Â«{order.get('address')}Â» â€” {who}, Ð¿Ñ€Ð¸Ñ‡Ð¸Ð½Ð°: {reason}"
+    _ev("bot", (f"отменил «{order.get('address')}» — {who}, причина: {reason}"
                 if outcome == "cancelled" else
-                f"Ð·Ð°ÐºÑ€Ñ‹Ð» Â«{order.get('address')}Â» â€” {who} Ð¿Ð¾Ð´Ñ‚Ð²ÐµÑ€Ð´Ð¸Ð»"))
+                f"закрыл «{order.get('address')}» — {who} подтвердил"))
     return True, who
 
 
-# ÐŸÑ€Ð¸Ñ‡Ð¸Ð½Ñ‹ Ð¾Ñ‚Ð¼ÐµÐ½Ñ‹ â€” Ð¿Ð¾ Ñ‡Ð°ÑÑ‚Ð¾Ñ‚Ðµ (Ñ‡Ð°Ñ‰Ðµ Ð²ÑÐµÐ³Ð¾ Ð² Ð½Ð°Ñ‡Ð°Ð»Ðµ, Â«Ð”Ñ€ÑƒÐ³Ð¾ÐµÂ» Ð²ÑÐµÐ³Ð´Ð° Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ð¼)
+# Причины отмены — по частоте (чаще всего в начале, «Другое» всегда последним)
 _CANCEL_REASONS = [
-    "Ð”Ð¾Ð»Ð³Ð¾Ðµ Ð¾Ð¶Ð¸Ð´Ð°Ð½Ð¸Ðµ",
-    "Ð§ÐµÐ»Ð¾Ð²ÐµÐº Ð½Ðµ Ð¾Ñ‚Ð²ÐµÑ‡Ð°ÐµÑ‚",
-    "ÐŸÑ€Ð¾ÑÑ‚Ð¾ Ð¾Ñ‚ÐºÐ°Ð·",
-    "ÐÐµÐ¿Ñ€Ð°Ð²Ð¸Ð»ÑŒÐ½Ñ‹Ð¹ Ð·Ð°ÐºÐ°Ð·",
-    "ÐŸÐ»Ð¾Ñ…Ð¾Ðµ ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð¾ Ñ‚Ð¾Ð²Ð°Ñ€Ð°",
-    "ÐÐµ Ñ‚Ð¾Ñ‚ Ð°Ð´Ñ€ÐµÑ",
-    "Ð”Ñ€ÑƒÐ³Ð¾Ðµ",
+    "Долгое ожидание",
+    "Человек не отвечает",
+    "Просто отказ",
+    "Неправильный заказ",
+    "Плохое качество товара",
+    "Не тот адрес",
+    "Другое",
 ]
 
 
 def _bot_ask_text(o):
-    return (f"ðŸ› ÐšÐ°Ð¶ÐµÑ‚ÑÑ, Ð·Ð°ÐºÐ°Ð· Ð¿Ð¾ Ð°Ð´Ñ€ÐµÑÑƒ <b>{_esc(o.get('address') or '')}</b> "
-            "Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½. Ð­Ñ‚Ð¾ Ñ‚Ð°Ðº?")
+    return (f"🛍 Кажется, заказ по адресу <b>{_esc(o.get('address') or '')}</b> "
+            "доставлен. Это так?")
 
 
 def _bot_ask_kb(oid):
-    return [[{"text": "âœ… Ð”Ð¾ÑÑ‚Ð°Ð²Ð¸Ð»", "callback_data": f"dlv:{oid}:y"}],
-            [{"text": "âŒ ÐÐµÑ‚", "callback_data": f"dlv:{oid}:n"}],
-            [{"text": "ðŸš« Ð—Ð°ÐºÐ°Ð· Ð¾Ñ‚Ð¼ÐµÐ½Ñ‘Ð½", "callback_data": f"dlv:{oid}:ref"}]]
+    return [[{"text": "✅ Доставил", "callback_data": f"dlv:{oid}:y"}],
+            [{"text": "❌ Нет", "callback_data": f"dlv:{oid}:n"}],
+            [{"text": "🚫 Заказ отменён", "callback_data": f"dlv:{oid}:ref"}]]
+
+
+def _tg_step_kb(oid, label, act):
+    """Клавиатура шага-подтверждения: «<label>» и назад к вопросу."""
+    return [[{"text": label, "callback_data": f"dlv:{oid}:{act}"}],
+            [{"text": "↩️ Назад", "callback_data": f"dlv:{oid}:no"}]]
+
+
+def _bot_keep_rolling(chat, pend, oid, order, courier):
+    """«Нет, ещё везу»: диалог закрыт, заказ остаётся в развозке."""
+    addr = _esc(order.get("address") or "")
+    STATE["tg_ask"].get(chat, {}).pop(oid, None)
+    _tg_edit_msg(chat, pend["msg"],
+                 f"Понял: <b>{addr}</b> ещё в развозке. "
+                 "Закроет диспетчер или спрошу при следующем заезде.")
+    _ev("cour", f"{courier['name']}: «{order.get('address') or oid}» ещё в развозке")
 
 
 def _tg_callback(cb):
-    """ÐÐ°Ð¶Ð°Ñ‚Ð¸Ðµ Ð¸Ð½Ð»Ð°Ð¹Ð½-ÐºÐ½Ð¾Ð¿ÐºÐ¸ ÐºÑƒÑ€ÑŒÐµÑ€Ð¾Ð¼: Â«Ð´Ð¾ÑÑ‚Ð°Ð²Ð¸Ð»?Â» â†’ Â«Ñ‚Ð¾Ñ‡Ð½Ð¾?Â» â†’ Ð·Ð°ÐºÑ€Ñ‹Ñ‚Ð¸Ðµ."""
+    """Нажатие инлайн-кнопки курьером: «доставил?» → «точно?» → закрытие.
+
+    Стадии: ask → confirm/refconfirm/noconfirm → ok/r:i/nok; «Назад»
+    возвращает на шаг назад. Неизвестная кнопка или нажатие вне своей
+    стадии диалог не ломает и данные не меняет.
+    """
     data = cb.get("data") or ""
     cbid = cb.get("id") or ""
     msg = cb.get("message") or {}
@@ -1783,11 +1806,11 @@ def _tg_callback(cb):
         return
     parts = data.split(":", 2)
     if len(parts) < 3 or not parts[1]:
-        _tg_answer_cb(cbid, "ÐšÐ½Ð¾Ð¿ÐºÐ° Ð½Ðµ Ñ€Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½Ð°")
+        _tg_answer_cb(cbid, "Кнопка не распознана")
         return
     _, oid, act = parts
-    # Ñ‚ÐµÑÑ‚-Ñ€ÐµÐ¶Ð¸Ð¼: ÐºÐ½Ð¾Ð¿ÐºÐ¸ Ð¶Ð¼Ñ‘Ñ‚ Ð¶Ð¸Ð²Ð¾Ð¹ Ñ‡ÐµÐ»Ð¾Ð²ÐµÐº Ð² Ñ€ÐµÐ´Ð¸Ñ€ÐµÐºÑ‚-Ñ‡Ð°Ñ‚Ðµ â€” Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‰Ð°ÐµÐ¼
-    # Ð´Ð¸Ð°Ð»Ð¾Ð³ Ðº ÑÐ¸Ð½Ñ‚ÐµÑ‚Ð¸Ñ‡ÐµÑÐºÐ¾Ð¼Ñƒ Ñ‡Ð°Ñ‚Ñƒ ÐºÑƒÑ€ÑŒÐµÑ€Ð°, ÐºÐ¾Ñ‚Ð¾Ñ€Ð¾Ð¼Ñƒ Ð²Ñ‹Ð´Ð°Ð½ Ð·Ð°ÐºÐ°Ð·
+    # тест-режим: кнопки жмёт живой человек в редирект-чате — возвращаем
+    # диалог к синтетическому чату курьера, которому выдан заказ
     if TG_TEST_REDIRECT and chat == TG_TEST_REDIRECT:
         order0 = next((o for o in STATE["orders"] if o["id"] == oid), None)
         c0 = next((c for c in STATE["couriers"]
@@ -1802,94 +1825,82 @@ def _tg_callback(cb):
     if not pend or not order or not courier or order.get("assigned") != courier.get("id"):
         if pend:
             _tg_edit_msg(chat, pend["msg"],
-                         "Ð­Ñ‚Ð¾Ñ‚ Ð²Ð¾Ð¿Ñ€Ð¾Ñ ÑƒÐ¶Ðµ Ð½ÐµÐ°ÐºÑ‚ÑƒÐ°Ð»ÐµÐ½ â€” Ð·Ð°ÐºÐ°Ð· Ð·Ð°ÐºÑ€Ñ‹Ñ‚ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€Ð¾Ð¼.")
+                         "Этот вопрос уже неактуален — заказ закрыт диспетчером.")
             STATE["tg_ask"].get(chat, {}).pop(oid, None)
-        _tg_answer_cb(cbid, "Ð£Ð¶Ðµ Ð½ÐµÐ°ÐºÑ‚ÑƒÐ°Ð»ÑŒÐ½Ð¾")
+        _tg_answer_cb(cbid, "Уже неактуально")
         return
     addr = _esc(order.get("address") or "")
     if act == "y" and pend["stage"] == "ask":
         pend["stage"] = "confirm"
-        _tg_edit_msg(chat, pend["msg"], f"Ð¢Ð¾Ñ‡Ð½Ð¾ Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½? Ð—Ð°ÐºÐ°Ð·: <b>{addr}</b>",
-                     [[{"text": "âœ… ÐŸÐ¾Ð´Ñ‚Ð²ÐµÑ€Ð´Ð¸Ñ‚ÑŒ", "callback_data": f"dlv:{oid}:ok"}],
-                      [{"text": "â†©ï¸ ÐÐ°Ð·Ð°Ð´", "callback_data": f"dlv:{oid}:no"}]])
+        _tg_edit_msg(chat, pend["msg"], f"Точно доставлен? Заказ: <b>{addr}</b>",
+                     _tg_step_kb(oid, "✅ Подтвердить", "ok"))
         _tg_answer_cb(cbid)
     elif act == "ref" and pend["stage"] == "ask":
         pend["stage"] = "refconfirm"
-        _tg_edit_msg(chat, pend["msg"],
-                     f"Ð¢Ð¾Ñ‡Ð½Ð¾ Ð¾Ñ‚Ð¼ÐµÐ½ÑÐµÐ¼? Ð—Ð°ÐºÐ°Ð·: <b>{addr}</b>",
-                     [[{"text": "âœ… Ð”Ð°, Ð¾Ñ‚Ð¼ÐµÐ½ÑÐµÐ¼", "callback_data": f"dlv:{oid}:refyes"}],
-                      [{"text": "â†©ï¸ ÐÐ°Ð·Ð°Ð´", "callback_data": f"dlv:{oid}:no"}]])
+        _tg_edit_msg(chat, pend["msg"], f"Точно отменяем? Заказ: <b>{addr}</b>",
+                     _tg_step_kb(oid, "✅ Да, отменяем", "refyes"))
         _tg_answer_cb(cbid)
     elif act == "n" and pend["stage"] == "ask":
         pend["stage"] = "noconfirm"
-        _tg_edit_msg(chat, pend["msg"],
-                     f"Ð¢Ð¾Ñ‡Ð½Ð¾ ÐµÑ‰Ñ‘ Ð½ÐµÑ‚? Ð—Ð°ÐºÐ°Ð·: <b>{addr}</b>",
-                     [[{"text": "âœ… Ð”Ð°, ÐµÑ‰Ñ‘ Ð²ÐµÐ·Ñƒ", "callback_data": f"dlv:{oid}:nok"}],
-                      [{"text": "â†©ï¸ ÐÐ°Ð·Ð°Ð´", "callback_data": f"dlv:{oid}:no"}]])
+        _tg_edit_msg(chat, pend["msg"], f"Точно ещё нет? Заказ: <b>{addr}</b>",
+                     _tg_step_kb(oid, "✅ Да, ещё везу", "nok"))
         _tg_answer_cb(cbid)
     elif act == "nok" and pend["stage"] == "noconfirm":
-        STATE["tg_ask"].get(chat, {}).pop(oid, None)
-        _tg_edit_msg(chat, pend["msg"],
-                     f"ÐŸÐ¾Ð½ÑÐ»: <b>{addr}</b> ÐµÑ‰Ñ‘ Ð² Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐµ. "
-                     "Ð—Ð°ÐºÑ€Ð¾ÐµÑ‚ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€ Ð¸Ð»Ð¸ ÑÐ¿Ñ€Ð¾ÑÐ¸Ð¼ Ð¿Ð¾Ð·Ð¶Ðµ.")
+        _bot_keep_rolling(chat, pend, oid, order, courier)
         _tg_answer_cb(cbid)
-        _ev("cour", f"{courier['name']}: Â«{order.get('address') or oid}Â» ÐµÑ‰Ñ‘ Ð² Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐµ")
     elif act == "refyes" and pend["stage"] == "refconfirm":
         pend["stage"] = "reason"
         _tg_edit_msg(chat, pend["msg"],
-                     f"ÐŸÑ€Ð¸Ñ‡Ð¸Ð½Ð° Ð¾Ñ‚Ð¼ÐµÐ½Ñ‹: <b>{addr}</b>",
+                     f"Причина отмены: <b>{addr}</b>",
                      [[{"text": t, "callback_data": f"dlv:{oid}:r:{i}"}]
                       for i, t in enumerate(_CANCEL_REASONS)]
-                     + [[{"text": "â†©ï¸ ÐÐ°Ð·Ð°Ð´", "callback_data": f"dlv:{oid}:no"}]])
+                     + [[{"text": "↩️ Назад", "callback_data": f"dlv:{oid}:no"}]])
         _tg_answer_cb(cbid)
     elif act.startswith("r:") and pend["stage"] == "reason":
         try:
             reason = _CANCEL_REASONS[int(act[2:])]
         except (IndexError, ValueError):
-            reason = "Ð”Ñ€ÑƒÐ³Ð¾Ðµ"
-        ok, name = _bot_close_delivered(oid, outcome="cancelled", reason=reason)
+            reason = "Другое"
+        ok, _ = _bot_close_delivered(oid, outcome="cancelled", reason=reason)
         STATE["tg_ask"].get(chat, {}).pop(oid, None)
         if ok:
             _tg_edit_msg(chat, pend["msg"],
-                         f"ðŸ—‘ Ð—Ð°Ð¿Ð¸ÑÐ°Ð½Ð¾: <b>{addr}</b> â€” Ð·Ð°ÐºÐ°Ð· Ð¾Ñ‚Ð¼ÐµÐ½Ñ‘Ð½.\n"
-                         f"ÐŸÑ€Ð¸Ñ‡Ð¸Ð½Ð°: <b>{_esc(reason)}</b>")
-            _tg_answer_cb(cbid, "Ð—Ð°ÐºÐ°Ð· Ð¾Ñ‚Ð¼ÐµÐ½Ñ‘Ð½ âœ“")
+                         f"🗑 Записано: <b>{addr}</b> — заказ отменён.\n"
+                         f"Причина: <b>{_esc(reason)}</b>")
+            _tg_answer_cb(cbid, "Заказ отменён ✓")
         else:
-            _tg_edit_msg(chat, pend["msg"], "ÐÐµ Ð¿Ð¾Ð»ÑƒÑ‡Ð¸Ð»Ð¾ÑÑŒ Ð·Ð°ÐºÑ€Ñ‹Ñ‚ÑŒ â€” ÑƒÐ¶Ðµ Ð½ÐµÐ°ÐºÑ‚ÑƒÐ°Ð»ÐµÐ½.")
-            _tg_answer_cb(cbid, "Ð£Ð¶Ðµ Ð½ÐµÐ°ÐºÑ‚ÑƒÐ°Ð»ÑŒÐ½Ð¾")
+            _tg_edit_msg(chat, pend["msg"], "Не получилось закрыть — уже неактуален.")
+            _tg_answer_cb(cbid, "Уже неактуально")
     elif act == "ok" and pend["stage"] == "confirm":
-        ok, name = _bot_close_delivered(oid)
+        ok, _ = _bot_close_delivered(oid)
         STATE["tg_ask"].get(chat, {}).pop(oid, None)
         if ok:
             _tg_edit_msg(chat, pend["msg"],
-                         f"âœ… Ð—Ð°Ð¿Ð¸ÑÐ°Ð½Ð¾: <b>{addr}</b> Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½. Ð¡Ð¿Ð°ÑÐ¸Ð±Ð¾!")
-            _tg_answer_cb(cbid, "Ð—Ð°ÐºÐ°Ð· Ð·Ð°ÐºÑ€Ñ‹Ñ‚ âœ“")
+                         f"✅ Записано: <b>{addr}</b> доставлен. Спасибо!")
+            _tg_answer_cb(cbid, "Заказ закрыт ✓")
         else:
-            _tg_edit_msg(chat, pend["msg"], "ÐÐµ Ð¿Ð¾Ð»ÑƒÑ‡Ð¸Ð»Ð¾ÑÑŒ Ð·Ð°ÐºÑ€Ñ‹Ñ‚ÑŒ â€” ÑƒÐ¶Ðµ Ð½ÐµÐ°ÐºÑ‚ÑƒÐ°Ð»ÐµÐ½.")
-            _tg_answer_cb(cbid, "Ð£Ð¶Ðµ Ð½ÐµÐ°ÐºÑ‚ÑƒÐ°Ð»ÑŒÐ½Ð¾")
+            _tg_edit_msg(chat, pend["msg"], "Не получилось закрыть — уже неактуален.")
+            _tg_answer_cb(cbid, "Уже неактуально")
     elif act == "no":
-        # Â«ÐÐ°Ð·Ð°Ð´Â»: Ð½Ð° ÑˆÐ°Ð³ Ð´Ð¸Ð°Ð»Ð¾Ð³Ð° Ð½Ð°Ð·Ð°Ð´, Ð´Ð¸Ð°Ð»Ð¾Ð³ Ð½Ðµ Ð·Ð°ÐºÑ€Ñ‹Ð²Ð°ÐµÐ¼
+        # «Назад»: на шаг диалога назад, диалог не закрываем
         if pend["stage"] in ("confirm", "refconfirm", "noconfirm"):
             pend["stage"] = "ask"
             _tg_edit_msg(chat, pend["msg"], _bot_ask_text(order), _bot_ask_kb(oid))
         elif pend["stage"] == "reason":
             pend["stage"] = "refconfirm"
-            _tg_edit_msg(chat, pend["msg"],
-                         f"Ð¢Ð¾Ñ‡Ð½Ð¾ Ð¾Ñ‚Ð¼ÐµÐ½ÑÐµÐ¼? Ð—Ð°ÐºÐ°Ð·: <b>{addr}</b>",
-                         [[{"text": "âœ… Ð”Ð°, Ð¾Ñ‚Ð¼ÐµÐ½ÑÐµÐ¼", "callback_data": f"dlv:{oid}:refyes"}],
-                          [{"text": "â†©ï¸ ÐÐ°Ð·Ð°Ð´", "callback_data": f"dlv:{oid}:no"}]])
+            _tg_edit_msg(chat, pend["msg"], f"Точно отменяем? Заказ: <b>{addr}</b>",
+                         _tg_step_kb(oid, "✅ Да, отменяем", "refyes"))
         _tg_answer_cb(cbid)
-    else:  # Â«Ð½ÐµÑ‚Â» â€” Ð·Ð°ÐºÐ°Ð· Ð¾ÑÑ‚Ð°Ñ‘Ñ‚ÑÑ Ð² Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐµ
-        STATE["tg_ask"].get(chat, {}).pop(oid, None)
-        _tg_edit_msg(chat, pend["msg"],
-                     f"ÐŸÐ¾Ð½ÑÐ»: <b>{addr}</b> ÐµÑ‰Ñ‘ Ð² Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐµ. "
-                     "Ð—Ð°ÐºÑ€Ð¾ÐµÑ‚ Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€ Ð¸Ð»Ð¸ ÑÐ¿Ñ€Ð¾ÑÐ¸Ð¼ Ð¿Ð¾Ð·Ð¶Ðµ.")
-        _tg_answer_cb(cbid)
-        _ev("cour", f"{courier['name']}: Â«{order.get('address') or oid}Â» ÐµÑ‰Ñ‘ Ð² Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐµ")
+    else:
+        # неизвестная кнопка или нажатие вне своей стадии (старый экран) —
+        # диалог не трогаем, данные не меняем
+        log.warning("tg cb: неизвестный act=%s stage=%s oid=%s chat=%s",
+                    act, pend.get("stage"), oid, chat)
+        _tg_answer_cb(cbid, "Кнопка не распознана")
 
 
 def _tg_handle_update(u):
-    """ÐžÐ´Ð¸Ð½ Ð°Ð¿Ð´ÐµÐ¹Ñ‚ Ð¾Ñ‚ Telegram: Ñ‚ÐµÐºÑÑ‚ (/start), Ð³ÐµÐ¾Ð»Ð¾ÐºÐ°Ñ†Ð¸Ñ Ð¸Ð»Ð¸ ÐºÐ½Ð¾Ð¿ÐºÐ°."""
+    """Один апдейт от Telegram: текст (/start), геолокация или кнопка."""
     cb = u.get("callback_query")
     if cb:
         _tg_callback(cb)
@@ -1903,10 +1914,10 @@ def _tg_handle_update(u):
         filter(None, [frm.get("first_name"), frm.get("last_name")])).strip() or chat_id
     STATE["tg_seen"][chat_id] = {"chat_id": chat_id, "login": login[:64],
                                  "ts": time.time()}
-    if len(STATE["tg_seen"]) > 50:  # Ñ…Ñ€Ð°Ð½Ð¸Ð¼ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð½ÐµÐ´Ð°Ð²Ð½Ð¸Ñ…
+    if len(STATE["tg_seen"]) > 50:  # храним только недавних
         for k in sorted(STATE["tg_seen"], key=lambda x: STATE["tg_seen"][x]["ts"])[:-50]:
             STATE["tg_seen"].pop(k, None)
-            STATE["tg_nagged"].pop(k, None)  # Ð°Ð½Ñ‚Ð¸ÑÐ¿Ð°Ð¼-Ð¿Ð°Ð¼ÑÑ‚ÑŒ Ñ‡Ð¸ÑÑ‚Ð¸Ð¼ Ð²Ð¼ÐµÑÑ‚Ðµ
+            STATE["tg_nagged"].pop(k, None)  # антиспам-память чистим вместе
 
     courier = next((c for c in STATE["couriers"]
                     if (c.get("tg_chat_id") or "") == chat_id), None)
@@ -1921,7 +1932,7 @@ def _tg_handle_update(u):
             raw = {"lat": loc["latitude"], "lng": loc["longitude"],
                    "ts": time.time(), "live": bool(loc.get("live_period")),
                    "acc": loc.get("horizontal_accuracy") or 0}
-            # Ð°Ð½Ñ‚Ð¸-Ð´Ñ€ÐµÐ±ÐµÐ·Ð³: Ð±ÑƒÑ„ÐµÑ€ Ð¿Ð¾ÑÐ»ÐµÐ´Ð½Ð¸Ñ… Ñ‚Ð¾Ñ‡ÐµÐº, ÑÐ³Ð»Ð°Ð¶Ð¸Ð²Ð°Ð½Ð¸Ðµ Ð¼ÐµÐ´Ð¸Ð°Ð½Ð¾Ð¹
+            # анти-дребезг: буфер последних точек, сглаживание медианой
             hist = STATE["tg_pos"].get(chat_id, {}).get("hist", [])
             hist = [h for h in hist if raw["ts"] - h["ts"] <= 600][-4:]
             hist.append(raw)
@@ -1930,8 +1941,8 @@ def _tg_handle_update(u):
             lngs = sorted(h["lng"] for h in recent)
             smoothed = {"lat": lats[len(lats) // 2], "lng": lngs[len(lngs) // 2],
                         "ts": raw["ts"], "acc": raw["acc"]}
-            # Ð·Ð°Ð¼ÐµÑ€ ÑÐºÐ¾Ñ€Ð¾ÑÑ‚Ð¸ â€” Ð¿Ð¾ ÑÐ³Ð»Ð°Ð¶ÐµÐ½Ð½Ð¾Ð¼Ñƒ Ñ‚Ñ€ÐµÐºÑƒ: Ð¾Ð´Ð¸Ð½Ð¾Ñ‡Ð½Ñ‹Ð¹ GPS-Ð¿Ñ€Ñ‹Ð¶Ð¾Ðº
-            # Ð³Ð°ÑÐ¸Ñ‚ÑÑ Ð¼ÐµÐ´Ð¸Ð°Ð½Ð¾Ð¹ Ð¸ Ð² Ð¾Ñ‚Ñ€ÐµÐ·Ð¾Ðº Ð½Ðµ Ð¿Ð¾Ð¿Ð°Ð´Ð°ÐµÑ‚
+            # замер скорости — по сглаженному треку: одиночный GPS-прыжок
+            # гасится медианой и в отрезок не попадает
             prev_s = STATE["tg_pos"].get(chat_id, {}).get("sprev")
             if prev_s:
                 _speed_geo_sample(courier["id"], prev_s, smoothed)
@@ -1942,8 +1953,8 @@ def _tg_handle_update(u):
             _load_track(courier, smoothed, raw["ts"])
             _deliver_track(courier, smoothed, raw["ts"])
             _auto_status_track(courier, smoothed, raw["ts"])
-            # Ð´Ð¸Ð°Ð»Ð¾Ð³Ð¸ Â«Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÐµÐ½?Â» Ð¸ Ñ‚Ñ€ÐµÐºÐµÑ€Ñ‹ Ð¿Ñ€Ð¾ÑÑ‚Ð¾Ñ â€” Ð² Ð‘Ð” Ð½Ðµ Ñ€ÐµÐ¶Ðµ Ñ€Ð°Ð·Ð° Ð² 15 Ñ
-            # (ÑÑ‚Ð¾Ñ‚ Ð¶Ðµ Ð¿Ð¾Ñ‚Ð¾Ðº Ð¾Ð±Ñ€Ð°Ð±Ð°Ñ‚Ñ‹Ð²Ð°ÐµÑ‚ Ð½Ð°Ð¶Ð°Ñ‚Ð¸Ñ ÐºÐ½Ð¾Ð¿Ð¾Ðº â€” Ð³Ð¾Ð½Ð¾Ðº Ð½ÐµÑ‚)
+            # диалоги «доставлен?» и трекеры простоя — в БД не реже раза в 15 с
+            # (этот же поток обрабатывает нажатия кнопок — гонок нет)
             if raw["ts"] - STATE.get("_tg_persist_ts", 0) > 15:
                 STATE["_tg_persist_ts"] = raw["ts"]
                 try:
@@ -1955,25 +1966,25 @@ def _tg_handle_update(u):
                               json.dumps(STATE["tg_deliv"], ensure_ascii=False))])
                 except sqlite3.Error:
                     pass
-            _bump(geo=True)  # Ð´Ð²Ð¸Ð¶ÐµÐ½Ð¸Ðµ ÐºÑƒÑ€ÑŒÐµÑ€Ð° â€” ÐºÐ°Ñ€Ñ‚Ð° Ð¾Ð±Ð½Ð¾Ð²Ð¸Ñ‚ÑÑ (Ñ…Ð°Ð± Ð±Ð°Ñ‚Ñ‡Ð¸Ñ‚ â‰¥1 Ñ)
+            _bump(geo=True)  # движение курьера — карта обновится (хаб батчит ≥1 с)
         else:
-            # live-Ð»Ð¾ÐºÐ°Ñ†Ð¸Ñ ÑˆÐ»Ñ‘Ñ‚ Ð¿Ñ€Ð°Ð²ÐºÐ¸ ÐºÐ°Ð¶Ð´Ñ‹Ðµ Ð½ÐµÑÐºÐ¾Ð»ÑŒÐºÐ¾ ÑÐµÐºÑƒÐ½Ð´ â€” Â«Ð½Ðµ Ð¿Ñ€Ð¸Ð²ÑÐ·Ð°Ð½Â»
-            # Ð¾Ñ‚Ð¿Ñ€Ð°Ð²Ð»ÑÐµÐ¼ Ð½Ðµ Ñ‡Ð°Ñ‰Ðµ Ñ€Ð°Ð·Ð° Ð² 30 Ð¼Ð¸Ð½ÑƒÑ‚ Ð½Ð° Ñ‡Ð°Ñ‚
+            # live-локация шлёт правки каждые несколько секунд — «не привязан»
+            # отправляем не чаще раза в 30 минут на чат
             now_ts = time.time()
             if now_ts - STATE["tg_nagged"].get(chat_id, 0) > 1800:
                 STATE["tg_nagged"][chat_id] = now_ts
                 _tg_send(chat_id,
-                          f"ÐŸÐ¾Ñ…Ð¾Ð¶Ðµ, Ð²Ð°Ñ ÐµÑ‰Ñ‘ Ð½Ðµ Ð¿Ñ€Ð¸Ð²ÑÐ·Ð°Ð»Ð¸ Ðº ÐºÑƒÑ€ÑŒÐµÑ€Ñƒ. ÐžÑ‚Ð¿Ñ€Ð°Ð²ÑŒÑ‚Ðµ ÑÑ‚Ð¾Ñ‚ ID "
-                          f"Ð°Ð´Ð¼Ð¸Ð½Ð¸ÑÑ‚Ñ€Ð°Ñ‚Ð¾Ñ€Ñƒ: <code>{chat_id}</code>")
+                          f"Похоже, вас ещё не привязали к курьеру. Отправьте этот ID "
+                          f"администратору: <code>{chat_id}</code>")
     elif (msg.get("text") or "").strip().startswith("/start"):
         _tg_send(chat_id,
-                 "ÐŸÑ€Ð¸Ð²ÐµÑ‚! Ð­Ñ‚Ð¾ Ð±Ð¾Ñ‚ Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐ¸.\n\n"
-                 "ÐÑƒÐ¶Ð½Ð° <b>Ð¶Ð¸Ð²Ð°Ñ Ð³ÐµÐ¾Ð»Ð¾ÐºÐ°Ñ†Ð¸Ñ</b>:\n"
-                 "ÑÐºÑ€ÐµÐ¿ÐºÐ° â†’ Â«Ð“ÐµÐ¾Ð»Ð¾ÐºÐ°Ñ†Ð¸ÑÂ» â†’ Â«ÐŸÐ¾Ð´ÐµÐ»Ð¸Ñ‚ÑŒÑÑ Ð¼Ð¾ÐµÐ¹ Ð³ÐµÐ¾Ð»Ð¾ÐºÐ°Ñ†Ð¸ÐµÐ¹Â» â†’ "
-                 "Ð²Ñ€ÐµÐ¼Ñ <b>Â«ÐŸÐ¾ÐºÐ° Ð½Ðµ Ð¾Ñ‚ÐºÐ»ÑŽÑ‡ÑƒÂ»</b>.\n\n"
-                 "Ð¢Ð¾Ð³Ð´Ð° Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€ Ð²Ð¸Ð´Ð¸Ñ‚ Ð²Ð°Ñ Ð½Ð° ÐºÐ°Ñ€Ñ‚Ðµ Ð²ÑÑŽ ÑÐ¼ÐµÐ½Ñƒ.\n\n"
-                 f"Ð’Ð°Ñˆ ID: <code>{chat_id}</code>\n"
-                 "Ð¡ÐºÐ°Ð¶Ð¸Ñ‚Ðµ ÐµÐ³Ð¾ Ð°Ð´Ð¼Ð¸Ð½Ð¸ÑÑ‚Ñ€Ð°Ñ‚Ð¾Ñ€Ñƒ, Ð¸ Ð²Ð°Ñ Ð¿Ð¾Ð´ÐºÐ»ÑŽÑ‡Ð°Ñ‚ Ðº ÐºÑƒÑ€ÑŒÐµÑ€Ñƒ.")
+                 "Привет! Это бот развозки.\n\n"
+                 "Нужна <b>живая геолокация</b>:\n"
+                 "скрепка → «Геолокация» → «Поделиться моей геолокацией» → "
+                 "время <b>«Пока не отключу»</b>.\n\n"
+                 "Тогда диспетчер видит вас на карте всю смену.\n\n"
+                 f"Ваш ID: <code>{chat_id}</code>\n"
+                 "Скажите его администратору, и вас подключат к курьеру.")
 
 
 def _tg_poll_loop():
@@ -1987,11 +1998,11 @@ def _tg_poll_loop():
                 timeout=30)
             data = r.json()
             if not data.get("ok"):
-                # 409 Conflict: Ð±Ð¾Ñ‚Ð° ÑƒÐ¶Ðµ ÑÐ»ÑƒÑˆÐ°ÐµÑ‚ Ð´Ñ€ÑƒÐ³Ð¾Ð¹ Ð¿Ñ€Ð¾Ñ†ÐµÑÑ. ÐÐµ Ð±Ð¾Ñ€ÐµÐ¼ÑÑ Ð·Ð°
-                # getUpdates Ð² Ð»Ð¾Ð± â€” Ð¶Ð´Ñ‘Ð¼: Ð²Ñ‚Ð¾Ñ€Ð¾Ð¹ Ð¸Ð½ÑÑ‚Ð°Ð½Ñ ÑƒÐ¼Ñ€Ñ‘Ñ‚ Ð¸ ÐºÐ°Ð½Ð°Ð» Ð²ÐµÑ€Ð½Ñ‘Ñ‚ÑÑ.
+                # 409 Conflict: бота уже слушает другой процесс. Не боремся за
+                # getUpdates в лоб — ждём: второй инстанс умрёт и канал вернётся.
                 if r.status_code == 409:
-                    log.warning("tg poll: Ð±Ð¾Ñ‚ ÑƒÐ¶Ðµ ÑÐ»ÑƒÑˆÐ°ÐµÑ‚ÑÑ Ð´Ñ€ÑƒÐ³Ð¸Ð¼ Ð¿Ñ€Ð¾Ñ†ÐµÑÑÐ¾Ð¼ "
-                                "(409) â€” Ð¿Ð¾Ð²Ñ‚Ð¾Ñ€ Ñ‡ÐµÑ€ÐµÐ· 5 Ð¼Ð¸Ð½")
+                    log.warning("tg poll: бот уже слушается другим процессом "
+                                "(409) — повтор через 5 мин")
                     time.sleep(300)
                     continue
                 log.warning("tg poll: api error %s", data.get("description"))
@@ -2003,13 +2014,13 @@ def _tg_poll_loop():
         except requests.RequestException as e:
             log.warning("tg poll: %s", e)
             time.sleep(5)
-        except Exception as e:  # Ð½ÐµÐ¾Ð¶Ð¸Ð´Ð°Ð½Ð½Ñ‹Ð¹ Ñ„Ð¾Ñ€Ð¼Ð°Ñ‚ â€” Ð½Ðµ Ñ€Ð¾Ð½ÑÐµÐ¼ Ð¿Ð¾Ð»Ð»ÐµÑ€
+        except Exception as e:  # неожиданный формат — не роняем поллер
             log.warning("tg update parse: %s", e)
             time.sleep(2)
 
 
 def _tg_start_polling():
-    """Ð—Ð°Ð¿ÑƒÑÐº Ð¿Ð¾Ð»Ð»ÐµÑ€Ð° Ð¿Ñ€Ð¸ ÑÑ‚Ð°Ñ€Ñ‚Ðµ, ÐµÑÐ»Ð¸ Ð·Ð°Ð´Ð°Ð½ Ñ‚Ð¾ÐºÐµÐ½ Ð±Ð¾Ñ‚Ð°."""
+    """Запуск поллера при старте, если задан токен бота."""
     if not CFG["tg_bot_token"]:
         return
     try:
@@ -2019,25 +2030,25 @@ def _tg_start_polling():
     except requests.RequestException as e:
         log.warning("tg getMe failed: %s", e)
     if not CFG["tg_poll"]:
-        log.info("tg bot: Ð¿Ð¾Ð»Ð»ÐµÑ€ Ð²Ñ‹ÐºÐ»ÑŽÑ‡ÐµÐ½ (tg_poll=0) â€” Ð³ÐµÐ¾Ð»Ð¾ÐºÐ°Ñ†Ð¸Ð¸ ÑÐ»ÑƒÑˆÐ°ÐµÑ‚ "
-                 "Ð´Ñ€ÑƒÐ³Ð¾Ð¹ ÑÐµÑ€Ð²ÐµÑ€")
+        log.info("tg bot: поллер выключен (tg_poll=0) — геолокации слушает "
+                 "другой сервер")
         return
     threading.Thread(target=_tg_poll_loop, daemon=True).start()
 
 
 def _ev(actor, text):
-    """Ð›ÐµÐ½Ñ‚Ð° Ð°ÐºÑ‚Ð¸Ð²Ð½Ð¾ÑÑ‚Ð¸ Ð² UI: bot=Ð±Ð¾Ñ‚, disp=Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€, cour=ÐºÑƒÑ€ÑŒÐµÑ€, sys=ÑÐ¸ÑÑ‚ÐµÐ¼Ð°."""
+    """Лента активности в UI: bot=бот, disp=диспетчер, cour=курьер, sys=система."""
     STATE["events"].append({"t": int(time.time()), "actor": actor,
                             "text": str(text)[:200]})
-    del STATE["events"][:-60]  # Ñ…Ñ€Ð°Ð½Ð¸Ð¼ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÑÐ²ÐµÐ¶Ð¸Ðµ
+    del STATE["events"][:-60]  # храним только свежие
     _bump()
 
 
 def _payload(me=None, myp=None):
-    """ÐžÑ‚Ð²ÐµÑ‚ Ð¿Ð¾ÑÐ»Ðµ Ð¼ÑƒÑ‚Ð°Ñ†Ð¸Ð¸: ÑÐ¾ÑÑ‚Ð¾ÑÐ½Ð¸Ðµ + ÐºÐ²Ð¾Ñ‚Ð° ORS + ÑÑ‡Ñ‘Ñ‚Ñ‡Ð¸ÐºÐ¸ Ð´Ð½Ñ + Ñ‚ÐµÐºÑƒÑ‰Ð¸Ð¹ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÑŒ.
+    """Ответ после мутации: состояние + квота ORS + счётчики дня + текущий пользователь.
 
-    me/myp Ð·Ð°Ð´Ð°ÑŽÑ‚ÑÑ ÑÐ²Ð½Ð¾ Ð¿Ñ€Ð¸ WS-Ð±Ñ€Ð¾Ð´ÐºÐ°ÑÑ‚Ðµ (Ñ‚Ð°Ð¼ Ð½ÐµÑ‚ ÑÐµÑÑÐ¸Ð¸ Ð·Ð°Ð¿Ñ€Ð¾ÑÐ°):
-    payload ÐºÐ¾Ð½ÐºÑ€ÐµÑ‚Ð½Ð¾Ð³Ð¾ Ð´ÐµÐ¿Ð¾ Ð´Ð»Ñ Ð²ÑÐµÑ… ÐµÐ³Ð¾ Ð¿Ð¾Ð´Ð¿Ð¸ÑÑ‡Ð¸ÐºÐ¾Ð².
+    me/myp задаются явно при WS-бродкасте (там нет сессии запроса):
+    payload конкретного депо для всех его подписчиков.
     """
     me = _me() if me is None else me
     now = time.time()
@@ -2061,8 +2072,8 @@ def _payload(me=None, myp=None):
         geo = _courier_geo(c, home, now)
         if geo:
             cc["geo"] = geo
-        # Ð°ÐºÑ‚Ð¸Ð²Ð½Ð°Ñ Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐ°: Ð²Ñ‹Ð´Ð°Ð½Ð½Ñ‹Ðµ Ð·Ð°ÐºÐ°Ð·Ñ‹ Ð² Ð¿Ð¾Ñ€ÑÐ´ÐºÐµ Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ (Ð¼Ð°Ñ€ÑˆÑ€ÑƒÑ‚ Ð¼Ð¾Ð³
-        # ÑƒÐ¶Ðµ ÑƒÐ¹Ñ‚Ð¸ Ð¸Ð· Ð¿Ð»Ð°Ð½Ð° â€” ÐºÐ°Ñ€Ñ‚Ð° Ñ€Ð¸ÑÑƒÐµÑ‚ ÐµÐ³Ð¾ Ð¿ÑƒÐ½ÐºÑ‚Ð¸Ñ€Ð¾Ð¼ Ð¿Ð¾ ÑÑ‚Ð¸Ð¼ Ð´Ð°Ð½Ð½Ñ‹Ð¼)
+        # активная развозка: выданные заказы в порядке выдачи (маршрут мог
+        # уже уйти из плана — карта рисует его пунктиром по этим данным)
         outs = sorted((o for o in STATE["orders"]
                        if o.get("assigned") == c["id"]
                        and (o.get("status") or "ready") == "out"),
@@ -2070,45 +2081,45 @@ def _payload(me=None, myp=None):
                                      o.get("out_at") or "", o["id"]))
         if outs:
             cc["out_route"] = {
-                # [lat, lng, order_id]: id Ð½ÑƒÐ¶ÐµÐ½ Ñ„Ñ€Ð¾Ð½Ñ‚Ñƒ, Ñ‡Ñ‚Ð¾Ð±Ñ‹ ÐºÑ€Ð°ÑÐ¸Ñ‚ÑŒ Ñ‚Ð¾Ñ‡ÐºÐ¸
-                # Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÐ¸ Ð²Ñ‹Ð±Ñ€Ð°Ð½Ð½Ð¾Ð³Ð¾ ÐºÑƒÑ€ÑŒÐµÑ€Ð° Ð² ÐµÐ³Ð¾ Ñ†Ð²ÐµÑ‚
+                # [lat, lng, order_id]: id нужен фронту, чтобы красить точки
+                # доставки выбранного курьера в его цвет
                 "stops": [[o["lat"], o["lng"], o["id"]] for o in outs],
                 "home": {"lat": home["lat"], "lng": home["lng"]} if home else None,
             }
             if c.get("out_geom"):
                 cc["out_route"]["geom"] = c["out_geom"]
         elif c.get("status") == "away" and c.get("ret_geom"):
-            # Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‚ Ð½Ð° Ð±Ð°Ð·Ñƒ: Ð¾Ð±Ñ€Ð°Ñ‚Ð½Ð°Ñ Ñ‚Ñ€Ð°ÑÑÐ° Ð±ÐµÐ· Ñ‚Ð¾Ñ‡ÐµÐº Ð´Ð¾ÑÑ‚Ð°Ð²ÐºÐ¸
+            # возврат на базу: обратная трасса без точек доставки
             cc["out_route"] = {
                 "stops": [],
                 "home": {"lat": home["lat"], "lng": home["lng"]} if home else None,
                 "geom": c["ret_geom"],
             }
         couriers.append(cc)
-    # ÐºÑƒÑ€ÑŒÐµÑ€Ñ‹ Ð²Ð¸Ð´Ð½Ñ‹ Ð²ÑÐµÐ¼ Ð´ÐµÐ¿Ð¾, Ð½Ð¾ ÑÐ²Ð¾Ð¸ â€” Ð¿ÐµÑ€Ð²Ñ‹Ð¼Ð¸ (ÑÑ‚Ð°Ð±Ð¸Ð»ÑŒÐ½Ð¾ Ð¿Ð¾ Ð¸ÑÑ…Ð¾Ð´Ð½Ð¾Ð¼Ñƒ Ð¿Ð¾Ñ€ÑÐ´ÐºÑƒ)
+    # курьеры видны всем депо, но свои — первыми (стабильно по исходному порядку)
     couriers.sort(key=lambda cc: 0 if _obj_point(cc) == myp else 1)
     st = {k: v for k, v in STATE.items()
           if k not in ("tg_seen", "tg_pos", "tg_offset", "tg_nagged", "tg_load",
                        "tg_deliv", "tg_away", "plans", "advice_modes", "solving")}
     seen = sorted(STATE["tg_seen"].values(), key=lambda x: -x["ts"])[:20]
-    # Ð¶Ð¸Ð²Ñ‹Ðµ ÑÑ‡Ñ‘Ñ‚Ñ‡Ð¸ÐºÐ¸ Ð¿Ð¾ Ñ‚Ð¾Ñ‡ÐºÐ°Ð¼: ÐºÑƒÑ€ÑŒÐµÑ€Ñ‹ + Ð°Ð´Ð¼Ð¸Ð½Ñ‹ Ð¾Ð½Ð»Ð°Ð¹Ð½
+    # живые счётчики по точкам: курьеры + админы онлайн
     now2 = time.time()
     with _ONLINE_LOCK:
         for sid in [s for s, r in ONLINE.items() if now2 - r["last"] > ONLINE_WINDOW * 4]:
-            ONLINE.pop(sid, None)  # Ð¿Ð¾Ð´Ñ‡Ð¸ÑÑ‚Ð¸Ð»Ð¸ Ð´Ð°Ð²Ð½Ð¾ ÑƒÑˆÐµÐ´ÑˆÐ¸Ñ…
+            ONLINE.pop(sid, None)  # подчистили давно ушедших
         live = [r for r in ONLINE.values() if now2 - r["last"] < ONLINE_WINDOW]
     st["points"] = [dict(p,
                          couriers=sum(1 for c in STATE["couriers"]
                                       if _obj_point(c) == p["id"]),
-                         admins=list(dict.fromkeys(  # Ð¾Ð´Ð¸Ð½ Ñ‡ÐµÐ»Ð¾Ð²ÐµÐº Ð² Ð½ÐµÑÐºÐ¾Ð»ÑŒÐºÐ¸Ñ…
-                             a["email"] for a in live  # ÑÐµÑÑÐ¸ÑÑ… = Ð¾Ð´Ð½Ð° Ð·Ð°Ð¿Ð¸ÑÑŒ
+                         admins=list(dict.fromkeys(  # один человек в нескольких
+                             a["email"] for a in live  # сессиях = одна запись
                              if a["point_id"] == p["id"])))
                     for p in st.get("points") or []]
-    # ÑÐºÐ¾ÑƒÐ¿ Ð´ÐµÐ¿Ð¾: ÑÐ²Ð¾Ð¸ Ð·Ð°ÐºÐ°Ð·Ñ‹, ÑÐ²Ð¾Ð¹ Ð¿Ð»Ð°Ð½ Ð¸ ÑÐ²Ð¾Ñ Ð¸ÑÑ‚Ð¾Ñ€Ð¸Ñ; Ñ‡ÑƒÐ¶Ð¸Ðµ â€” Ñ‚Ð¾Ð»ÑŒÐºÐ¾ ÐºÑƒÑ€ÑŒÐµÑ€Ñ‹
+    # скоуп депо: свои заказы, свой план и своя история; чужие — только курьеры
     st["orders"] = [o for o in st.get("orders") or [] if _obj_point(o) == myp]
     st["plan"] = _plan_for(myp)
-    # Ð¸Ð´Ñ‘Ñ‚ Ð»Ð¸ ÑÐµÐ¹Ñ‡Ð°Ñ Ñ€Ð°ÑÑ‡Ñ‘Ñ‚ Ñ€Ð°Ð·Ð²Ð¾Ð·ÐºÐ¸ Ð² Ð­Ð¢ÐžÐœ Ð´ÐµÐ¿Ð¾ (Ð±Ð»Ð¾ÐºÐ¸Ñ€ÑƒÐµÑ‚ UI Ð²ÑÐµÑ… ÐµÐ³Ð¾
-    # Ð´Ð¸ÑÐ¿ÐµÑ‚Ñ‡ÐµÑ€Ð¾Ð²; ÑÐ»Ð¾Ð²Ð°Ñ€ÑŒ pid->bool Ð½Ð°Ñ€ÑƒÐ¶Ñƒ Ð½Ðµ Ð¾Ñ‚Ð´Ð°Ñ‘Ð¼)
+    # идёт ли сейчас расчёт развозки в ЭТОМ депо (блокирует UI всех его
+    # диспетчеров; словарь pid->bool наружу не отдаём)
     st["solving"] = bool(STATE.get("solving", {}).get(myp))
     return jsonify({**st, "couriers": couriers,
                     "tg": {"bot": STATE["tg_bot"], "seen": seen},
@@ -2118,37 +2129,37 @@ def _payload(me=None, myp=None):
                     "users": _admin_users() if me and me["is_admin"] else []})
 
 
-# ---------- live-Ñ€Ð°ÑÑÑ‹Ð»ÐºÐ°: WS-Ñ…Ð°Ð± (socket.io) Ð²Ð¼ÐµÑÑ‚Ð¾ long-poll /api/rev ----------
+# ---------- live-рассылка: WS-хаб (socket.io) вместо long-poll /api/rev ----------
 
 def _bump(geo: bool = False):
-    """ÐŸÐ¾Ð¼ÐµÑ‚Ð¸Ñ‚ÑŒ ÑÐ¾ÑÑ‚Ð¾ÑÐ½Ð¸Ðµ Ð¸Ð·Ð¼ÐµÐ½Ñ‘Ð½Ð½Ñ‹Ð¼ Ð¸ Ñ€Ð°Ð·Ð±ÑƒÐ´Ð¸Ñ‚ÑŒ Ð¿Ð¾Ð´Ð¿Ð¸ÑÑ‡Ð¸ÐºÐ¾Ð² WS-Ñ…Ð°Ð±Ð°.
+    """Пометить состояние изменённым и разбудить подписчиков WS-хаба.
 
-    Ð’Ñ‹Ð·Ñ‹Ð²Ð°ÐµÑ‚ÑÑ Ð¸Ð· Ð»ÑŽÐ±Ð¾Ð³Ð¾ Ð¿Ð¾Ñ‚Ð¾ÐºÐ° (HTTP-Ð¾Ð±Ñ€Ð°Ð±Ð¾Ñ‚Ñ‡Ð¸ÐºÐ¸, TG-Ð¿Ð¾Ð»Ð»ÐµÑ€); Ñ…Ð°Ð±
-    ÐºÐ¾Ð°Ð»ÐµÑÐ¸Ñ‚ Ñ‡Ð°ÑÑ‚Ñ‹Ðµ Ð±Ð°Ð¼Ð¿Ñ‹. geo=True â€” Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¾Ñ‚ÑÐ»ÐµÐ¶Ð¸Ð²Ð°Ð½Ð¸Ñ
-    (Ð´Ð²Ð¸Ð¶ÐµÐ½Ð¸Ðµ ÐºÑƒÑ€ÑŒÐµÑ€Ð°): Ñ…Ð°Ð± ÑˆÐ»Ñ‘Ñ‚ Ñ‚Ð°ÐºÐ¾Ðµ Ð½Ðµ Ñ‡Ð°Ñ‰Ðµ Ñ€Ð°Ð·Ð° Ð² ÑÐµÐºÑƒÐ½Ð´Ñƒ; Ð»ÑŽÐ±Ð¾Ðµ
-    ÑÐ¾Ð±Ñ‹Ñ‚Ð¸Ðµ (Ð²Ñ‹Ð´Ð°Ñ‡Ð°, ÑÑ‚Ð°Ñ‚ÑƒÑ, Ð·Ð°ÐºÐ°Ð·) Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÑÐµÑ‚ÑÑ ÑÑ€Ð°Ð·Ñƒ.
+    Вызывается из любого потока (HTTP-обработчики, TG-поллер); хаб
+    коалесит частые бампы. geo=True — обновление только отслеживания
+    (движение курьера): хаб шлёт такое не чаще раза в секунду; любое
+    событие (выдача, статус, заказ) доставляется сразу.
     """
     STATE["rev"] = STATE.get("rev", 0) + 1
-    from . import ws  # Ð¿Ð¾Ð·Ð´Ð½Ð¸Ð¹ Ð¸Ð¼Ð¿Ð¾Ñ€Ñ‚: ws Ð¸Ð¼Ð¿Ð¾Ñ€Ñ‚Ð¸Ñ€ÑƒÐµÑ‚ core â€” Ñ€Ð²Ñ‘Ð¼ Ñ†Ð¸ÐºÐ»
+    from . import ws  # поздний импорт: ws импортирует core — рвём цикл
     ws.notify_changed(geo=geo)
 
 def _points_ids():
-    """Ð’ÑÐµ id Ñ‚Ð¾Ñ‡ÐµÐº Ð²Ñ‹Ð´Ð°Ñ‡Ð¸ (Ñ€ÑƒÐ¼Ñ‹ WS-Ñ…Ð°Ð±Ð°)."""
+    """Все id точек выдачи (румы WS-хаба)."""
     return [p["id"] for p in STATE.get("points") or []]
 
 
-# ---------- Ð¸Ð½Ð²Ð°Ð»Ð¸Ð´Ð°Ñ†Ð¸Ñ Ð¿Ð»Ð°Ð½Ð° (Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐµÑ‚ÑÑ Ð¸ HTTP-Ñ€ÑƒÑ‡ÐºÐ°Ð¼Ð¸, Ð¸ TG-Ð±Ð¾Ñ‚Ð¾Ð¼) ----------
+# ---------- инвалидация плана (используется и HTTP-ручками, и TG-ботом) ----------
 def _invalidate_plan(drop_plan=False, pid=None, courier_id=None, geo=False):
-    """â•¨Æ’â•¨â•—â•¨â–‘â•¨â•œ â•¨â•œâ•¨â•¡ â•¨â”â•¨â•¡â•¤Ã‡â•¨â•¡â•¤Ã¼â•¤Ã§â•¨â••â•¤Ã©â•¤Ã¯â•¨â–“â•¨â–‘â•¨â•¡â•¨â• â•¨â–“ â•¤Ã¤â•¨â•›â•¨â•œâ•¨â•¡ Î“Ã‡Ã¶ â•¤Ã©â•¨â•›â•¨â•—â•¤Ã®â•¨â•‘â•¨â•› â•¨â”â•¨â•›â•¨â•â•¨â•¡â•¤Ã§â•¨â–‘â•¨â•¡â•¨â•/â•¤Ã¼â•¨â–’â•¤Ã‡â•¨â–‘â•¤Ã¼â•¤Ã¯â•¨â–“â•¨â–‘â•¨â•¡â•¨â•.
+    """╨ƒ╨╗╨░╨╜ ╨╜╨╡ ╨┐╨╡╤Ç╨╡╤ü╤ç╨╕╤é╤ï╨▓╨░╨╡╨╝ ╨▓ ╤ä╨╛╨╜╨╡ ΓÇö ╤é╨╛╨╗╤î╨║╨╛ ╨┐╨╛╨╝╨╡╤ç╨░╨╡╨╝/╤ü╨▒╤Ç╨░╤ü╤ï╨▓╨░╨╡╨╝.
 
-    pid Î“Ã‡Ã¶ â•¨â”¤â•¨â•¡â•¨â”â•¨â•›, â•¤Ã§â•¨â•¡â•¨â•£ â•¨â”â•¨â•—â•¨â–‘â•¨â•œ â•¨â••â•¨â•œâ•¨â–“â•¨â–‘â•¨â•—â•¨â••â•¨â”¤â•¨â••â•¤Ã‡â•¤Ã¢â•¨â•¡â•¨â• (None = â•¨â–“â•¤Ã¼â•¨â•¡ â•¨â”¤â•¨â•¡â•¨â”â•¨â•›: â•¨â”â•¤Ã‡â•¨â–‘â•¨â–“â•¨â•‘â•¨â–‘ â•¤Ã©â•¨â•›â•¤Ã§â•¨â•¡â•¨â•‘/â•¨â•œâ•¨â–‘â•¤Ã¼â•¤Ã©â•¤Ã‡â•¨â•›â•¨â•¡â•¨â•‘).
-    drop_plan=True Î“Ã‡Ã¶ â•¤Ã¼â•¤Ã©â•¨â–‘â•¤Ã‡â•¤Ã¯â•¨â•£ â•¨â”â•¨â•—â•¨â–‘â•¨â•œ â•¤Ã©â•¨â•›â•¤Ã§â•¨â•œâ•¨â•› â•¨â•œâ•¨â•¡â•¨â–“â•¨â–‘â•¨â•—â•¨â••â•¨â”¤â•¨â•¡â•¨â•œ (â•¤Ã¢â•¨â”¤â•¨â–‘â•¨â•—â•¨â•¡â•¨â•œâ•¨â••â•¨â•¡ â•¨â•–â•¨â–‘â•¨â•‘â•¨â–‘â•¨â•–â•¨â–‘/â•¨â•‘â•¤Ã¢â•¤Ã‡â•¤Ã®â•¨â•¡â•¤Ã‡â•¨â–‘,
-    â•¤Ã¼â•¨â•â•¨â•¡â•¨â•œâ•¨â–‘ â•¨â”¤â•¨â•¡â•¨â”â•¨â•›): â•¤Ã¼â•¨â–’â•¤Ã‡â•¨â–‘â•¤Ã¼â•¤Ã¯â•¨â–“â•¨â–‘â•¨â•¡â•¨â• â•¤Ã¼â•¤Ã‡â•¨â–‘â•¨â•–â•¤Ã¢. â•¨Ã¿â•¨â•œâ•¨â–‘â•¤Ã§â•¨â•¡ â•¨â”â•¨â•—â•¨â–‘â•¨â•œ â•¨â”â•¨â•›â•¨â•‘â•¨â–‘â•¨â•–â•¤Ã¯â•¨â–“â•¨â–‘â•¨â•¡â•¤Ã©â•¤Ã¼â•¤Ã… â•¤Ã¼ â•¨â”â•¨â•›â•¨â•â•¨â•¡â•¤Ã©â•¨â•‘â•¨â•›â•¨â•£
-    â”¬Â½â•¤Ã¢â•¤Ã¼â•¤Ã©â•¨â–‘â•¤Ã‡â•¨â•¡â•¨â•—â”¬â•—, â•¨â”â•¨â•›â•¨â•‘â•¨â–‘ â•¨â–‘â•¨â”¤â•¨â•â•¨â••â•¨â•œâ•¨â••â•¤Ã¼â•¤Ã©â•¤Ã‡â•¨â–‘â•¤Ã©â•¨â•›â•¤Ã‡ â•¨â•œâ•¨â•¡ â•¨â•œâ•¨â–‘â•¨â•¢â•¨â•â•¤Ã¦â•¤Ã© â”¬Â½â•¨Ã¡â•¨â–‘â•¤Ã¼â•¤Ã¼â•¤Ã§â•¨â••â•¤Ã©â•¨â–‘â•¤Ã©â•¤Ã®â”¬â•—.
-    courier_id Î“Ã‡Ã¶ â•¨â•‘â•¤Ã¢â•¤Ã‡â•¤Ã®â•¨â•¡â•¤Ã‡-â•¤Ã¼â•¨â”â•¨â•¡â•¤Ã¥â•¨â••â•¤Ã¤â•¨â••â•¤Ã§â•¨â•œâ•¨â–‘â•¤Ã… â•¨â••â•¨â•œâ•¨â–“â•¨â–‘â•¨â•—â•¨â••â•¨â”¤â•¨â–‘â•¤Ã¥â•¨â••â•¤Ã… (â•¤Ã¼â•¨â•â•¨â•¡â•¨â•œâ•¨â–‘ â•¤Ã¼â•¤Ã©â•¨â–‘â•¤Ã©â•¤Ã¢â•¤Ã¼â•¨â–‘, â•¤Ã¢â•¨â”¤â•¨â–‘â•¨â•—â•¨â•¡â•¨â•œâ•¨â••â•¨â•¡,
-    â•¨â–“â•¨â•›â•¨â•–â•¨â–“â•¤Ã‡â•¨â–‘â•¤Ã© â•¨â•œâ•¨â–‘ â•¨â–’â•¨â–‘â•¨â•–â•¤Ã¢, â•¨â”â•¨â•¡â•¤Ã‡â•¨â•¡â•¨â–“â•¨â•›â•¨â”¤ â•¨â–“ â•¨â”¤â•¤Ã‡â•¤Ã¢â•¨â”‚â•¨â•›â•¨â•¡ â•¨â”¤â•¨â•¡â•¨â”â•¨â•›): â•¨â••â•¨â•– â•¨â–“â•¤Ã¼â•¨â•¡â•¤Ã  â•¨â”â•¨â•—â•¨â–‘â•¨â•œâ•¨â•›â•¨â–“ â•¤Ã¢â•¨â–’â•¨â••â•¤Ã‡â•¨â–‘â•¤Ã„â•¤Ã©â•¤Ã¼â•¤Ã… â•¤Ã©â•¨â•›â•¨â•—â•¤Ã®â•¨â•‘â•¨â•›
-    â•¨â•â•¨â–‘â•¤Ã‡â•¤Ãªâ•¤Ã‡â•¤Ã¢â•¤Ã©â•¤Ã¯ â•¤Ã¬â•¤Ã©â•¨â•›â•¨â”‚â•¨â•› â•¨â•‘â•¤Ã¢â•¤Ã‡â•¤Ã®â•¨â•¡â•¤Ã‡â•¨â–‘, â•¨â•â•¨â–‘â•¤Ã‡â•¤Ãªâ•¤Ã‡â•¤Ã¢â•¤Ã©â•¤Ã¯ â•¨â•›â•¤Ã¼â•¤Ã©â•¨â–‘â•¨â•—â•¤Ã®â•¨â•œâ•¤Ã¯â•¤Ã  â•¨â•‘â•¤Ã¢â•¤Ã‡â•¤Ã®â•¨â•¡â•¤Ã‡â•¨â•›â•¨â–“ â•¤Ã¼â•¨â•›â•¤Ã â•¤Ã‡â•¨â–‘â•¨â•œâ•¤Ã…â•¤Ã„â•¤Ã©â•¤Ã¼â•¤Ã…
-    â•¤Ã¼ â•¨â”â•¨â•›â•¨â•â•¨â•¡â•¤Ã©â•¨â•‘â•¨â•›â•¨â•£ â”¬Â½â•¤Ã¢â•¤Ã¼â•¤Ã©â•¨â–‘â•¤Ã‡â•¨â•¡â•¨â•—â”¬â•— Î“Ã‡Ã¶ â•¨â”¤â•¨â••â•¤Ã¼â•¨â”â•¨â•¡â•¤Ã©â•¤Ã§â•¨â•¡â•¤Ã‡ â•¨â•â•¨â•›â•¨â•¢â•¨â•¡â•¤Ã© â•¨â–“â•¤Ã¯â•¨â”¤â•¨â–‘â•¤Ã©â•¤Ã® â•¨â••â•¤Ã  â•¨â–’â•¨â•¡â•¨â•– â•¨â”â•¨â•¡â•¤Ã‡â•¨â•¡â•¤Ã¼â•¤Ã§â•¤Ã¦â•¤Ã©â•¨â–‘.
+    pid — депо, чей план инвалидируем (None = все депо: правка точек/настроек).
+    drop_plan=True — старый план точно невалиден (удаление заказа/курьера,
+    смена депо): сбрасываем сразу. Иначе план показывается с пометкой
+    «устарел», пока администратор не нажмёт «Рассчитать».
+    courier_id — курьер-специфичная инвалидация (смена статуса, удаление,
+    возврат на базу, перевод в другое депо): из всех планов убираются только
+    маршруты этого курьера, маршруты остальных курьеров сохраняются
+    с пометкой «устарел» — диспетчер может выдать их без пересчёта.
     """
     if courier_id is not None:
         changed = False
@@ -2158,7 +2169,7 @@ def _invalidate_plan(drop_plan=False, pid=None, courier_id=None, geo=False):
             routes = plan.get("routes") or []
             kept = [r for r in routes if r.get("courier_id") != courier_id]
             if len(kept) == len(routes):
-                continue  # ÑÑ‚Ð¾Ð³Ð¾ ÐºÑƒÑ€ÑŒÐµÑ€Ð° Ð² Ð¿Ð»Ð°Ð½Ðµ Ð½ÐµÑ‚ â€” Ñ‡ÑƒÐ¶Ð¸Ðµ Ð¼Ð°Ñ€ÑˆÑ€ÑƒÑ‚Ñ‹ Ð½Ðµ Ñ‚Ñ€Ð¾Ð³Ð°ÐµÐ¼
+                continue  # этого курьера в плане нет — чужие маршруты не трогаем
             changed = True
             if kept:
                 plan["routes"] = kept
@@ -2170,8 +2181,8 @@ def _invalidate_plan(drop_plan=False, pid=None, courier_id=None, geo=False):
                 _persist_meta()
             except sqlite3.Error:
                 pass
-        # Ñ€ÐµÐ°Ð»ÑŒÐ½Ð°Ñ Ð¿Ñ€Ð°Ð²ÐºÐ° Ð¿Ð»Ð°Ð½Ð¾Ð² â€” ÑÐ¾Ð±Ñ‹Ñ‚Ð¸Ðµ (Ð´Ð¾ÑÑ‚Ð°Ð²Ð»ÑÐµÐ¼ ÑÑ€Ð°Ð·Ñƒ); Ð¿Ð»Ð°Ð½Ð¾Ð²Ð¾Ðµ
-        # ÑÐ¾Ð¿Ñ€Ð¾Ð²Ð¾Ð¶Ð´ÐµÐ½Ð¸Ðµ Ð³ÐµÐ¾-Ñ‚Ð¸ÐºÐ° â€” Ð´Ð²Ð¸Ð¶ÐµÐ½Ð¸Ðµ, Ñ…Ð°Ð± Ð±Ð°Ñ‚Ñ‡Ð¸Ñ‚ ÐµÐ³Ð¾ Ð´Ð¾ 1/Ñ
+        # реальная правка планов — событие (доставляем сразу); плановое
+        # сопровождение гео-тика — движение, хаб батчит его до 1/с
         _bump(geo=geo and not changed)
         return
     plans = STATE["plans"] if pid is None else {pid: STATE["plans"].get(pid)}
@@ -2186,7 +2197,7 @@ def _invalidate_plan(drop_plan=False, pid=None, courier_id=None, geo=False):
         _persist_meta()
     except sqlite3.Error:
         pass
-    _bump()  # â•¤Ã¼â•¨â•›â•¤Ã¼â•¤Ã©â•¨â•›â•¤Ã…â•¨â•œâ•¨â••â•¨â•¡ â•¨â••â•¨â•–â•¨â•â•¨â•¡â•¨â•œâ•¨â••â•¨â•—â•¨â•›â•¤Ã¼â•¤Ã® Î“Ã‡Ã¶ â•¨â•‘â•¨â•›â•¨â•œâ•¤Ã¼â•¨â•›â•¨â•—â•¨â•• â•¨â•›â•¨â–’â•¨â•œâ•¨â•›â•¨â–“â•¤Ã…â•¤Ã©â•¤Ã¼â•¤Ã… â•¤Ã¼â•¨â–‘â•¨â•â•¨â••
+    _bump()  # ╤ü╨╛╤ü╤é╨╛╤Å╨╜╨╕╨╡ ╨╕╨╖╨╝╨╡╨╜╨╕╨╗╨╛╤ü╤î ΓÇö ╨║╨╛╨╜╤ü╨╛╨╗╨╕ ╨╛╨▒╨╜╨╛╨▓╤Å╤é╤ü╤Å ╤ü╨░╨╝╨╕
 
 
 
