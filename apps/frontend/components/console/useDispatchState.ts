@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type AppState } from "@/lib/api";
+import { api, fetchApi, type AppState } from "@/lib/api";
 import { ensureWsToken, getSocket } from "@/lib/ws";
 
 /* ---------- данные консоли: кэш + живые обновления + тикер возраста + тема ----------
@@ -50,7 +50,7 @@ export function useDispatchState() {
     /* free-тариф облака засыпает через 15 мин тишины: пока вкладка открыта — лёгкий пинг, чтобы не ждать холодный старт */
     const hb = /^(localhost|127\.)/.test(location.hostname)
       ? null
-      : setInterval(() => { if (!document.hidden) void fetch("/health", { cache: "no-store" }).catch(() => {}); }, 10 * 60 * 1000);
+      : setInterval(() => { if (!document.hidden) void fetchApi("/health", { cache: "no-store" }).catch(() => {}); }, 10 * 60 * 1000);
     return () => { clearInterval(iv); if (hb) clearInterval(hb); };
   }, []);
 

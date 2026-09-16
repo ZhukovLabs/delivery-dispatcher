@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fetchApi } from "@/lib/api";
 
 type Row = {
   closed_at: string;
@@ -25,7 +26,7 @@ export default function ReportDayPage() {
 
   useEffect(() => {
     let alive = true;
-    fetch("/api/report/day", { headers: { Accept: "application/json" } })
+    fetchApi("/api/report/day", { headers: { Accept: "application/json" } })
       .then(async (r) => {
         if (r.status === 401) throw new Error("Требуется вход — откройте диспетчерскую и войдите");
         if (!r.ok) throw new Error("Бэкенд недоступен (" + r.status + ")");

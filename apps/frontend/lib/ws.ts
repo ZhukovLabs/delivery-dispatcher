@@ -12,6 +12,7 @@
  * F5/смены точки берёт свежие token+point без пересоздания сокета. */
 
 import { io, type Socket } from "socket.io-client";
+import { fetchApi } from "@/lib/api";
 
 const WS_URL =
   process.env.NEXT_PUBLIC_WS_URL ||
@@ -46,7 +47,7 @@ export function setWsToken(t: string | null): void {
 export async function ensureWsToken(): Promise<string | null> {
   if (token) return token;
   try {
-    const r = await fetch("/api/ws-token", { headers: { Accept: "application/json" } });
+    const r = await fetchApi("/api/ws-token", { headers: { Accept: "application/json" } });
     if (r.status === 401) { window.location.assign("/login"); return null; }
     const d = await r.json();
     if (typeof d?.token === "string") { token = d.token; return token; }

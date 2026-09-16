@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { setWsToken } from "@/lib/ws";
+import { fetchApi } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -17,7 +18,7 @@ export default function LoginPage() {
     setBusy(true);
     setErr("");
     try {
-      const res = await fetch("/api/login", {
+      const res = await fetchApi("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ email, password: pwd }),

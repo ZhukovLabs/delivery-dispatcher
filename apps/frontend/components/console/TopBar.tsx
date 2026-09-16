@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Check, CircleHelp, LogOut, MapPin, Moon, Route as RouteIcon, Settings, Sun, Timer, Undo2, User, X } from "lucide-react";
-import type { AppState } from "@/lib/api";
+import { fetchApi, type AppState } from "@/lib/api";
 import { dropSocket, subscribeConn, type WsConnState } from "@/lib/ws";
 
 /* ---------- шапка: бренд, выбор места работы, счётчики дня, отмена/тема/справка/профиль ---------- */
@@ -83,7 +83,7 @@ export default function TopBar({ st, workPoint, firstPid, onWorkPoint,
       </span>
       <button id="logoutLink" title="Выйти" aria-label="Выйти" onClick={async () => {
         dropSocket(); // WS-подписку рвём сразу — сессии больше нет
-        await fetch("/api/logout", { headers: { Accept: "application/json" } });
+        await fetchApi("/api/logout", { headers: { Accept: "application/json" } });
         window.location.href = "/login";
       }}><LogOut size={15} /></button>
     </header>

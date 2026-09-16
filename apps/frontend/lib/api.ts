@@ -66,6 +66,21 @@ export interface AppState {
  *  до браузерного лимита (~300 с) и пользователь смотрит в «ничего». */
 const API_TIMEOUT_MS = 30_000;
 
+/** База REST API: в проде ходим НАПРЯМУЮ с API-хостом (funnel), мимо
+ *  реврайтов Vercel — каждый клик диспетчера экономит ~90 мс хопа.
+ *  В dev — same-origin через next rewrites (пустая строка). */
+export const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" && !/^(localhost|127\.)/.test(window.location.hostname)
+    ? "https://zhukovlabs.taila8c324.ts.net:8443"
+    : "");
+
+/** Сырой fetch к API с базой и cookie: для мест, где нужен сам Response
+ *  (login проверяет статус, ws-token не должен редиректить на 401). */
+export function fetchApi(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(API_URL + path, { ...init, credentials: "include" });
+}
+
 export class NetworkError extends Error {
   constructor() { super("Сеть недоступна — проверьте подключение к интернету"); }
 }
@@ -79,7 +94,7 @@ export async function api<T = AppState>(path: string, method = "GET", body?: unk
   signal?.addEventListener("abort", onOuterAbort);
   let res: Response;
   try {
-    res = await fetch(path, {
+    res = await fetchApi(path, {
       method,
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: body !== undefined ? JSON.stringify(body) : undefined,
