@@ -205,12 +205,13 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   /* содержимое балуна заказа: адрес/заказ → курьер → время прибытия →
      приоритет → дедлайн → опоздание (см. требование к точке доставки) */
   const popupHtml = (p: { address: string; courier?: string; eta?: string;
-                          inMin?: number; lateMin?: number; prio?: boolean;
-                          deadline?: string; note?: string }) =>
+                          inMin?: number; kmLeft?: number; lateMin?: number;
+                          prio?: boolean; deadline?: string; note?: string }) =>
     `<b>${esc(p.address)}</b>` +
     (p.courier ? `<br>Курьер: ${esc(p.courier)}` : "") +
     (p.eta ? `<br>Время прибытия ≈${esc(p.eta)}` +
       (p.inMin != null ? ` (через ${p.inMin} мин)` : "") +
+      (p.kmLeft != null ? `, осталось ${p.kmLeft.toFixed(2)} км` : "") +
       (p.lateMin ? ` · <span style="color:#b3261e">опоздание ~${p.lateMin} мин</span>` : "") : "") +
     (p.prio ? "<br>⭐ приоритетный" : "") +
     (p.deadline ? `<br>⏰ до ${esc(p.deadline)}` : "") +
@@ -218,7 +219,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
 
   // ETA выданного заказа: по остатку его маршрута из позиции курьера
   // (примерно: расстояние по стопам / скорость × трафик + выдача до него)
-  const outEtaMin = (o: Order, cour: Courier): number | null => {
+  const outEta = (o: Order, cour: Courier): { min: number; km: number } | null => {
     const stops = (cour.out_route?.stops || [])
       .filter(sp => sp.length > 2) as [number, number, string][];
     if (!cour.pos || !stops.length) return null;
@@ -228,8 +229,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       ...stops.slice(0, idx + 1).map(sp => [sp[0], sp[1]] as [number, number])];
     let km = 0;
     for (let i = 0; i < pts.length - 1; i++) km += havKm(pts[i], pts[i + 1]);
-    return km / ((state.settings.speed_kmh || 60) / 60) * (state.settings.traffic || 1.25)
+    const min = km / ((state.settings.speed_kmh || 60) / 60) * (state.settings.traffic || 1.25)
       + (state.settings.handover_min ?? 5) * idx;
+    return { min, km };
   };
 
   const planMap: Record<string, { color: string; label: string; popup: string }> = {};
@@ -419,11 +421,12 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       if (p) {
         content = p.popup;
       } else if (oCour) {
-        const etaMin = outEtaMin(o, oCour);
+        const eta = outEta(o, oCour);
         content = popupHtml({ address: o.address, courier: oCour.name,
-          eta: etaMin != null ? clockIn(etaMin) : undefined,
-          inMin: etaMin != null ? Math.round(etaMin) : undefined,
-          lateMin: etaMin != null ? (lateByDeadline(o.deadline, etaMin) ?? undefined) : undefined,
+          eta: eta ? clockIn(eta.min) : undefined,
+          inMin: eta ? Math.round(eta.min) : undefined,
+          kmLeft: eta ? eta.km : undefined,
+          lateMin: eta ? (lateByDeadline(o.deadline, eta.min) ?? undefined) : undefined,
           prio: o.prio, deadline: o.deadline });
       } else {
         content = popupHtml({ address: o.address,
