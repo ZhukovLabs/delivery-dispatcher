@@ -43,7 +43,7 @@ export interface Advice {
 }
 export interface Plan {
   routes: Route[]; last_delivery_clock?: string; last_delivery_min: number;
-  avg_delivery_min?: number; solved_at: string; routing?: string;
+  avg_delivery_min?: number; solved_at: string; anchored_at?: string; routing?: string;
   provider?: string; stale?: boolean; moved?: boolean; unassigned?: number;
   advice?: Advice | null;
 }

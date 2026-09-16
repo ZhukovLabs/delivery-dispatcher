@@ -135,9 +135,9 @@ export default function CourierList({ st, open, onToggle, mutate, showToast, ask
                 )}
                 {c.status === "away" && (c.geo
                   ? (c.geo.delivering
-                      ? <div className="c-row2 geo-row" title="В развозке: заказы у курьера, возврат — по живой геолокации">
-                          <Bike size={11} /> в развозке · вернётся ≈{c.geo.back_min} мин
-                        </div>
+                       ? <div className="c-row2 geo-row" title="В развозке: заказы у курьера, возврат — по живой геолокации. Только дорога до базы: старт в плане = это время + погрузка следующей партии">
+                           <Bike size={11} /> в развозке · вернётся ≈{c.geo.back_min} мин
+                         </div>
                       : c.geo.has_out && c.geo.at_depot
                       ? <div className="c-row2 geo-row" title="У своей точки выдачи с заказами — фиксируем загрузку (нужен простой пару минут)">
                           <Hourglass size={11} /> у точки — выдача заказов…
@@ -150,7 +150,7 @@ export default function CourierList({ st, open, onToggle, mutate, showToast, ask
                       ? <div className="c-row2 geo-row" title="Заказы ещё не отданы: сначала курьер доедет до своей точки выдачи">
                           <House size={11} /> едет за заказами · до точки ≈{c.geo.to_point_min} мин
                         </div>
-                      : <div className="c-row2 geo-row" title="Возврат рассчитан по живой геолокации курьера">
+                      : <div className="c-row2 geo-row" title="Возврат рассчитан по живой геолокации курьера — только дорога до базы, без погрузки. В плане старт сдвинется сильнее: это время + погрузка следующей партии">
                           <Timer size={11} /> вернётся ≈{c.geo.back_min} мин (по гео)
                         </div>)
                  : foreign

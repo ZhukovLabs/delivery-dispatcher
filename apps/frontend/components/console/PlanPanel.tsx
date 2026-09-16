@@ -103,7 +103,7 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                 ? <span className="chip chip-green">отдать сейчас</span>
                 : <span className="chip chip-amber">следующим заездом</span>}
               {r.start_delay_min > 0 && (
-                <span className="chip chip-amber" title="Курьер ещё в пути, маршрут сдвинут на время возврата">
+                <span className="chip chip-amber" title="Время до выезда со базы: для курьера в пути — возврат на базу + погрузка следующей партии. «Вернётся ≈N мин» в карточке курьера показывает только дорогу до базы, без погрузки">
                   старт +{Math.ceil(r.start_delay_min)} мин
                 </span>
               )}

@@ -163,10 +163,12 @@ export default function Console() {
   const [openAcc, setOpenAcc] = useState<"points" | "orders" | "couriers" | null>("orders");
 
   const planClockFn = useCallback(() => {
-    const base = new Date(st?.plan?.solved_at || Date.now()).getTime();
+    /* якорь всех минут плана — момент последнего ретайма (anchored_at), не расчёта */
+    const anchor = st?.plan?.anchored_at || st?.plan?.solved_at;
+    const base = new Date(anchor || Date.now()).getTime();
     return (min: number) => new Date(base + min * 60000)
       .toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
-  }, [st?.plan?.solved_at]);
+  }, [st?.plan?.anchored_at, st?.plan?.solved_at]);
 
   const assignOrderTo = async (oid: string, cid: string) => {
     const o = st?.orders.find(x => x.id === oid);

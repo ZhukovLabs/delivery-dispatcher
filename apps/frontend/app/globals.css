@@ -378,6 +378,8 @@ html.dark .bind-user:hover{background:#1a2436;border-color:#3a5372}
 .burn-chip{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#b91c1c;background:#fee2e2;border-radius:9px;padding:1px 7px;white-space:nowrap}
 .soon-chip{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#92400e;background:#fef3c7;border-radius:9px;padding:1px 7px;white-space:nowrap}
 .ocard.burning{border-color:#f3b4b4;background:#fff5f5}
+.nocour-chip{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#6d28d9;background:#ede9fe;border-radius:9px;padding:1px 7px;white-space:nowrap}
+.ocard.nocour{border-color:#c4b5fd;background:#faf8ff}
 .r-give{display:inline-flex;align-items:center;gap:5px;border:none;background:#197547;color:#fff;border-radius:8px;padding:3.5px 11px;font-size:11.5px;cursor:pointer;white-space:nowrap;font-weight:600;margin-left:auto;transition:background .12s}
 .r-give:hover{background:#15613c}
 .r-give:hover{background:#dcefe3}
@@ -627,6 +629,8 @@ html.dark .dl-q:hover,html.dark .dl-tbtn:hover{background:#28354a}
 html.dark .dl-hh,html.dark .dl-mm{background:#141c29;border-color:var(--line2)}
 html.dark .ocard{background:#1a2230}
 html.dark .ocard.prio{background:#221f14;border-color:#4d3f1c}
+html.dark .nocour-chip{color:#c4b5fd;background:#37305a}
+html.dark .ocard.nocour{background:#221f30;border-color:#4c3f8f}
 html.dark .p-count{background:#273040;color:#aab6c9}
 html.dark .p-count.on{background:#3a231f;color:#ff9d8d}
 html.dark .addrow .iconbtn{background:#1a2230;border-color:#28324a;color:#8b97ab}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { Bike, Check, Copy, Flame, Hourglass, Loader2, MapPin, Package, PackageOpen, Plus, Timer, Undo2, X, Zap } from "lucide-react";
+import { Bike, Check, Copy, Flame, Hourglass, Loader2, MapPin, Package, PackageOpen, Plus, Timer, Undo2, UserX, X, Zap } from "lucide-react";
 import { fmtCoords, type AppState, type Order } from "@/lib/api";
 import GeoInput, { type GeoItem } from "../GeoInput";
 import { AccHead } from "./PointsPanel";
@@ -60,6 +60,10 @@ export default function OrdersPanel({ st, tick, open, onToggle, mutate, showToas
     }
     return 0;
   };
+  // заказ остался без курьера после расчёта: план есть, а заказа в маршрутах нет
+  const planExists = !!(st.plan && (st.plan.routes?.length || 0) > 0);
+  const inPlan = (o: Order) =>
+    !!st.plan?.routes?.some(r => (r.stops || []).some(s => s.order_id === o.id));
   // дубли адресов: два диспетчера могут добавить один адрес одновременно (#3);
   // группа встаёт на место первого вхождения адреса
   const readyOrders = useMemo(() => {
@@ -123,13 +127,14 @@ export default function OrdersPanel({ st, tick, open, onToggle, mutate, showToas
             const age = orderAgeMin(o);
             const auto = autoP > 0 && age >= autoP && !o.prio;
             const late = planLate(o);
+            const nocour = planExists && !inPlan(o);
             const soon = !late && o.deadline
               ? (() => { const [h, m] = o.deadline.split(":").map(Number); return h * 60 + m - nowMin; })()
               : null;
             return (
               <div
                 key={o.id}
-                className={`ent ocard${o.prio ? " prio" : ""}${late > 0 ? " burning" : ""}${cardHl === o.id ? " hl" : ""}${pinning === o.id ? " adding" : ""}${dupOids.has(o.id) ? " dup" : ""}`}
+                className={`ent ocard${o.prio ? " prio" : ""}${late > 0 ? " burning" : ""}${nocour ? " nocour" : ""}${cardHl === o.id ? " hl" : ""}${pinning === o.id ? " adding" : ""}${dupOids.has(o.id) ? " dup" : ""}`}
                 data-oid={o.id}
                 draggable={pinning !== o.id}
                 title={`${o.address} · перетащите на курьера, чтобы выдать сразу`}
@@ -151,6 +156,7 @@ export default function OrdersPanel({ st, tick, open, onToggle, mutate, showToas
                     <span className="opt-tag" title="Место выдачи заказа">{st.points.find(p => p.id === o.point_id)!.name}</span>
                   )}
                   {dupOids.has(o.id) && <span className="dup-chip" title="Такой адрес уже есть в списке — проверьте, не дубль ли"><Copy size={11} /> дубль</span>}
+                  {nocour && <span className="nocour-chip" title="Не вошёл в расчёт: не хватило курьеров или лимита заказов. Перетащите на курьера вручную или пересчитайте план"><UserX size={11} /> без курьера</span>}
                   {o.deadline && <span className="dl-chip" title="Обещали к этому времени"><Timer size={11} /> {o.deadline}</span>}
                   {late > 0
                     ? <span className="burn-chip" title="По текущему плану к обещанному времени не успеваем"><Flame size={11} /> опоздание ~{late} мин</span>
