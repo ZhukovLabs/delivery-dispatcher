@@ -84,6 +84,10 @@ class _RequestProxy:
     def cookies(self):
         return self._r.cookies
 
+    @property
+    def headers(self):
+        return self._r.headers
+
 
 request = _RequestProxy()
 
