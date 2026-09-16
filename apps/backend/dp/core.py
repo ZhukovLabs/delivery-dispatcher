@@ -1159,6 +1159,15 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
     order_pid = {K + i: (o.get("point_id") or first_pid) for i, o in enumerate(orders)}
     home_pid = {c["id"]: _eff_home(c)["id"] for c in couriers}
 
+    # Ручное закрепление (pin) — воля диспетчера: лимит max_orders для курьера
+    # расширяется на число закреплённых за ним заказов. Решатель вправе
+    # вытеснить обычный заказ в unassigned, но не закрепление.
+    pinned_n = {}
+    for o in orders:
+        p = o.get("pin")
+        if p:
+            pinned_n[p] = pinned_n.get(p, 0) + 1
+
     # Виртуальные машины: копия курьера = один его заезд. Риифицированные
     # цепочки «конец заезда k + перезагрузка <= старт заезда k+1» здесь
     # НЕ используются: нелинейные произведения ломают фильтры локального
@@ -1245,12 +1254,17 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
             routing.SetArcCostEvaluatorOfVehicle(
                 routing.RegisterTransitCallback(make_cb(v, vi_start, True)), vi)
 
-        routing.AddConstantDimension(1, max_orders + 1, True, "Orders")
+        # ёмкость размерности — с запасом под расширенные лимиты закреплений
+        cap_extra = max(pinned_n.values()) if pinned_n else 0
+        routing.AddConstantDimension(1, max_orders + 1 + cap_extra, True, "Orders")
         orders_dim = routing.GetDimensionOrDie("Orders")
         first_copy = {}   # courier_id -> индекс первой копии (заезд k = 0)
         for vi, v in enumerate(veh):
             cid = v["courier"]["id"]
             first = first_copy.setdefault(cid, vi)
+            # базовый лимит max_orders; курьеру с закреплениями — плюс их число
+            orders_dim.CumulVar(routing.End(vi)).SetMax(
+                max_orders + 1 + pinned_n.get(cid, 0))
             if cid in helper_ids:
                 # размерность считает дуги: простой = 1, ровно один заказ = 2
                 orders_dim.CumulVar(routing.End(vi)).SetRange(2, 2)
