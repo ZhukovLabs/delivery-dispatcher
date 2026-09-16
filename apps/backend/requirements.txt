@@ -1,4 +1,6 @@
-flask>=3.0
+﻿fastapi>=0.115
+uvicorn[standard]>=0.30
+python-socketio>=5.11
+itsdangerous>=2.1
 requests>=2.31
 ortools>=9.8
-waitress>=3.0

@@ -5,6 +5,7 @@ const API = process.env.BACKEND_URL || "http://127.0.0.1:5050";
 
 const nextConfig: NextConfig = {
   turbopack: { root: path.join(__dirname) },
+  allowedDevOrigins: ["127.0.0.1"],
   async rewrites() {
     return [
       { source: "/api/:path*", destination: `${API}/api/:path*` },

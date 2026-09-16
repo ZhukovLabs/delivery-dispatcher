@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type AppState, type Courier, type Route } from "@/lib/api";
+import { joinDepot } from "@/lib/ws";
 import { addrKey } from "./console/format";
 import { optimisticFor } from "./console/optimistic";
 import { useDispatchState } from "./console/useDispatchState";
@@ -100,6 +101,7 @@ export default function Console() {
     void (async () => {
       try {
         await api("/api/workpoint", "POST", { point_id: pid });
+        joinDepot(pid); // WS: переехать в руму нового депо (сервер пушнет его состояние)
       } catch {
         wpSynced.current = false; // точка могла стать мёртвой — эффект коррекции подменит id и повторит
       }

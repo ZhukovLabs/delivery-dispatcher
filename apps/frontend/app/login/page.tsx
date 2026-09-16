@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { setWsToken } from "@/lib/ws";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -23,6 +24,7 @@ export default function LoginPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Неверный email или пароль");
+      if (typeof data.token === "string") setWsToken(data.token); // для WS-handshake
       router.replace("/");
       router.refresh();
     } catch (e) {
