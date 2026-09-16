@@ -7,6 +7,8 @@
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;font:13.5px/1.45 "Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--ink);overflow:hidden}
+/* режим выбора точки на карте: перекрываем курсоры внутренних слоёв Яндекса */
+.pick-cross,.pick-cross *{cursor:crosshair !important}
 
 /* ---------- вход ---------- */
 .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#141c2b 0%,#2a3648 100%)}

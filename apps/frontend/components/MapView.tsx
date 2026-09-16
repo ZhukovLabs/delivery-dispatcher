@@ -137,7 +137,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
 
   useEffect(() => {
     const el = divRef.current;
-    if (el) el.style.cursor = pickMode ? "crosshair" : "";
+    if (el) el.classList.toggle("pick-cross", !!pickMode);
     const t = setTimeout(() => mapRef.current?.container.fitToViewport(), 120);
     return () => clearTimeout(t);
   }, [pickMode, ready]);
