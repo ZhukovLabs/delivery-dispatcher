@@ -1819,6 +1819,20 @@ def _tg_callback(cb):
                      [[{"text": "✅ Да, отменяем", "callback_data": f"dlv:{oid}:refyes"}],
                       [{"text": "↩️ Назад", "callback_data": f"dlv:{oid}:no"}]])
         _tg_answer_cb(cbid)
+    elif act == "n" and pend["stage"] == "ask":
+        pend["stage"] = "noconfirm"
+        _tg_edit_msg(chat, pend["msg"],
+                     f"Точно ещё нет? Заказ: <b>{addr}</b>",
+                     [[{"text": "✅ Да, ещё везу", "callback_data": f"dlv:{oid}:nok"}],
+                      [{"text": "↩️ Назад", "callback_data": f"dlv:{oid}:no"}]])
+        _tg_answer_cb(cbid)
+    elif act == "nok" and pend["stage"] == "noconfirm":
+        STATE["tg_ask"].get(chat, {}).pop(oid, None)
+        _tg_edit_msg(chat, pend["msg"],
+                     f"Понял: <b>{addr}</b> ещё в развозке. "
+                     "Закроет диспетчер или спросим позже.")
+        _tg_answer_cb(cbid)
+        _ev("cour", f"{courier['name']}: «{order.get('address') or oid}» ещё в развозке")
     elif act == "refyes" and pend["stage"] == "refconfirm":
         pend["stage"] = "reason"
         _tg_edit_msg(chat, pend["msg"],
@@ -1854,7 +1868,7 @@ def _tg_callback(cb):
             _tg_answer_cb(cbid, "Уже неактуально")
     elif act == "no":
         # «Назад»: на шаг диалога назад, диалог не закрываем
-        if pend["stage"] in ("confirm", "refconfirm"):
+        if pend["stage"] in ("confirm", "refconfirm", "noconfirm"):
             pend["stage"] = "ask"
             _tg_edit_msg(chat, pend["msg"], _bot_ask_text(order), _bot_ask_kb(oid))
         elif pend["stage"] == "reason":
