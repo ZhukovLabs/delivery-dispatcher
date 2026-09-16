@@ -1540,14 +1540,7 @@ def _deliver_track(c, pos, now=None):
             if (now - rec["since"] >= _BOT_ASK_AFTER_S and not rec.get("asked")
                     and o["id"] not in STATE["tg_ask"].get(chat, {})):
                 rec["asked"] = True
-                mid = _tg_send_kb(
-                    chat,
-                    f"🛍 Кажется, заказ по адресу <b>{_esc(o.get('address') or '')}</b> "
-                    "доставлен. Это так?",
-                    [[{"text": "✅ Доставил", "callback_data": f"dlv:{o['id']}:y"}],
-                     [{"text": "❌ Нет", "callback_data": f"dlv:{o['id']}:n"}],
-                     [{"text": "🚫 Заказ отменён",
-                       "callback_data": f"dlv:{o['id']}:ref"}]])
+                mid = _tg_send_kb(chat, _bot_ask_text(o), _bot_ask_kb(o["id"]))
                 if mid is not None or not CFG["tg_poll"]:
                     STATE["tg_ask"].setdefault(chat, {})[o["id"]] = {
                         "msg": mid or 0, "stage": "ask"}
@@ -1743,6 +1736,17 @@ _CANCEL_REASONS = [
 ]
 
 
+def _bot_ask_text(o):
+    return (f"🛍 Кажется, заказ по адресу <b>{_esc(o.get('address') or '')}</b> "
+            "доставлен. Это так?")
+
+
+def _bot_ask_kb(oid):
+    return [[{"text": "✅ Доставил", "callback_data": f"dlv:{oid}:y"}],
+            [{"text": "❌ Нет", "callback_data": f"dlv:{oid}:n"}],
+            [{"text": "🚫 Заказ отменён", "callback_data": f"dlv:{oid}:ref"}]]
+
+
 def _tg_callback(cb):
     """Нажатие инлайн-кнопки курьером: «доставил?» → «точно?» → закрытие."""
     data = cb.get("data") or ""
@@ -1782,7 +1786,7 @@ def _tg_callback(cb):
         pend["stage"] = "confirm"
         _tg_edit_msg(chat, pend["msg"], f"Точно доставлен? Заказ: <b>{addr}</b>",
                      [[{"text": "✅ Подтвердить", "callback_data": f"dlv:{oid}:ok"}],
-                      [{"text": "↩️ Отменить", "callback_data": f"dlv:{oid}:no"}]])
+                      [{"text": "↩️ Назад", "callback_data": f"dlv:{oid}:no"}]])
         _tg_answer_cb(cbid)
     elif act == "ref" and pend["stage"] == "ask":
         pend["stage"] = "refconfirm"
@@ -1796,7 +1800,8 @@ def _tg_callback(cb):
         _tg_edit_msg(chat, pend["msg"],
                      f"Причина отмены: <b>{addr}</b>",
                      [[{"text": t, "callback_data": f"dlv:{oid}:r:{i}"}]
-                      for i, t in enumerate(_CANCEL_REASONS)])
+                      for i, t in enumerate(_CANCEL_REASONS)]
+                     + [[{"text": "↩️ Назад", "callback_data": f"dlv:{oid}:no"}]])
         _tg_answer_cb(cbid)
     elif act.startswith("r:") and pend["stage"] == "reason":
         try:
@@ -1823,7 +1828,19 @@ def _tg_callback(cb):
         else:
             _tg_edit_msg(chat, pend["msg"], "Не получилось закрыть — уже неактуален.")
             _tg_answer_cb(cbid, "Уже неактуально")
-    else:  # «нет» или «отменить» — заказ остаётся в развозке
+    elif act == "no":
+        # «Назад»: на шаг диалога назад, диалог не закрываем
+        if pend["stage"] in ("confirm", "refconfirm"):
+            pend["stage"] = "ask"
+            _tg_edit_msg(chat, pend["msg"], _bot_ask_text(order), _bot_ask_kb(oid))
+        elif pend["stage"] == "reason":
+            pend["stage"] = "refconfirm"
+            _tg_edit_msg(chat, pend["msg"],
+                         f"Точно отменяем? Заказ: <b>{addr}</b>",
+                         [[{"text": "✅ Да, отменяем", "callback_data": f"dlv:{oid}:refyes"}],
+                          [{"text": "↩️ Назад", "callback_data": f"dlv:{oid}:no"}]])
+        _tg_answer_cb(cbid)
+    else:  # «нет» — заказ остаётся в развозке
         STATE["tg_ask"].get(chat, {}).pop(oid, None)
         _tg_edit_msg(chat, pend["msg"],
                      f"Понял: <b>{addr}</b> ещё в развозке. "
