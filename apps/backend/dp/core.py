@@ -1098,7 +1098,13 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
             routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION)
         params.local_search_metaheuristic = (
             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
-        params.time_limit.FromSeconds(4 if round_no == 0 else 2)
+        # Бюджет оптимизации масштабируем от размера задачи: маленькие наборы
+        # находят оптимум за миллисекунды, и большой бюджет только жёг время
+        # (GLS работает до исчерпания лимита). 4/2 с — для крупных развозок.
+        n_stops = len(sub)
+        big = n_stops > 12
+        params.time_limit.FromMilliseconds(
+            (4000 if big else 1000) if round_no == 0 else (2000 if big else 500))
         solution = routing.SolveWithParameters(params)
         if solution is None:
             log.warning("solve round %d: no solution (status=%s, veh=%d, nodes=%d)",
