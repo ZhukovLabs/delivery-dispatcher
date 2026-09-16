@@ -22,7 +22,6 @@ from fastapi.responses import JSONResponse
 from . import geocode, routes_auth, routes_dispatch, ws
 from .core import (CFG, SESSION_SECRET, _me, _tg_start_polling, _touch_online,
                    ensure_default_admin, load_state, log)
-from .geocode import _houses_disk_load, _warm_street_index
 from .shims import (Session, init_serializer, reset_request_ctx, set_request_ctx,
                     sign_session, unsign_session)
 
@@ -37,9 +36,7 @@ init_serializer(SESSION_SECRET)
 async def lifespan(_app: FastAPI):
     load_state()
     ensure_default_admin()
-    _houses_disk_load()
     ws.start(asyncio.get_running_loop())
-    threading.Thread(target=_warm_street_index, daemon=True).start()
     _tg_start_polling()
     log.info("api up (FastAPI + socket.io, auth=email)")
     yield
