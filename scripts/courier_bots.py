@@ -35,7 +35,7 @@ import time
 import requests
 
 DEG_PER_M = 1.0 / 111320.0
-STOP_KM = 0.15        # км, «у адреса» — как TG_GEO_AT_PLACE бэкенда
+STOP_KM = 0.10        # км, «у адреса» — как TG_GEO_AT_PLACE бэкенда
 ARRIVE_TOL = 0.0013   # ~140 м, порог прибытия к точке/адресу для езды
 
 

@@ -5,7 +5,7 @@ import { fmtAge, type AppState, type Plan, type Courier, type Order } from "@/li
 
 // = TG_GEO_AT_PLACE бэкенда: радиус, внутри которого курьеру зачтётся
 // простой «у адреса» (30 с — и бот спросит «доставлен?»)
-const GEO_AT_PLACE_M = 150;
+const GEO_AT_PLACE_M = 100;
 
 const havKm = (a: [number, number], b: [number, number]) => {
   const r = Math.PI / 180;
