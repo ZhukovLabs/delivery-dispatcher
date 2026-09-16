@@ -81,12 +81,29 @@ const DUP_RED = "#d92d20";               // дублирующийся адре�
 const routeOf = (p: Plan | null | undefined, cid: string) =>
   p?.routes.find(r => r.courier_id === cid);
 
-/* координаты трипа: дорожная геометрия или прямая через остановки */
+/* индекс ближайшей точки полилинии к p — для обрезки маршрута */
+const nearestIdx = (pl: [number, number][], p: [number, number]) => {
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < pl.length; i++) {
+    const dx = pl[i][0] - p[0], dy = pl[i][1] - p[1], d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; bi = i; }
+  }
+  return bi;
+};
+const trimAfter = (pl: [number, number][], p: [number, number]) =>
+  pl.slice(0, nearestIdx(pl, p) + 1);          // без хвоста после точки p
+const trimFrom = (pl: [number, number][], p: [number, number]) =>
+  pl.slice(nearestIdx(pl, p));                 // без начала до точки p
+
+/* координаты трипа: дорожная геометрия (без возврата на базу) или
+   прямая через остановки — тоже только до последней остановки */
 const tripCoords = (tr: { geometry?: [number, number][]; stops: { lat: number; lng: number }[] },
-                    depot: [number, number]): [number, number][] =>
-  tr.geometry && tr.geometry.length > 1
-    ? tr.geometry
-    : [depot, ...tr.stops.map(s => [s.lat, s.lng] as [number, number]), depot];
+                    depot: [number, number]): [number, number][] => {
+  const stops = tr.stops.map(s => [s.lat, s.lng] as [number, number]);
+  return tr.geometry && tr.geometry.length > 1
+    ? trimAfter(tr.geometry, stops[stops.length - 1] || depot)
+    : [depot, ...stops];
+};
 
 export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, onMarkerClick, dupOids, focus, pickPreview }: MapViewProps) {
   const divRef = useRef<HTMLDivElement>(null);
@@ -288,14 +305,20 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     const curPts = pickPtsRef.current;
     const color = cur.color || r?.color || DEFAULT_COURIER_COLOR;
     const lines: any[] = [];
-    // пунктир: выданные заказы (или возврат на базу) — по дорожной геометрии,
-    // если сохранили её на «Выдать», иначе по прямой через остановки
-    if (orr && (orr.geom?.length || 0) > 1 || orr?.stops?.length) {
-      const hp = orr.home || r?.home_point || curPts[0];
-      if (hp) {
-        const dashed: [number, number][] = orr.geom && orr.geom.length > 1
-          ? orr.geom
-          : [[hp.lat, hp.lng], ...(orr?.stops || []).map(sp => [sp[0], sp[1]] as [number, number]), [hp.lat, hp.lng]];
+    // пунктир: выданные заказы — только оставшийся путь: от текущей позиции
+    // курьера до последней остановки, без уже проеханного и без возврата
+    // на базу. Геометрия дороги, если сохранили на «Выдать», иначе по прямой.
+    if (orr && orr.stops?.length) {
+      const stops = (orr.stops || []).map(sp => [sp[0], sp[1]] as [number, number]);
+      const pos0 = cur.pos ? [cur.pos.lat, cur.pos.lng] as [number, number] : null;
+      let dashed: [number, number][];
+      if (orr.geom && orr.geom.length > 1) {
+        let pl = trimAfter(orr.geom, stops[stops.length - 1]);
+        dashed = pos0 ? trimFrom(pl, pos0) : pl;
+      } else {
+        dashed = pos0 ? [pos0, ...stops] : stops;
+      }
+      if (dashed.length > 1) {
         lines.push(new ym.Polyline(dashed, {},
           { strokeColor: color, strokeWidth: 5, strokeOpacity: .85, strokeStyle: "1 3", zIndex: 30 }));
       }
