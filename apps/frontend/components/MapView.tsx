@@ -93,6 +93,17 @@ const nearestIdx = (pl: [number, number][], p: [number, number]) => {
 };
 const trimAfter = (pl: [number, number][], p: [number, number]) =>
   pl.slice(0, nearestIdx(pl, p) + 1);          // без хвоста после точки p
+const OFF_ROUTE = 0.0022;                       // ~250 м: дальше — «сошёл с маршрута»
+/* ближайшая точка полилинии не раньше индекса start (курьер едет вперёд —
+   линию за ним подрезаем только вперёд, без откатов); -1 — точка мимо линии */
+const nearestIdxFrom = (pl: [number, number][], p: [number, number], start: number) => {
+  let bi = -1, bd = OFF_ROUTE * OFF_ROUTE;
+  for (let i = Math.max(0, start); i < pl.length; i++) {
+    const dx = pl[i][0] - p[0], dy = pl[i][1] - p[1], d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; bi = i; }
+  }
+  return bi;
+};
 /* линия от точки p (позиция курьера) до конца маршрута; если курьер
    сошёл с кэшированной дороги (>250 м) — кэш не подходит */
 const trimFrom = (pl: [number, number][], p: [number, number]): [number, number][] => {
@@ -101,8 +112,7 @@ const trimFrom = (pl: [number, number][], p: [number, number]): [number, number]
     const dx = pl[i][0] - p[0], dy = pl[i][1] - p[1], d = dx * dx + dy * dy;
     if (d < bd) { bd = d; bi = i; }
   }
-  const OFF = 0.0022;                          // ~250 м в градусах широты
-  if (bd > OFF * OFF) return [];
+  if (bd > OFF_ROUTE * OFF_ROUTE) return [];
   return pl.slice(bi);
 };
 
@@ -146,6 +156,8 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     routeSig: "",
     routeFetch: "",                    // последний запрос дорогой геометрии
     routeGeom: null as { key: string; coords: [number, number][] } | null,
+    routeIdx: 0,                       // докуда подрезали хвост линии (монотонно)
+    routeIsRoad: false,
     planGeom: new Map<string, [number, number][]>() as Map<string, [number, number][]>,
     orderCircle: null as any | null,   // радиус простоя у выбранного заказа
     orderCircleOid: null as string | null,
@@ -208,6 +220,8 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   }, [pickMode, ready]);
 
   /* ---------- плавное движение курьеров (rAF-интерполяция) ---------- */
+  // маркер едет к свежей геопозиции, и линия его маршрута подрезается тем же
+  // кадром: хвост «пройденного» тает непрерывно, как в навигаторах
   const ensureRaf = () => {
     if (rafRef.current) return;
     const step = () => {
@@ -216,8 +230,29 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       anims.current.forEach((a, cid) => {
         const t = Math.min(1, (t0 - a.start) / ANIM_MS);
         const e = t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-        a.pm.geometry.setCoordinates([a.from[0] + (a.to[0] - a.from[0]) * e,
-                                      a.from[1] + (a.to[1] - a.from[1]) * e]);
+        const ip: [number, number] = [a.from[0] + (a.to[0] - a.from[0]) * e,
+                                      a.from[1] + (a.to[1] - a.from[1]) * e];
+        a.pm.geometry.setCoordinates(ip);
+        if (cid === selCid.current) {
+          const g = L.current.routeGeom as { key: string; coords: [number, number][] } | null;
+          const line = L.current.routeLine as any;
+          const setCoords = line && line.geometry && typeof line.geometry.setCoordinates === "function";
+          if (setCoords) {
+            if (g && g.coords && g.coords.length > 1) {
+              const idx = nearestIdxFrom(g.coords, ip, L.current.routeIdx || 0);
+              if (idx > 0 && idx !== L.current.routeIdx) {
+                L.current.routeIdx = idx;
+                line.geometry.setCoordinates(g.coords.slice(idx));
+              }
+            } else if (L.current.routeIsRoad === false) {
+              const cs = line.geometry.getCoordinates() as [number, number][];
+              if (cs && cs.length > 1) {
+                cs[0] = ip;
+                line.geometry.setCoordinates(cs);
+              }
+            }
+          }
+        }
         if (t < 1) alive = true; else anims.current.delete(cid);
       });
       rafRef.current = alive ? requestAnimationFrame(step) : 0;
@@ -324,14 +359,23 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   const refreshSelRoute = () => {
     const ym = ymRef.current, map = mapRef.current;
     if (!ym || !map) return;
-    if (L.current.routeLine) { map.geoObjects.remove(L.current.routeLine); L.current.routeLine = null; }
+    // линию по возможности НЕ пересоздаём, а обновляем координаты на месте:
+    // remove+add на каждом гео-тике даёт заметное мигание полилинии
+    const prevLine = L.current.routeLine as any;
+    const prevIsRoad = !!L.current.routeIsRoad;
+    const dropLine = () => {
+      if (L.current.routeLine) { map.geoObjects.remove(L.current.routeLine); }
+      L.current.routeLine = null;
+      L.current.routeIsRoad = false;
+      L.current.routeIdx = 0;
+    };
     const cid = selCid.current;
-    if (!cid) return;
+    if (!cid) { dropLine(); return; }
     const cur = couriersRef.current.find(c => c.id === cid);
-    if (!cur) return;
+    if (!cur) { dropLine(); return; }
     const r = routeOf(planRef.current, cid);
     const orr = cur.out_route;
-    if (!r && !orr) return;
+    if (!r && !orr) { dropLine(); return; }
     const curPts = pickPtsRef.current;
     const color = cur.color || r?.color || DEFAULT_COURIER_COLOR;
     // маршрут выбранного курьера: дороги — норма, прямые — только пока
@@ -364,9 +408,18 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
           // старт линии — от текущей позиции курьера (или начала кэша)
           const line = pos0 ? trimFrom(coords, pos0) : coords;
           if (line.length < 2) return false;
-          const road = new ym.Polyline(line, {}, roadStyle);
-          L.current.routeLine = road;
-          map.geoObjects.add(road);
+          if (prevIsRoad && prevLine && prevLine.geometry
+              && typeof prevLine.geometry.setCoordinates === "function") {
+            prevLine.geometry.setCoordinates(line);      // та же дорога — на месте
+            L.current.routeLine = prevLine;
+          } else {
+            if (prevLine) map.geoObjects.remove(prevLine);
+            const road = new ym.Polyline(line, {}, roadStyle);
+            L.current.routeLine = road;
+            map.geoObjects.add(road);
+          }
+          L.current.routeIsRoad = true;   // rAF-кадр подрезает хвост по кэшу
+          L.current.routeIdx = 0;
           return true;
         };
         const cached = L.current.routeGeom as { key: string; coords: [number, number][] } | null;
@@ -378,10 +431,19 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
           L.current.routeGeom = null;
           L.current.routeFetch = "";
         }
-        const straight = new ym.Polyline(rp, {},
-          { strokeColor: color, strokeWidth: 5, strokeOpacity: .6, zIndex: 30 });
-        L.current.routeLine = straight;
-        map.geoObjects.add(straight);
+        if (!prevIsRoad && prevLine && prevLine.geometry
+            && typeof prevLine.geometry.setCoordinates === "function") {
+          prevLine.geometry.setCoordinates(rp);          // тот же прямой резерв
+          L.current.routeLine = prevLine;
+        } else {
+          if (prevLine) map.geoObjects.remove(prevLine);
+          const straight = new ym.Polyline(rp, {},
+            { strokeColor: color, strokeWidth: 5, strokeOpacity: .6, zIndex: 30 });
+          L.current.routeLine = straight;
+          map.geoObjects.add(straight);
+        }
+        L.current.routeIsRoad = false;  // ждём дорогу: хвост ведём первой точкой
+        L.current.routeIdx = 0;
         if (L.current.routeFetch !== stopsKey) {
           L.current.routeFetch = stopsKey;
           const qs = encodeURIComponent(
@@ -393,8 +455,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
               const g = j.geometry;
               if (!g || g.length < 2) return;
               L.current.routeGeom = { key: stopsKey, coords: g };
-              if (L.current.routeLine) map.geoObjects.remove(L.current.routeLine);
-              drawRoad(g);
+              drawRoad(g);   // сам сменит прямой резерв на дорогу без мигания
             })
             .catch(() => {
               // каскад молчит: прямые остаются, повторим на следующем тике
@@ -405,6 +466,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       }
     }
     // страховка-фолбэк: точки без роутера — прямыми (порядок тот же)
+    dropLine();   // дороги/прямой резерв не подошли — сменяем целиком
+    L.current.routeIsRoad = false;
+    L.current.routeIdx = 0;
     const lines: any[] = [];
     if (orr && orr.stops?.length) {
       const stops = (orr.stops || []).map(sp => [sp[0], sp[1]] as [number, number]);
