@@ -730,6 +730,51 @@ def plan_help():
         _bump()
 
 
+def _tg_route_message(courier_name, stops, me):
+    """Текст+клавиатура TG-сообщения о выдаче: адреса с ETA, у каждого —
+    ссылки «Маршрут: Яндекс | Google» с новой строки (маршрут до точки от
+    геопозиции открывшего), внизу — кнопки «Весь маршрут» друг под другом.
+    Используется и при отправке (assign), и при редактировании (return)."""
+    def _ya_link(sp):
+        if sp.get("lat") is None or sp.get("lng") is None:
+            return None
+        return (f"https://yandex.ru/maps/?rtext=~{sp['lat']},{sp['lng']}"
+                "&rtt=auto")
+    def _gg_link(sp):
+        if sp.get("lat") is None or sp.get("lng") is None:
+            return None
+        return (f"https://www.google.com/maps/dir/?api=1"
+                f"&destination={sp['lat']},{sp['lng']}&travelmode=driving")
+    z_word = _plural(len(stops), ("заказ", "заказа", "заказов"))
+    lines = [f"🛵 <b>{_esc(courier_name)}, в развозку</b>: {len(stops)} {z_word}"]
+    for i, s in enumerate(stops, start=1):
+        head = f"{i}. {_esc(s['address'])}"
+        if s.get("eta_clock"):
+            head += f" · ≈{s['eta_clock']}"
+        lines.append(head)
+        ya, gg = _ya_link(s), _gg_link(s)
+        if ya and gg:
+            lines.append(f"    Маршрут: <a href=\"{ya}\">Яндекс</a>"
+                         f" | <a href=\"{gg}\">Google</a>")
+    lines.append("Время приблизительное, следите за сообщениями.")
+    if (me or {}).get("name") and (me or {}).get("phone"):
+        lines.append(f"\nЕсть вопросы? - {_esc(me['name'])}, {me['phone']}")
+    payload = {"text": "\n".join(lines), "parse_mode": "HTML"}
+    pts = [f"{s['lat']},{s['lng']}" for s in stops
+           if s.get("lat") is not None and s.get("lng") is not None]
+    if len(pts) >= 2:  # маршрут строим минимум по двум точкам
+        kb = [[{"text": "Яндекс | Весь маршрут",
+                "url": "https://yandex.ru/maps/?rtext=~"
+                       + "~".join(pts[:10]) + "&rtt=auto"}],
+              [{"text": "Google | Весь маршрут",
+                "url": ("https://www.google.com/maps/dir/?api=1"
+                        "&destination=" + pts[min(len(pts), 10) - 1]
+                        + "&waypoints=" + "%7C".join(pts[:min(len(pts), 10) - 1])
+                        + "&travelmode=driving")}]]
+        payload["reply_markup"] = {"inline_keyboard": kb}
+    return payload
+
+
 @r.post("/api/orders/assign")
 @flaskish
 def assign_orders():
@@ -799,55 +844,20 @@ def assign_orders():
     chat = (courier.get("tg_chat_id") or "").strip()
     if chat and CFG["tg_bot_token"] and given_stops:
         def _tg_assign():
-            def _ya_link(sp):
-                # Яндекс: маршрут от геопозиции открывшего до точки, готов к «Поехали»
-                if sp.get("lat") is None or sp.get("lng") is None:
-                    return None
-                return (f"https://yandex.ru/maps/?rtext=~{sp['lat']},{sp['lng']}"
-                        "&rtt=auto")
-            def _gg_link(sp):
-                if sp.get("lat") is None or sp.get("lng") is None:
-                    return None
-                return (f"https://www.google.com/maps/dir/?api=1"
-                        f"&destination={sp['lat']},{sp['lng']}&travelmode=driving")
-            z_word = _plural(len(given_stops), ("заказ", "заказа", "заказов"))
-            lines = [f"🛵 <b>{_esc(courier['name'])}, в развозку</b>: "
-                     f"{len(given_stops)} {z_word}"]
-            for i, s in enumerate(given_stops, start=1):
-                ya, gg = _ya_link(s), _gg_link(s)
-                route_links = ""
-                if ya and gg:
-                    route_links = (f' · Маршрут: <a href="{ya}">Яндекс</a>'
-                                   f' | <a href="{gg}">Google</a>')
-                lines.append(f"{i}. {_esc(s['address'])}"
-                             + (f" · ≈{s['eta_clock']}" if s.get("eta_clock") else "")
-                             + route_links)
-            lines.append("Время приблизительное, следите за сообщениями.")
-            if (me or {}).get("name") and (me or {}).get("phone"):
-                lines.append(f"\nЕсть вопросы? - {_esc(me['name'])}, {me['phone']}")
-            # кнопки «весь маршрут»: от текущей геопозиции по всем выданным точкам
-            pts = [f"{s['lat']},{s['lng']}" for s in given_stops
-                   if s.get("lat") is not None and s.get("lng") is not None]
-            payload = {"chat_id": chat, "text": "\n".join(lines),
-                       "parse_mode": "HTML"}
-            if len(pts) >= 2:  # маршрут строим минимум по двум точкам
-                kb = [{"text": "Яндекс | Весь маршрут",
-                       "url": "https://yandex.ru/maps/?rtext=~"
-                              + "~".join(pts[:10]) + "&rtt=auto"},
-                      {"text": "Google | Весь маршрут",
-                       "url": ("https://www.google.com/maps/dir/?api=1"
-                               "&destination=" + pts[min(len(pts), 10) - 1]
-                               + "&waypoints=" + "%7C".join(pts[:min(len(pts), 10) - 1])
-                               + "&travelmode=driving")}]
-                payload["reply_markup"] = {"inline_keyboard": [kb]}
+            payload = _tg_route_message(courier["name"], given_stops, me)
+            payload["chat_id"] = chat
             try:
                 resp = requests.post(
                     f"https://api.telegram.org/bot{CFG['tg_bot_token']}/sendMessage",
                     json=payload, timeout=10)
-                if not resp.json().get("ok"):
+                data = resp.json()
+                if not data.get("ok"):
                     log.warning("assign tg: не ушло курьеру %s: %s",
                                 courier["name"], resp.text[:200])
                 else:
+                    # запоминаем сообщение: при возврате заказа отредактируем его
+                    STATE.setdefault("tg_assign", {})[cid] = {
+                        "chat": chat, "mid": data.get("result", {}).get("message_id")}
                     log.info("telegram sent (assign): %s", courier["name"])
             except (requests.RequestException, ValueError) as e:
                 log.warning("assign tg: %s", e)
@@ -866,12 +876,45 @@ def return_order(oid):
         return jsonify({"error": "Заказ другого депо"}), 403
     if (order.get("status") or "ready") != "out":
         return jsonify({"error": "Заказ не в развозке"}), 400
+    cid = order.get("assigned") or ""
+    courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
     order["status"] = "ready"
     order["assigned"] = ""
     order["out_at"] = ""
     _persist_orders()
     _invalidate_plan(pid=_obj_point(order))
     _ev("disp", f"вернул «{order.get('address') or oid}» в очередь")
+
+    # TG-сообщение курьера должно жить вместе с планом: пересобираем его
+    # по оставшимся заказам и редактируем (ссылки и кнопки обновятся)
+    ref = STATE.get("tg_assign", {}).get(cid) if cid else None
+    if ref and courier and CFG["tg_bot_token"]:
+        stops = [{"address": o["address"], "eta_clock": None,
+                  "lat": o.get("lat"), "lng": o.get("lng")}
+                 for o in STATE["orders"]
+                 if o.get("assigned") == cid and (o.get("status") or "ready") == "out"]
+        me = _me()
+        def _tg_edit():
+            if stops:
+                payload = _tg_route_message(courier["name"], stops, me)
+            else:
+                payload = {"text": f"📦 {_esc(courier['name'])}: все заказы"
+                                   " сняты с развозки", "parse_mode": "HTML"}
+            payload.update({"chat_id": ref["chat"], "message_id": ref["mid"]})
+            try:
+                resp = requests.post(
+                    f"https://api.telegram.org/bot{CFG['tg_bot_token']}"
+                    "/editMessageText", json=payload, timeout=10)
+                desc = resp.json().get("description", "")
+                if "not modified" not in desc.lower():
+                    if not resp.json().get("ok"):
+                        log.warning("return tg: не отредактировано (%s): %s",
+                                    courier["name"], desc[:200])
+                if "message to edit not found" in desc.lower():
+                    STATE.get("tg_assign", {}).pop(cid, None)
+            except (requests.RequestException, ValueError) as e:
+                log.warning("return tg: %s", e)
+        threading.Thread(target=_tg_edit, daemon=True).start()
     return _payload()
 
 
