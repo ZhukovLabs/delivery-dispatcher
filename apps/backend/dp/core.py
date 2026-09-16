@@ -408,7 +408,7 @@ def _history_today(point_id=None):
 # за тот же день — отношение масштабирует скорость по умолчанию.
 _SPEED_MIN_GEO_S = 180.0   # нужно >= 3 минут движения, чтобы доверять гео
 _SPEED_MIN_DEL_N = 2       # нужно >= 2 доставок, чтобы сравнивать темп
-_SPEED_KMH_BOUNDS = (5.0, 80.0)
+_SPEED_KMH_BOUNDS = (5.0, 160.0)
 _SPEED_RATIO_BOUNDS = (0.6, 1.7)  # фоллбек не может уводить далеко от нормы
 _SPEED_SEG_MIN_M = 40.0    # короче 40 м — дрожь стояния, не движение
 _SPEED_MAX_ACC_M = 100.0   # точность хуже 100 м — точка мусорная
@@ -428,7 +428,7 @@ def _speed_add(courier_id, day=None, geo_m=0.0, geo_s=0.0, del_n=0, del_min=0.0)
 def _speed_geo_sample(courier_id, prev, cur):
     """Складывает отрезок между двумя гео-точками в дневной замер (или игнор)."""
     dt = cur["ts"] - prev["ts"]
-    if not (15 <= dt <= 600):
+    if not (3 <= dt <= 600):
         return
     if max(prev.get("acc") or 0, cur.get("acc") or 0) > _SPEED_MAX_ACC_M:
         return  # точность хуже 100 м — верить отрезку нельзя
@@ -436,7 +436,7 @@ def _speed_geo_sample(courier_id, prev, cur):
     if m < _SPEED_SEG_MIN_M:
         return  # дрожь на месте / шаг внутри погрешности GPS
     kmh = m / 1000.0 / (dt / 3600.0)
-    if 3.0 <= kmh <= 80.0:
+    if 3.0 <= kmh <= 160.0:
         _speed_add(courier_id, geo_m=m, geo_s=dt)
 
 
@@ -461,7 +461,7 @@ def _speed_current_kmh(pos, now):
             continue
         m = haversine_km(a, b) * ROAD_FACTOR * 1000.0
         kmh = m / 1000.0 / (dt / 3600.0)
-        if kmh > 90.0:
+        if kmh > 170.0:
             continue  # GPS-прыжок
         if m < 15.0 and kmh < 5.0:
             t_sum += dt  # стоит на месте: время идёт, метры — нет
@@ -1589,8 +1589,9 @@ def _deliver_track(c, pos, now=None):
                              "Курьер отъехал от адреса — спрошу при следующем заезде.")
 
 
-_AWAY_AUTO_KM = 0.5    # дальше этого от своей точки курьер «уехал»
+_AWAY_AUTO_KM = 0.5    # дальше этого от своей точки курьер «уехал» (без заказов)
 _AWAY_DWELL_S = 60     # непрерывно, столько секунд (глушит GPS-прыжок и «отошёл к машине»)
+_AWAY_ORDER_S = 15     # с выданными заказами «в пути» включаем быстрее
 _BACK_DWELL_S = 120    # простой у точки после закрытия всех заказов — «на базе»
 
 
@@ -1613,11 +1614,13 @@ def _auto_status_apply(c, new_status):
 def _auto_status_track(c, pos, now=None):
     """Авто-статусы по гео (в обе стороны, только с живым гео):
 
-    «база» -> «в пути»: уехал дальше _AWAY_AUTO_KM и держится _AWAY_DWELL_S.
+    «база» -> «в пути»: с выданными заказами — отъехал от точки дальше
+    TG_GEO_AT_PLACE и держится _AWAY_ORDER_S; без заказов — уехал дальше
+    _AWAY_AUTO_KM и держится _AWAY_DWELL_S.
     «в пути» -> «база»: БЫЛ в развозке (выданные заказы закрыты) и простоял
     у своей точки _BACK_DWELL_S. Курьер, который «в пути» стоит у точки и
     ждёт выдачи, назад НЕ переводится — заказов не было, возврат за диспетчером.
-    Зона 150 м..500 м — гистерезис: счётчик не тикает и не сбрасывается.
+    Без заказов зона 150 м..500 м — гистерезис: счётчик не тикает и не сбрасывается.
     """
     home = _home_point(c)
     chat = c.get("tg_chat_id") or ""
@@ -1634,7 +1637,12 @@ def _auto_status_track(c, pos, now=None):
     if out:
         rec["went_out"] = True
     if status == "base":
-        if d > _AWAY_AUTO_KM:
+        # с заказами порог ниже и подтверждение короче — курьер уже развозит
+        if out:
+            away_km, dwell_s = TG_GEO_AT_PLACE, _AWAY_ORDER_S
+        else:
+            away_km, dwell_s = _AWAY_AUTO_KM, _AWAY_DWELL_S
+        if d > away_km:
             rec["since"] = rec["since"] or now
             if now - rec["since"] >= _AWAY_DWELL_S:
                 rec["since"], rec["went_out"] = None, False

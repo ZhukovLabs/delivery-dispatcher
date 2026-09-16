@@ -39,7 +39,7 @@ export function avaOf(email: string): [string, string] {
 
 export const SEG_TITLES: Record<string, string> = {
   base: "На базе: отдать сейчас",
-  away: "В пути: следующим заездом",
+  away: "В пути",
   off: "Не участвует в расчёте",
 };
 
