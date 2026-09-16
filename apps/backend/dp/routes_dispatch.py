@@ -51,6 +51,9 @@ def get_route():
     if not 2 <= len(pts) <= 50 or not all(_valid_latlng(p["lat"], p["lng"]) for p in pts):
         return jsonify({"error": "нужно 2..50 корректных точек"}), 400
     geom = routing_geometry(pts)
+    log.info("api/route: pts=%s -> %d pts, head=%s",
+             [(round(p["lat"], 5), round(p["lng"], 5)) for p in pts],
+             len(geom or []), str(geom[:2]) if geom else None)
     if not geom:
         return jsonify({"error": "роутер недоступен"}), 502
     return jsonify({"geometry": geom})
