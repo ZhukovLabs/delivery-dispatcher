@@ -1003,25 +1003,8 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
         auto_flag[g] = bool(auto_prio > 0 and age_min >= auto_prio)
         eff_prio[g] = bool(o.get("prio") or auto_flag[g])
 
-    def _start_delay(c):
-        """Когда курьер сможет выехать со своей точки выдачи с новой партией.
-        Занятость не выкидывает курьера из расчёта — она честно удорожает
-        его старт, и решатель сам взвешивает, выгодно ли его ждать."""
-        if c["status"] != "away":
-            return 0
-        g = _courier_geo(c, _home_point(c))
-        if g:  # живая гео точнее ручной оценки
-            if g.get("has_out"):
-                # ещё развозит: довезти остаток по адресам + вернуться +
-                # перезагрузиться (back_min уже содержит цепочку адресов)
-                return min(480, g["back_min"] + reload_min)
-            if g.get("to_point_min") is not None:
-                # заказы прежней партии ещё не забраны: доехать + погрузиться
-                return min(480, g["to_point_min"] + reload_min)
-            return g["back_min"]
-        return max(0, int(c.get("back_min", 15)))
-
-    avail = {c["id"]: _start_delay(c) for c in couriers}
+    avail = {c["id"]: (0 if c["status"] != "away" else _start_delay_min(c))
+             for c in couriers}
     home_of = {c["id"]: home_idx[_eff_home(c)["id"]] for c in couriers}
     # Точка выдачи каждого заказа: везти его могут только курьеры этой точки.
     first_pid = STATE["points"][0]["id"]
@@ -1333,9 +1316,58 @@ def _my_point():
     return (STATE.get("points") or [{}])[0].get("id") or ""
 
 
+def _start_delay_min(c):
+    """Когда away-курьер сможет выехать со своей точки с новой партией.
+    Занятость не выкидывает курьера из расчёта — она честно удорожает
+    его старт, и решатель сам взвешивает, выгодно ли его ждать."""
+    settings = STATE["settings"]
+    reload_min = max(0, int(settings.get("reload_min", 10)))
+    g = _courier_geo(c, _home_point(c))
+    if g:  # живая гео точнее ручной оценки
+        if g.get("has_out"):
+            # ещё развозит: довезти остаток по адресам + вернуться +
+            # перезагрузиться (back_min уже содержит цепочку адресов)
+            return min(480, g["back_min"] + reload_min)
+        if g.get("to_point_min") is not None:
+            # заказы прежней партии ещё не забраны: доехать + погрузиться
+            return min(480, g["to_point_min"] + reload_min)
+        return g["back_min"]
+    return max(0, int(c.get("back_min", 15)))
+
+
+def _refresh_plan_delays(plan):
+    """План — снимок на момент расчёта, а «старт +N мин» на карточке
+    должен показывать, сколько ждать СЕЙЧАС: away-курьер мог вернуться
+    быстрее или застрять. Обновляем задержку первого заезда и сдвигаем
+    его ETA; сами назначение заказов не трогаем."""
+    if not plan or not plan.get("routes"):
+        return plan
+    now = datetime.now()
+    cmap = {c["id"]: c for c in STATE["couriers"]}
+    for r in plan["routes"]:
+        c = cmap.get(r.get("courier_id"))
+        if not c or c.get("status") != "away" or not r.get("trips"):
+            continue
+        new_d = min(480, _start_delay_min(c))
+        tr = r["trips"][0]
+        d = new_d - (tr.get("start_delay_min") or 0)
+        if abs(d) < 1:
+            continue
+        tr["start_delay_min"] = new_d
+        tr["start_clock"] = (now + timedelta(minutes=new_d)).strftime("%H:%M")
+        tr["total_min"] += d
+        tr["end_clock"] = (now + timedelta(minutes=tr["total_min"])).strftime("%H:%M")
+        for s in tr["stops"]:
+            s["eta_min"] += d
+            s["eta_clock"] = (now + timedelta(minutes=s["eta_min"])).strftime("%H:%M")
+        r["start_delay_min"] = new_d
+        r["total_min"] = max(t["total_min"] for t in r["trips"])
+    return plan
+
+
 def _plan_for(pid):
-    """План депо по id точки."""
-    return STATE["plans"].get(pid)
+    """План депо по id точки (с живой задержкой старта away-курьеров)."""
+    return _refresh_plan_delays(STATE["plans"].get(pid))
 
 
 def _courier_plan(c):
