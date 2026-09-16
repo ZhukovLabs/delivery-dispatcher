@@ -782,7 +782,8 @@ def _cache_matrix(key, value):
 
 
 def routing_table(points):
-    """Матрица времени/расстояния: ORS -> OSRM (FOSSGIS -> демо) -> offline.
+    """Матрица времени/расстояния: OSRM (локальный docker -> FOSSGIS -> демо)
+    -> ORS (запасной, квота) -> offline.
 
     Результат кэшируется по набору точек (30 мин): повторный расчёт того же
     набора не тратит квоту внешних сервисов и занимает миллисекунды.
@@ -793,27 +794,24 @@ def routing_table(points):
     if hit and time.time() - hit[0] < _MATRIX_TTL:
         ts, durations, distances, provider = hit
         return durations, distances, provider
-    durations = distances = None
-    provider = "offline"
-    if len(points) <= ORS_MAX_POINTS:
+    durations, distances = osrm_table(points)
+    provider = "OSRM" if durations is not None else "offline"
+    if durations is None and len(points) <= ORS_MAX_POINTS:
         durations, distances = ors_matrix(points)
         if durations is not None:
             provider = "ORS"
-    if durations is None:
-        durations, distances = osrm_table(points)
-        if durations is not None:
-            provider = "OSRM"
     _cache_matrix(key, (durations, distances, provider))
     return durations, distances, provider
 
 
 def routing_geometry(points):
-    """Геометрия маршрута: ORS -> OSRM. None при полном сбое."""
+    """Геометрия маршрута: OSRM -> ORS. None при полном сбое."""
+    geom = osrm_geometry(points)
+    if geom:
+        return geom
     if len(points) <= ORS_MAX_POINTS:
-        geom = ors_geometry(points)
-        if geom:
-            return geom
-    return osrm_geometry(points)
+        return ors_geometry(points)
+    return None
 
 
 def build_time_matrix(points, settings):
