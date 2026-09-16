@@ -1371,6 +1371,26 @@ def _tg_api(method):
     return f"https://api.telegram.org/bot{CFG['tg_bot_token']}/{method}"
 
 
+# Тест-режим: все диалоги бота (гео-запросы, «доставлен?», привязки) уходят
+# одному живому человеку вместо реальных курьеров. Гео-конвейер при этом
+# остаётся честным: каждый бот-курьер привязан к своему синтетическому chat_id,
+# редирект происходит только в момент отправки сообщений.
+TG_TEST_REDIRECT = os.environ.get("TG_TEST_REDIRECT", "").strip()
+
+
+def _tg_out_chat(chat_id):
+    """(адресат, префикс) для исходящего сообщения: в тест-режиме всё одному
+    человеку, с пометкой, от какого курьера сообщение."""
+    cid = str(chat_id)
+    if TG_TEST_REDIRECT and cid != TG_TEST_REDIRECT:
+        c = next((x for x in STATE["couriers"]
+                  if str(x.get("tg_chat_id") or "") == cid), None)
+        pref = f"[{_esc(c['name'])}] " if c else "[тест] "
+        return TG_TEST_REDIRECT, pref
+    return cid, ""
+    return f"https://api.telegram.org/bot{CFG['tg_bot_token']}/{method}"
+
+
 def _esc(s):
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -1389,9 +1409,10 @@ def _plural(n, forms):
 
 def _tg_send(chat_id, text):
     """Исходящее сообщение курьеру (ошибки не критичны — молча в лог)."""
+    chat_id, pref = _tg_out_chat(chat_id)
     try:
         requests.post(_tg_api("sendMessage"),
-                      json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=5)
+                      json={"chat_id": chat_id, "text": pref + text, "parse_mode": "HTML"}, timeout=5)
     except requests.RequestException as e:
         log.warning("tg sendMessage: %s", e)
 
@@ -1399,9 +1420,10 @@ def _tg_send(chat_id, text):
 def _tg_send_kb(chat_id, text, buttons):
     """Сообщение с инлайн-кнопками. buttons = [[{text, callback_data}, ...], ...].
     Возвращает message_id или None (не отправилось)."""
+    chat_id, pref = _tg_out_chat(chat_id)
     try:
         r = requests.post(_tg_api("sendMessage"),
-                          json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                          json={"chat_id": chat_id, "text": pref + text, "parse_mode": "HTML",
                                 "reply_markup": {"inline_keyboard": buttons}}, timeout=5)
         data = r.json()
         if data.get("ok"):
@@ -1414,8 +1436,9 @@ def _tg_send_kb(chat_id, text, buttons):
 
 def _tg_edit_msg(chat_id, message_id, text, buttons=None):
     """Правка сообщения бота (смена текста/кнопок). Ошибки молча в лог."""
+    chat_id, pref = _tg_out_chat(chat_id)
     payload = {"chat_id": chat_id, "message_id": message_id,
-               "text": text, "parse_mode": "HTML"}
+               "text": pref + text, "parse_mode": "HTML"}
     if buttons is not None:
         payload["reply_markup"] = {"inline_keyboard": buttons}
     try:
@@ -1734,6 +1757,15 @@ def _tg_callback(cb):
         _tg_answer_cb(cbid, "Кнопка не распознана")
         return
     _, oid, act = parts
+    # тест-режим: кнопки жмёт живой человек в редирект-чате — возвращаем
+    # диалог к синтетическому чату курьера, которому выдан заказ
+    if TG_TEST_REDIRECT and chat == TG_TEST_REDIRECT:
+        order0 = next((o for o in STATE["orders"] if o["id"] == oid), None)
+        c0 = next((c for c in STATE["couriers"]
+                   if c.get("id") == (order0 or {}).get("assigned")), None) \
+            if order0 else None
+        if c0 and c0.get("tg_chat_id"):
+            chat = str(c0["tg_chat_id"])
     pend = STATE["tg_ask"].get(chat, {}).get(oid)
     order = next((o for o in STATE["orders"] if o["id"] == oid), None)
     courier = next((c for c in STATE["couriers"]
