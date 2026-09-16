@@ -132,6 +132,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     routeLine: null as any | null,
     routeSig: "",
     routeFetch: "",                    // последний запрос дорогой геометрии
+    routeGeom: null as { key: string; coords: [number, number][] } | null,
     orderCircle: null as any | null,   // радиус простоя у выбранного заказа
     orderCircleOid: null as string | null,
   });
@@ -338,11 +339,23 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         rp = [[hp.lat, hp.lng], ...(r.stops || []).map(s => [s.lat, s.lng] as [number, number])];
       }
       if (rp && rp.length > 1) {
+        const key = cid + "|" + rp.map(p => `${p[0].toFixed(3)},${p[1].toFixed(3)}`).join(";");
+        const roadStyle = { strokeColor: color, strokeWidth: 5, strokeOpacity: .95, zIndex: 30 } as const;
+        // гео-тики перерисовывают маршрут каждую секунду: если дорогая
+        // геометрия для этих точек уже получена — рисуем её сразу, а не
+        // прямыми (иначе дорога «пропадала» до следующего запроса, а
+        // повторный запрос не уходил — ключ совпадал)
+        const cached = L.current.routeGeom as { key: string; coords: [number, number][] } | null;
+        if (cached && cached.key === key) {
+          const road = new ym.Polyline(cached.coords, {}, roadStyle);
+          L.current.routeLine = road;
+          map.geoObjects.add(road);
+          return;
+        }
         const straight = new ym.Polyline(rp, {},
           { strokeColor: color, strokeWidth: 5, strokeOpacity: .6, zIndex: 30 });
         L.current.routeLine = straight;
         map.geoObjects.add(straight);
-        const key = cid + "|" + rp.map(p => `${p[0].toFixed(3)},${p[1].toFixed(3)}`).join(";");
         if (L.current.routeFetch !== key) {
           L.current.routeFetch = key;
           const qs = encodeURIComponent(
@@ -353,13 +366,17 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
               if (L.current.routeFetch !== key || selCid.current !== cid) return;
               const g = j.geometry;
               if (!g || g.length < 2) return;
+              L.current.routeGeom = { key, coords: g };
               if (L.current.routeLine) map.geoObjects.remove(L.current.routeLine);
-              const road = new ym.Polyline(g, {},
-                { strokeColor: color, strokeWidth: 5, strokeOpacity: .95, zIndex: 30 });
+              const road = new ym.Polyline(g, {}, roadStyle);
               L.current.routeLine = road;
               map.geoObjects.add(road);
             })
-            .catch(() => { /* остаются прямые — уже нарисованы */ });
+            .catch(() => {
+              // роутер не ответил — прямые уже нарисованы; разрешим повторную
+              // попытку на следующем тике, а не застреваем на прямых
+              if (L.current.routeFetch === key) L.current.routeFetch = "";
+            });
         }
         return;
       }
