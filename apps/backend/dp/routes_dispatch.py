@@ -730,10 +730,12 @@ def plan_help():
         _bump()
 
 
-def _tg_route_message(courier_name, stops, me):
+def _tg_route_message(courier_name, stops, me, origin=None):
     """Текст+клавиатура TG-сообщения о выдаче: адреса с ETA, у каждого —
-    ссылки «Маршрут: Яндекс | Google» с новой строки (маршрут до точки от
-    геопозиции открывшего), внизу — кнопки «Весь маршрут» друг под другом.
+    ссылки «Маршрут: Яндекс | Google» с новой строки, внизу — кнопки
+    «Весь маршрут» друг под другом. origin="lat,lng" — точка старта
+    (Google без origin спрашивает начальную точку сам и в браузере
+    внутри Telegram геолокации не имеет — поэтому ставим её сами).
     Используется и при отправке (assign), и при редактировании (return)."""
     def _ya_link(sp):
         if sp.get("lat") is None or sp.get("lng") is None:
@@ -763,14 +765,15 @@ def _tg_route_message(courier_name, stops, me):
     pts = [f"{s['lat']},{s['lng']}" for s in stops
            if s.get("lat") is not None and s.get("lng") is not None]
     if len(pts) >= 2:  # маршрут строим минимум по двум точкам
+        gg = ("https://www.google.com/maps/dir/?api=1"
+              + (f"&origin={origin}" if origin else "")
+              + "&destination=" + pts[min(len(pts), 10) - 1]
+              + "&waypoints=" + "%7C".join(pts[:min(len(pts), 10) - 1])
+              + "&travelmode=driving")
         kb = [[{"text": "Яндекс | Весь маршрут",
                 "url": "https://yandex.ru/maps/?rtext=~"
                        + "~".join(pts[:10]) + "&rtt=auto"}],
-              [{"text": "Google | Весь маршрут",
-                "url": ("https://www.google.com/maps/dir/?api=1"
-                        "&destination=" + pts[min(len(pts), 10) - 1]
-                        + "&waypoints=" + "%7C".join(pts[:min(len(pts), 10) - 1])
-                        + "&travelmode=driving")}]]
+              [{"text": "Google | Весь маршрут", "url": gg}]]
         payload["reply_markup"] = {"inline_keyboard": kb}
     return payload
 
@@ -843,8 +846,12 @@ def assign_orders():
     # отдельная кнопка; шлём в фоне, выдача не ждёт сеть Telegram
     chat = (courier.get("tg_chat_id") or "").strip()
     if chat and CFG["tg_bot_token"] and given_stops:
+        home = _home_point(courier)
+
         def _tg_assign():
-            payload = _tg_route_message(courier["name"], given_stops, me)
+            payload = _tg_route_message(courier["name"], given_stops, me,
+                                        origin=f"{home['lat']},{home['lng']}"
+                                        if home.get("lat") is not None else None)
             payload["chat_id"] = chat
             try:
                 resp = requests.post(
@@ -894,9 +901,14 @@ def return_order(oid):
                  for o in STATE["orders"]
                  if o.get("assigned") == cid and (o.get("status") or "ready") == "out"]
         me = _me()
+        home = _home_point(courier)
+        origin = (f"{home['lat']},{home['lng']}"
+                  if home.get("lat") is not None else None)
+
         def _tg_edit():
             if stops:
-                payload = _tg_route_message(courier["name"], stops, me)
+                payload = _tg_route_message(courier["name"], stops, me,
+                                            origin=origin)
             else:
                 payload = {"text": f"📦 {_esc(courier['name'])}: все заказы"
                                    " сняты с развозки", "parse_mode": "HTML"}
