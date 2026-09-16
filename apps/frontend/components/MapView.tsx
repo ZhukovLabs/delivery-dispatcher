@@ -233,20 +233,13 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   const planMap: Record<string, { color: string; label: string; popup: string }> = {};
   const plan = state.plan as Plan | null;
   if (plan) {
-    const names = plan.routes.map(r => r.courier_name.toUpperCase());
-    const tag = (name: string) => {
-      for (let l = 1; l <= name.length; l++) {
-        const t = name.slice(0, l);
-        if (names.filter(n => n.slice(0, l) === t).length === 1) return t;
-      }
-      return name;
-    };
+    // на пине — только порядковый номер доставки (цвет уже несёт курьера)
     let k = 0;
     plan.routes.forEach(r => r.stops.forEach(s => {
       k += 1;
       planMap[s.order_id] = {
         color: r.color,
-        label: `${tag(r.courier_name.toUpperCase())}${k}`,
+        label: String(k),
         popup: popupHtml({ address: s.address, courier: r.courier_name,
                            eta: s.eta_clock, lateMin: s.late_min,
                            prio: s.prio, deadline: s.deadline }),
