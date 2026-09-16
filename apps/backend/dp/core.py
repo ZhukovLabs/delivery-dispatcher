@@ -1921,6 +1921,19 @@ def _tg_handle_update(u):
             _load_track(courier, smoothed, raw["ts"])
             _deliver_track(courier, smoothed, raw["ts"])
             _auto_status_track(courier, smoothed, raw["ts"])
+            # диалоги «доставлен?» и трекеры простоя — в БД не реже раза в 15 с
+            # (этот же поток обрабатывает нажатия кнопок — гонок нет)
+            if raw["ts"] - STATE.get("_tg_persist_ts", 0) > 15:
+                STATE["_tg_persist_ts"] = raw["ts"]
+                try:
+                    with _db_lock, _db() as cx:
+                        cx.executemany(
+                            "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
+                            [("tg_ask", json.dumps(STATE["tg_ask"], ensure_ascii=False)),
+                             ("tg_deliv",
+                              json.dumps(STATE["tg_deliv"], ensure_ascii=False))])
+                except sqlite3.Error:
+                    pass
             _bump(geo=True)  # движение курьера — карта обновится (хаб батчит ≥1 с)
         else:
             # live-локация шлёт правки каждые несколько секунд — «не привязан»
