@@ -73,8 +73,11 @@ async def flask_compat(request: Request, call_next):
             pass
     token = set_request_ctx(request, parsed, sess)
 
-    # 3) guard: эквивалент before_request (вход/health открыты)
-    if request.url.path not in _GUARD_EXEMPT:
+    # 3) guard: эквивалент before_request (вход/health открыты);
+    #    /socket.io/* не пускаем через cookie-guard: handshake идёт с токеном
+    #    в auth-payload (у WS нет cookie), валидирует сам ws-сервер
+    path = request.url.path
+    if path not in _GUARD_EXEMPT and not path.startswith("/socket.io/"):
         if not _me():
             reset_request_ctx(token)
             return JSONResponse({"error": "Требуется вход"}, status_code=401)
