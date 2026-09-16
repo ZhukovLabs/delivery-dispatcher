@@ -108,7 +108,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         center: [52.4345, 31.0137],
         zoom: 13,
         controls: ["zoomControl", "fullscreenControl", "geolocationControl"],
-      }, { suppressMapOpenBlock: true });
+      }, { suppressMapOpenBlock: true, yandexMapDisablePoiInteractivity: true });
       mapRef.current = map;
       // ховер-балуны не должны дёргать карту — подтягиваемся только по клику (#8)
       map.options.set("balloonAutoPan", false);
