@@ -315,18 +315,21 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   const planMap: Record<string, { color: string; label: string; popup: string }> = {};
   const plan = state.plan as Plan | null;
   if (plan) {
-    // на пине — только порядковый номер доставки (цвет уже несёт курьера)
-    let k = 0;
-    plan.routes.forEach(r => r.stops.forEach(s => {
-      k += 1;
-      planMap[s.order_id] = {
-        color: r.color,
-        label: String(k),
-        popup: popupHtml({ address: s.address, courier: r.courier_name,
-                           eta: s.eta_clock, inMin: s.eta_min, lateMin: s.late_min,
-                           prio: s.prio, deadline: s.deadline }),
-      };
-    }));
+    // на пине — порядковый номер доставки в маршруте ЭТОГО курьера
+    // (цвет уже несёт курьера; у каждого маршрута своя очередь с 1)
+    plan.routes.forEach(r => {
+      let k = 0;
+      r.stops.forEach(s => {
+        k += 1;
+        planMap[s.order_id] = {
+          color: r.color,
+          label: String(k),
+          popup: popupHtml({ address: s.address, courier: r.courier_name,
+                             eta: s.eta_clock, inMin: s.eta_min, lateMin: s.late_min,
+                             prio: s.prio, deadline: s.deadline }),
+        };
+      });
+    });
   }
 
   const courierBalloon = (c: Courier) => {
