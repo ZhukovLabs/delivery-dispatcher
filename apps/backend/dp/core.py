@@ -1579,9 +1579,14 @@ def _deliver_track(c, pos, now=None):
                 _ev("sys", f"{c.get('name')} был у адреса «{o.get('address')}»")
                 _bump()
         else:
-            # выехал из радиуса — заезд закрыт: новый заезд спросит заново
+            # выехал из радиуса — заезд закрыт: снимаем простой и закрываем
+            # висящий вопрос, чтобы следующий заезд спросил заново
             rec.pop("since", None)
             rec.pop("asked", None)
+            pend = STATE["tg_ask"].get(chat, {}).pop(o["id"], None)
+            if pend and pend.get("msg"):
+                _tg_edit_msg(chat, pend["msg"],
+                             "Курьер отъехал от адреса — спрошу при следующем заезде.")
 
 
 _AWAY_AUTO_KM = 0.5    # дальше этого от своей точки курьер «уехал»
