@@ -104,7 +104,7 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                 : <span className="chip chip-amber">следующим заездом</span>}
               {r.start_delay_min > 0 && (
                 <span className="chip chip-amber" title="Курьер ещё в пути, маршрут сдвинут на время возврата">
-                  старт +{r.start_delay_min} мин
+                  старт +{Math.ceil(r.start_delay_min)} мин
                 </span>
               )}
             </div>
@@ -126,7 +126,7 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
               <div key={ti}>
                 {r.trips.length > 1 && (
                   <div className="trip-head">
-                    Заезд {ti + 1} · старт ≈{tr.start_clock || clock(tr.start_delay_min)}{tr.start_delay_min ? ` (+${tr.start_delay_min} мин)` : ""}
+                    Заезд {ti + 1} · старт ≈{tr.start_clock || clock(tr.start_delay_min)}{tr.start_delay_min ? ` (+${Math.ceil(tr.start_delay_min)} мин)` : ""}
                   </div>
                 )}
                 <ol className="stops">
