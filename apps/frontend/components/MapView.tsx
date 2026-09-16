@@ -669,6 +669,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       L.current.lines.forEach(l => map.geoObjects.remove(l));
       L.current.lines = [];
       if (plan && pickPts.length) {
+        // eslint-disable-next-line no-console
+        console.debug("[plan-lines] draw", plan.solved_at,
+          plan.routes.map(r => ({ n: r.courier_name, trips: (r.trips || []).map(t => ({ s: (t.stops || []).length, g: (t.geometry || []).length })) })));
         plan.routes.forEach(r => (r.trips || []).forEach(tr => {
           const hp = r.home_point || pickPts[0];
           const depotPt: [number, number] = [hp.lat, hp.lng];
