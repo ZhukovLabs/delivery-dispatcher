@@ -3,6 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { fmtAge, type AppState, type Plan, type Courier, type Order } from "@/lib/api";
 
+// = TG_GEO_AT_PLACE бэкенда: радиус, внутри которого курьеру зачтётся
+// простой «у адреса» (30 с — и бот спросит «доставлен?»)
+const GEO_AT_PLACE_M = 150;
+
 const havKm = (a: [number, number], b: [number, number]) => {
   const r = Math.PI / 180;
   const h = Math.sin((b[0] - a[0]) * r / 2) ** 2 +
@@ -109,6 +113,8 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     lines: [] as any[],
     routeLine: null as any | null,
     routeSig: "",
+    orderCircle: null as any | null,   // радиус простоя у выбранного заказа
+    orderCircleOid: null as string | null,
   });
   const anims = useRef(new Map<string, { pm: any; from: [number, number]; to: [number, number]; start: number }>());
   const rafRef = useRef(0);
@@ -138,11 +144,16 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
           onPickRef.current({ lat: c[0], lng: c[1] });
           return;
         }
-        // клик мимо маркеров — снять выбор курьера и убрать его маршрут
+        // клик мимо маркеров — снять выбор курьера, убрать маршрут и радиус
         if (selCid.current) {
           selCid.current = null;
           refreshRef.current();
           setSelTick(t => t + 1);
+        }
+        if (L.current.orderCircle) {
+          map.geoObjects.remove(L.current.orderCircle);
+          L.current.orderCircle = null;
+          L.current.orderCircleOid = null;
         }
       });
       map.container.fitToViewport();
@@ -374,6 +385,18 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     }
 
     /* 2) заказы: дубли — красные (#3), точки выбранного курьера — его цветом */
+
+    // радиус простоя вокруг выбранного заказа (= TG_GEO_AT_PLACE бэкенда):
+    // внутри круга 30-с простой курьера = вопрос «доставлен?»
+    const showOrderRadius = (oid: string, co: [number, number]) => {
+      if (L.current.orderCircle) map.geoObjects.remove(L.current.orderCircle);
+      const c = new ym.Circle([co, GEO_AT_PLACE_M], {},
+        { fillColor: "#3f7edf66", strokeColor: "#3f7edf", strokeWidth: 2,
+          strokeOpacity: .9, fillOpacity: .22, clickable: false, zIndex: 40 });
+      map.geoObjects.add(c);
+      L.current.orderCircle = c;
+      L.current.orderCircleOid = oid;
+    };
     const selCourier = selCid.current
       ? state.couriers.find(c => c.id === selCid.current) : null;
     const selOids = new Set<string>();
@@ -423,7 +446,12 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         { iconLayout: pinLayout(text, color),
           iconShape: { type: "Rectangle", coordinates: [[-16, -16], [16, 20]] },
           hideIconOnBalloonOpen: false, zIndex: 500, cursor: "pointer" }));
-      pm.events.add("click", () => { flyTo([o.lat, o.lng]); onMarkerClickRef.current(oid); });
+      pm.events.add("click", () => {
+        const co = pm.geometry.getCoordinates() as [number, number];
+        showOrderRadius(oid, co);
+        flyTo(co);
+        onMarkerClickRef.current(oid);
+      });
       L.current.orderSig.set(oid, sig);
     });
     for (const k of [...L.current.orders.keys()]) {
@@ -431,6 +459,11 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         map.geoObjects.remove(L.current.orders.get(k)!);
         L.current.orders.delete(k);
         L.current.orderSig.delete(k);
+        if (L.current.orderCircleOid === k && L.current.orderCircle) {
+          map.geoObjects.remove(L.current.orderCircle);
+          L.current.orderCircle = null;
+          L.current.orderCircleOid = null;
+        }
       }
     }
 
