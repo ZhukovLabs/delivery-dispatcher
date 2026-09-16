@@ -757,16 +757,26 @@ def assign_orders():
         return jsonify({"error": f"Заказ из точки «{pt}» — выдать может только "
                                  f"курьер этой точки"}), 400
     now = _now().isoformat(timespec="seconds")
-    # снимаем адреса/ETA выданных стопов ДО патча плана — для авто-сообщения курьеру
+    # снимаем адреса/координаты/ETA выданных стопов ДО патча плана —
+    # для авто-сообщения курьеру (с кнопками маршрута в Яндекс Картах)
     me = _me()
     oid_set = set(oids)
+    by_oid = {o["id"]: o for o in STATE["orders"]}
+
+    def _stop_snapshot(s):
+        o = by_oid.get(s.get("order_id") or "")
+        return {"address": s.get("address") or (o or {}).get("address", ""),
+                "eta_clock": s.get("eta_clock"),
+                "lat": (o or {}).get("lat"), "lng": (o or {}).get("lng")}
+
     route = next((r for r in (_courier_plan(courier) or {}).get("routes", [])
                   if r["courier_id"] == cid), None)
-    given_stops = ([{"address": s["address"], "eta_clock": s.get("eta_clock")}
+    given_stops = ([_stop_snapshot(s)
                     for tr in (route or {}).get("trips", [])
                     for s in tr["stops"] if s["order_id"] in oid_set]) if route else []
     if not given_stops:  # выдача мимо плана — хотя бы адреса
-        given_stops = [{"address": o["address"], "eta_clock": None}
+        given_stops = [{"address": o["address"], "eta_clock": None,
+                        "lat": o.get("lat"), "lng": o.get("lng")}
                        for o in STATE["orders"] if o["id"] in oid_set]
     given = 0
     for o in STATE["orders"]:
@@ -789,20 +799,38 @@ def assign_orders():
     chat = (courier.get("tg_chat_id") or "").strip()
     if chat and CFG["tg_bot_token"] and given_stops:
         def _tg_assign():
+            def _ya_link(sp):
+                # маршрут до точки: откуда — определит сам Яндекс (по гео открывшего)
+                if sp.get("lat") is None or sp.get("lng") is None:
+                    return None
+                return (f"https://yandex.ru/maps/?rtext=~{sp['lat']},{sp['lng']}"
+                        "&rtt=auto")
             z_word = _plural(len(given_stops), ("заказ", "заказа", "заказов"))
             lines = [f"🛵 <b>{_esc(courier['name'])}, в развозку</b>: "
                      f"{len(given_stops)} {z_word}"]
             for i, s in enumerate(given_stops, start=1):
-                lines.append(f"{i}. {_esc(s['address'])}"
+                link = _ya_link(s)
+                addr = (_esc(s["address"]) if not link
+                        else f'<a href="{link}">{_esc(s["address"])}</a>')
+                lines.append(f"{i}. {addr}"
                              + (f" · ≈{s['eta_clock']}" if s.get("eta_clock") else ""))
             lines.append("Время приблизительное, следите за сообщениями.")
             if (me or {}).get("name") and (me or {}).get("phone"):
                 lines.append(f"\nЕсть вопросы? - {_esc(me['name'])}, {me['phone']}")
+            # кнопка «весь маршрут»: от текущей геопозиции курьера по всем точкам
+            pts = [f"{s['lat']},{s['lng']}" for s in given_stops
+                   if s.get("lat") is not None and s.get("lng") is not None]
+            payload = {"chat_id": chat, "text": "\n".join(lines),
+                       "parse_mode": "HTML"}
+            if len(pts) >= 2:  # Яндекс строит маршрут минимум по двум точкам
+                payload["reply_markup"] = {"inline_keyboard": [[
+                    {"text": "🗺 Весь маршрут в Яндекс Картах",
+                     "url": "https://yandex.ru/maps/?rtext=~"
+                            + "~".join(pts[:10]) + "&rtt=auto"}]]}
             try:
                 resp = requests.post(
                     f"https://api.telegram.org/bot{CFG['tg_bot_token']}/sendMessage",
-                    json={"chat_id": chat, "text": "\n".join(lines),
-                          "parse_mode": "HTML"}, timeout=10)
+                    json=payload, timeout=10)
                 if not resp.json().get("ok"):
                     log.warning("assign tg: не ушло курьеру %s: %s",
                                 courier["name"], resp.text[:200])
