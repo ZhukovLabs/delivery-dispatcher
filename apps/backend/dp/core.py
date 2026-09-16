@@ -980,6 +980,8 @@ _LATE_WEIGHT = 25    # штраф за минуту опоздания к дед
                      # приоритетом (60/мин «поскорее»): у заказа с обоими
                      # флагами давят ОБА давления через две размерности
 _PRIO_WEIGHT = 60    # вес минуты доставки приоритетного заказа (против 5 у обычного)
+_DROP_PENALTY = 1_000_000  # штраф отказа от заказа; приоритет ×10, дедлайн ×5
+                           # (см. AddDisjunction ниже)
 _ASAP_WEIGHT = 5     # вес минуты ожидания обычного заказа («поскорее»)
 _SPAN_WEIGHT = 3     # вес секунды длительности заезда: компактность против
                      # срочности. Перекалибровано 17.09 на живом кейсе
@@ -1300,8 +1302,16 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
 
         # Разрешаем оставить заказ вне плана: дроп-визит с подавляющим штрафом
         # (чужой заказ стоит миллиард и к курьеру другой точки не попадёт).
+        # Вместимость кончилась — роняем самый «дешёвый» для бизнеса заказ:
+        # приоритетный держится до последнего (×10), с дедлайном — предпоследним
+        # (×5), иначе решателю выгоднее уронить именно «дорогие минуты».
         for ln in range(K, len(points)):
-            routing.AddDisjunction([manager.NodeToIndex(ln)], 1_000_000)
+            pen = _DROP_PENALTY
+            if eff_prio[ln]:
+                pen *= 10
+            elif deadline_rel[ln] is not None:
+                pen *= 5
+            routing.AddDisjunction([manager.NodeToIndex(ln)], pen)
 
         params = pywrapcp.DefaultRoutingSearchParameters()
         params.first_solution_strategy = (
