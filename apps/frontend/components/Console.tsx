@@ -16,7 +16,7 @@ import PlanPanel from "./console/PlanPanel";
 import ActivityFeed from "./console/ActivityFeed";
 import BindModal from "./console/BindModal";
 import Sheet from "./console/Sheet";
-import { AskDialog, HelpOverlay, PickBanner, Toast } from "./console/Overlays";
+import { AskDialog, HelpOverlay, PickBanner, SolveOverlay, Toast } from "./console/Overlays";
 import type { AskState, ToastState } from "./console/format";
 import { Loader2 } from "lucide-react";
 
@@ -440,6 +440,8 @@ export default function Console() {
           setSt={setSt} showToast={showToast} askConfirm={askConfirm}
         />
       )}
+
+      {(solving || !!st?.solving) && <SolveOverlay />}
 
       {helpOpen && <HelpOverlay onClose={() => setHelpOpen(false)} />}
 

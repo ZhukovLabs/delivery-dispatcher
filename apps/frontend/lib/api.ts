@@ -59,6 +59,7 @@ export interface AppState {
   cfg?: { tg?: boolean };
   tg?: { bot?: string; seen?: { chat_id: string; login: string; ts: number }[] };
   events?: { t: number; actor: string; text: string }[]; // лента активности
+  solving?: boolean; // в этом депо идёт расчёт развозки (блокирует UI)
 }
 
 export async function api<T = AppState>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {

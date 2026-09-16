@@ -728,38 +728,48 @@ def solve():
     mode = body.get("mode") if body.get("mode") in ("auto", "split", "now") else "auto"
     force = [x for x in (body.get("force") or []) if isinstance(x, str)]
     myp = _my_point()
-    if force:
-        for cid in force:
-            c = next((c for c in STATE["couriers"] if c["id"] == cid), None)
-            if not c:
-                return jsonify({"error": "Курьер не найден"}), 404
-            pid = _home_point(c)["id"]
-            if pid != myp:
-                pt = next((p["name"] for p in STATE.get("points", []) if p["id"] == pid),
-                          "другой точки")
-                return jsonify({"error": f"«{c['name']}» работает с точкой «{pt}» — "
-                                         f"он не может участвовать в плане вашего депо"}), 400
-            if not any((o.get("status") or "ready") == "ready"
-                       and _obj_point(o) == pid
-                       for o in STATE["orders"]):
-                pt = next((p["name"] for p in STATE.get("points", []) if p["id"] == pid),
-                          "его точки")
-                return jsonify({"error": f"У точки «{pt}» нет готовых заказов — "
-                                         f"«{c['name']}» не сможет участвовать в плане"}), 400
+    # один расчёт на депо: второй диспетчер получает отлуп, все клиенты депо
+    # видят блокирующий оверлей, пока расчёт идёт
+    if STATE.setdefault("solving", {}).get(myp):
+        return jsonify({"error": "Расчёт развозки уже идёт — подождите окончания"}), 409
+    STATE["solving"][myp] = True
+    _bump()
     try:
-        t0 = time.time()
-        plan = _compute_plan(mode, force=force, point_id=myp)
-        log.info("solve[%s]: %d routes, provider=%s, scenario=%s, %.1fs",
-                 myp[:6], len(plan["routes"]), plan.get("provider"),
-                 (plan.get("advice") or {}).get("chosen", "no-away"), time.time() - t0)
-    except (ValueError, RuntimeError) as e:
-        log.warning("solve failed: %s", e)
-        return jsonify({"error": str(e)}), 400
-    _persist_meta()
-    counts = ", ".join(f'{r["courier_name"]}: {r["count"]}'
-                       for r in plan["routes"]) or "нечего везти"
-    _ev("disp", f"рассчитал развозку — {counts}")
-    return _payload()
+        if force:
+            for cid in force:
+                c = next((c for c in STATE["couriers"] if c["id"] == cid), None)
+                if not c:
+                    return jsonify({"error": "Курьер не найден"}), 404
+                pid = _home_point(c)["id"]
+                if pid != myp:
+                    pt = next((p["name"] for p in STATE.get("points", []) if p["id"] == pid),
+                              "другой точки")
+                    return jsonify({"error": f"«{c['name']}» работает с точкой «{pt}» — "
+                                             f"он не может участвовать в плане вашего депо"}), 400
+                if not any((o.get("status") or "ready") == "ready"
+                           and _obj_point(o) == pid
+                           for o in STATE["orders"]):
+                    pt = next((p["name"] for p in STATE.get("points", []) if p["id"] == pid),
+                              "его точки")
+                    return jsonify({"error": f"У точки «{pt}» нет готовых заказов — "
+                                             f"«{c['name']}» не сможет участвовать в плане"}), 400
+        try:
+            t0 = time.time()
+            plan = _compute_plan(mode, force=force, point_id=myp)
+            log.info("solve[%s]: %d routes, provider=%s, scenario=%s, %.1fs",
+                     myp[:6], len(plan["routes"]), plan.get("provider"),
+                     (plan.get("advice") or {}).get("chosen", "no-away"), time.time() - t0)
+        except (ValueError, RuntimeError) as e:
+            log.warning("solve failed: %s", e)
+            return jsonify({"error": str(e)}), 400
+        _persist_meta()
+        counts = ", ".join(f'{r["courier_name"]}: {r["count"]}'
+                           for r in plan["routes"]) or "нечего везти"
+        _ev("disp", f"рассчитал развозку — {counts}")
+        return _payload()
+    finally:
+        STATE["solving"][myp] = False
+        _bump()
 
 
 def _compute_plan(mode="auto", advice=True, force=None, point_id=None):

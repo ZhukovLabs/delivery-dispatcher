@@ -48,6 +48,19 @@ export function AskDialog({ ask, onResolve }: { ask: AskState; onResolve: (v: bo
   );
 }
 
+export function SolveOverlay() {
+  // полный экран: расчёт развозки идёт (у нас или у другого диспетчера депо)
+  return (
+    <div className="solve-ov" role="status" aria-live="assertive" aria-label="Идёт расчёт развозки">
+      <div className="solve-ov-box">
+        <span className="solve-ov-spin" aria-hidden="true" />
+        <h3>Идёт расчёт развозки</h3>
+        <p>Данные обновятся автоматически — страница разблокируется сама</p>
+      </div>
+    </div>
+  );
+}
+
 export function Toast({ toast, onClose }: { toast: ToastState; onClose: () => void }) {
   return (
     <div id="toast" className={(toast.err ? "err " : "") + "show"}>

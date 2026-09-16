@@ -152,6 +152,8 @@ STATE = {
                  "hour_traffic": 1, "approach_center_min": 4, "approach_far_min": 2},
     "plans": {},         # pid -> план развозки (у каждого депо свой)
     "advice_modes": {},  # pid -> ручной выбор «ждать/не ждать» (now|split)
+    "solving": {},       # pid -> True: в депо идёт расчёт развозки (клиенты
+                         # блокируют UI, повторный запуск отклоняется)
     "color_seq": 0,      # монотонный счётчик: цвета не перемешиваются при удалениях
     # Telegram: кто писал боту (для привязки), последние локации курьеров, курсор getUpdates
     "tg_seen": {},       # chat_id -> {"chat_id", "login", "ts"}
@@ -1978,7 +1980,7 @@ def _payload(me=None, myp=None):
     couriers.sort(key=lambda cc: 0 if _obj_point(cc) == myp else 1)
     st = {k: v for k, v in STATE.items()
           if k not in ("tg_seen", "tg_pos", "tg_offset", "tg_nagged", "tg_load",
-                       "tg_deliv", "tg_away", "plans", "advice_modes")}
+                       "tg_deliv", "tg_away", "plans", "advice_modes", "solving")}
     seen = sorted(STATE["tg_seen"].values(), key=lambda x: -x["ts"])[:20]
     # живые счётчики по точкам: курьеры + админы онлайн
     now2 = time.time()
@@ -1996,6 +1998,9 @@ def _payload(me=None, myp=None):
     # скоуп депо: свои заказы, свой план и своя история; чужие — только курьеры
     st["orders"] = [o for o in st.get("orders") or [] if _obj_point(o) == myp]
     st["plan"] = _plan_for(myp)
+    # идёт ли сейчас расчёт развозки в ЭТОМ депо (блокирует UI всех его
+    # диспетчеров; словарь pid->bool наружу не отдаём)
+    st["solving"] = bool(STATE.get("solving", {}).get(myp))
     return jsonify({**st, "couriers": couriers,
                     "tg": {"bot": STATE["tg_bot"], "seen": seen},
                     "ors": ors_status(), "today": _history_today(point_id=myp),

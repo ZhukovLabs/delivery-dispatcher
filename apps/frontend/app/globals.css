@@ -43,6 +43,14 @@ html.dark .login-card input{background:#141c29;border-color:var(--line2);color:v
 .wsdot.ws-off{color:#e39a9a;border-color:#4d2f31}
 .wsdot.ws-off .wsdot-dot{background:#e8482b;animation:wsPulse 1s ease-in-out infinite}
 @keyframes wsPulse{50%{opacity:.35}}
+
+/* полноэкранная блокировка на время расчёта развозки */
+.solve-ov{position:fixed;inset:0;z-index:4000;display:grid;place-items:center;background:rgba(10,14,22,.55);backdrop-filter:blur(3px)}
+.solve-ov-box{display:flex;flex-direction:column;align-items:center;gap:10px;background:var(--panel,#fff);border-radius:16px;padding:34px 44px;box-shadow:0 18px 60px rgba(0,0,0,.35);text-align:center;max-width:min(420px,88vw)}
+.solve-ov-box h3{margin:0;font-size:19px}
+.solve-ov-box p{margin:0;font-size:13px;opacity:.7}
+.solve-ov-spin{width:38px;height:38px;border-radius:50%;border:4px solid rgba(232,72,43,.25);border-top-color:var(--acc,#e8482b);animation:solveSpin .9s linear infinite}
+@keyframes solveSpin{to{transform:rotate(360deg)}}
 .iconbtn{border:none;background:transparent;color:#aab6c9;cursor:pointer;font-size:14px;padding:6px;border-radius:8px;line-height:0;display:inline-flex;align-items:center;justify-content:center}
 .iconbtn:hover{background:#222d42;color:#fff}
 .iconbtn:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
