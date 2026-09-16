@@ -172,6 +172,21 @@ def walk(bot, step, stops_left):
 
 
 def main():
+    def _confirm(sess, base, chat, oid, name):
+        """Прожать диалог как курьер: «Да» -> «Подтвердить» (заказ закрыт
+        доставленным). Работает, пока диалог жив — бот жмёт сразу после
+        простоя у адреса, вопрос уже пришёл."""
+        try:
+            sess.post(base + "/api/sim/tgcb",
+                      json={"chat_id": chat, "data": f"dlv:{oid}:y"}, timeout=15)
+            time.sleep(0.4)
+            r = sess.post(base + "/api/sim/tgcb",
+                          json={"chat_id": chat, "data": f"dlv:{oid}:ok"}, timeout=15)
+            if r.status_code == 200:
+                log(f"{name}: доставил {oid[:6]} — подтвердил в диалоге")
+        except Exception as e:  # noqa: BLE001
+            log(f"{name}: confirm error {e!r}")
+
     ap = argparse.ArgumentParser(description="Боты-курьеры: эмуляция гео и развозки")
     ap.add_argument("--base", default="http://127.0.0.1:5050")
     ap.add_argument("--email", required=True)
@@ -184,6 +199,8 @@ def main():
     ap.add_argument("--tick", type=float, default=5.0, help="сек между тиками")
     ap.add_argument("--chat-base", type=int, default=9100000)
     ap.add_argument("--osrm", default="https://router.project-osrm.org")
+    ap.add_argument("--no-autoclose", action="store_true",
+                    help="не подтверждать доставку в диалоге (кнопки жмёт человек)")
     args = ap.parse_args()
 
     s = requests.Session()
@@ -327,6 +344,11 @@ def main():
                             b.visited.add(near)
                             b.dwell_stop = None
                             log(f"{b.name}: адрес готов, дальше")
+                            # как живой курьер: подтвердить доставку в диалоге,
+                            # иначе заказ висит открытым и статус курьера не
+                            # вернётся на «на базе» после возврата
+                            if not args.no_autoclose:
+                                _confirm(s, args.base, b.chat, near, b.name)
                     else:
                         b.dwell_stop = None
                         done = walk(b, b.step_deg(args.speed, args.tick),
