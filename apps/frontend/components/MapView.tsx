@@ -53,7 +53,9 @@ function loadYmaps(): Promise<any> {
       if (w.ymaps) { w.ymaps.ready(() => resolve(w.ymaps)); return; }
       const s = document.createElement("script");
       s.src = "https://api-maps.yandex.ru/2.1/?lang=ru_RU" +
-        (process.env.NEXT_PUBLIC_YMAPS_KEY ? `&apikey=${process.env.NEXT_PUBLIC_YMAPS_KEY}` : "");
+        (process.env.NEXT_PUBLIC_YMAPS_KEY
+          ? `&apikey=${process.env.NEXT_PUBLIC_YMAPS_KEY}` +
+            `&suggest_apikey=${process.env.NEXT_PUBLIC_YMAPS_KEY}` : "");
       s.async = true;
       s.onload = () => w.ymaps.ready(() => resolve(w.ymaps));
       s.onerror = () => { ymapsPromise = null; reject(new Error("не удалось загрузить Яндекс.Карты")); };

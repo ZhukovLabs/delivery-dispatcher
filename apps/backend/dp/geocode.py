@@ -109,14 +109,56 @@ def _hedged(providers, hedge_s=GEO_HEDGE_S, final_wait=GEO_FINAL_S):
 # ---------- провайдеры прямого поиска: единый формат ----------
 # {label, lat, lng, hn, road, place, kind, state}
 
-def search_yandex(q, lat, lng):
-    if not YANDEX_KEY:
-        raise RuntimeError("не задан YANDEX_GEOCODER_KEY")
-    resp = requests.get("https://geocode-maps.yandex.ru/1.x/",
-                        params={"apikey": YANDEX_KEY, "geocode": q, "format": "json",
-                                "results": 7, "lang": "ru_RU",
-                                "ll": f"{lng},{lat}", "spn": "0.35,0.35"},
+def _yandex_to_item(name, desc, kind, lat, lng):
+    """Общий форматтер яндекс-результатов (v1 и легаси дают name/description)."""
+    desc = re.sub(r"^Беларусь,?\s*", "", (desc or "").strip())
+    desc = re.sub(r"^(Гомельская область|Гомельский район),?\s*", "", desc)
+    city = desc.split(",")[0].strip()
+    name = (name or "").strip()
+    label = f"{city}, {name}" if city and city.lower() != name.lower() else name
+    hn = _extract_house(name)
+    road = _strip_street_type(re.sub(r"\s*\d+[а-яa-z]*(\s*[/-]\s*\d+)?\s*$", "", name))
+    kind = {"house": "house", "street": "street", "locality": "village",
+            "district": "suburb", "area": "suburb"}.get(kind, kind or "")
+    return {"label": label, "lat": lat, "lng": lng,
+            "hn": hn, "road": road, "place": _clean_place(city),
+            "kind": kind, "state": "Гомельская область"}
+
+
+def _yandex_v1(geocode, spn, results, kind=None):
+    """Официальный HTTP API Геокодера /v1 (требует ключ, координаты «lng lat»)."""
+    params = {"apikey": YANDEX_KEY, "geocode": geocode, "format": "json",
+              "results": results, "lang": "ru_RU"}
+    if spn:
+        params["ll"], params["spn"] = spn
+    if kind:
+        params["kind"] = kind
+    resp = requests.get("https://geocode-maps.yandex.ru/v1/", params=params,
                         headers=UA, timeout=GEO_FINAL_S)
+    resp.raise_for_status()
+    feats = (resp.json() or {}).get("features") or []
+    out = []
+    for f in feats:
+        geo = f.get("geometry") or {}
+        pos = geo.get("coordinates") or []
+        if geo.get("type") != "Point" or len(pos) != 2:
+            continue
+        p = f.get("properties") or {}
+        out.append(_yandex_to_item(p.get("name"), p.get("description"),
+                                   p.get("kind"), float(pos[1]), float(pos[0])))
+    return out
+
+
+def _yandex_legacy(geocode, spn, results, kind=None):
+    """Легаси /1.x работает без ключа — страховка, пока /v1 молчит (403)."""
+    params = {"geocode": geocode, "format": "json",
+              "results": results, "lang": "ru_RU"}
+    if spn:
+        params["ll"], params["spn"] = spn
+    if kind:
+        params["kind"] = kind
+    resp = requests.get("https://geocode-maps.yandex.ru/1.x/",
+                        params=params, headers=UA, timeout=GEO_FINAL_S)
     resp.raise_for_status()
     members = ((resp.json().get("response") or {})
                .get("GeoObjectCollection", {}).get("featureMember") or [])
@@ -127,21 +169,24 @@ def search_yandex(q, lat, lng):
         if len(pos) != 2:
             continue
         meta = (g.get("metaDataProperty") or {}).get("GeocoderMetaData") or {}
-        name = (g.get("name") or "").strip()          # «улица Тельмана, 19»
-        desc = (g.get("description") or "").strip()   # «Беларусь, Гомельская область, Гомель…»
-        desc = re.sub(r"^Беларусь,?\s*", "", desc)
-        desc = re.sub(r"^(Гомельская область|Гомельский район),?\s*", "", desc)
-        city = desc.split(",")[0].strip()
-        label = f"{city}, {name}" if city and city.lower() != name.lower() else name
-        hn = _extract_house(name)
-        road = _strip_street_type(re.sub(r"\s*\d+[а-яa-z]*(\s*[/-]\s*\d+)?\s*$", "", name))
-        kind = {"house": "house", "street": "street", "locality": "village",
-                "district": "suburb", "area": "suburb"}.get(meta.get("kind"),
-                                                            meta.get("kind") or "")
-        out.append({"label": label, "lat": float(pos[1]), "lng": float(pos[0]),
-                    "hn": hn, "road": road, "place": _clean_place(city),
-                    "kind": kind, "state": "Гомельская область"})
+        out.append(_yandex_to_item(g.get("name"), g.get("description"),
+                                   meta.get("kind"), float(pos[1]), float(pos[0])))
     return out
+
+
+def _yandex(geocode, spn, results, kind=None):
+    """Каскад внутри яндекс-ступени: официальный /v1, за ним легаси /1.x."""
+    if not YANDEX_KEY:
+        return _yandex_legacy(geocode, spn, results, kind)
+    try:
+        return _yandex_v1(geocode, spn, results, kind)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("geocoder yandex /v1: %s — перехожу на легаси /1.x", exc)
+        return _yandex_legacy(geocode, spn, results, kind)
+
+
+def search_yandex(q, lat, lng):
+    return _yandex(q, (f"{lng},{lat}", "0.35,0.35"), 7)
 
 
 _NOM_LAST = [0.0]  # темп 1 запрос/сек к Nominatim: спим только остаток, а не вслепую
@@ -202,16 +247,29 @@ def search_photon(q, lat, lng):
 
 # ---------- обратный геокодинг тем же каскадом ----------
 
-def suggest_yandex(q, lat, lng):
-    """Подсказки Геосаджеста при печати: только тексты, координат нет —
-    их добирает геокодер, когда пользователь выбрал подсказку.
-    Эндпоинт v1 suggest-geo (v2 у этого ключа отвечает 400), ll+spn держат
-    подсказки в Гомеле. Формат JSONP: suggest.apply([запрос, [[«maps», токены], …]])."""
-    if not YANDEX_KEY:
-        raise RuntimeError("не задан YANDEX_GEOCODER_KEY")
-    resp = requests.get("https://suggest-maps.yandex.ru/suggest-geo",
+def _suggest_v1(q, ll, spn):
+    """Официальный Геосаджест /v1/suggest: JSON с address.formatted_address и uri."""
+    resp = requests.get("https://suggest-maps.yandex.ru/v1/suggest",
                         params={"apikey": YANDEX_KEY, "text": q, "lang": "ru_RU",
-                                "ll": f"{lng},{lat}", "spn": "0.4,0.4"},
+                                "ll": ll, "spn": spn, "print_address": 1},
+                        headers=UA, timeout=3.0)
+    resp.raise_for_status()
+    res = []
+    for it in resp.json() or []:
+        addr = (it.get("address") or {}).get("formatted_address") or ""
+        if not addr:
+            title = (it.get("title") or {}).get("text") or ""
+            sub = (it.get("subtitle") or {}).get("text") or ""
+            addr = f"{title}, {sub}".strip(", ")
+        if addr:
+            res.append(addr)
+    return res
+
+
+def _suggest_legacy(q, ll, spn):
+    """Легаси suggest-geo (JSONP) работает без ключа — страховка /v1."""
+    resp = requests.get("https://suggest-maps.yandex.ru/suggest-geo",
+                        params={"text": q, "lang": "ru_RU", "ll": ll, "spn": spn},
                         headers=UA, timeout=3.0)
     resp.raise_for_status()
     raw = resp.text.strip()
@@ -233,38 +291,50 @@ def suggest_yandex(q, lat, lng):
     for it in (data[1] if isinstance(data, list) and len(data) > 1 else []):
         if not isinstance(it, (list, tuple)) or len(it) < 2:
             continue
-        # «1, улица Тельмана, Гомель» -> «Гомель, ул. Тельмана, 1»
-        parts = [p.strip() for p in _flat(it[1]).split(",") if p.strip()]
-        if not parts:
-            continue
-        if len(parts) >= 2 and not re.match(r"^\d", parts[0]):
-            parts = parts[1:] + [parts[0]]          # город — в конец не смотрим, просто порядок
-        if len(parts) >= 3 and re.match(r"^\d", parts[1]):
-            parts = [parts[0], parts[2], parts[1]]  # номер дома — в конец
-        label = ", ".join(re.sub(r"^улица\s+", "ул. ", p) for p in parts if p)
+        label = _flat(it[1])
         if label:
             res.append(label)
     return res
 
-def _reverse_yandex(lat, lng):
-    if not YANDEX_KEY:
-        raise RuntimeError("не задан YANDEX_GEOCODER_KEY")
-    resp = requests.get("https://geocode-maps.yandex.ru/1.x/",
-                        params={"apikey": YANDEX_KEY, "geocode": f"{lng},{lat}",
-                                "format": "json", "results": 1, "kind": "house",
-                                "lang": "ru_RU"},
-                        headers=UA, timeout=GEO_FINAL_S)
-    resp.raise_for_status()
-    members = ((resp.json().get("response") or {})
-               .get("GeoObjectCollection", {}).get("featureMember") or [])
-    if not members:
+
+def _suggest_normalize(label):
+    """«1, улица Тельмана, Гомель» -> «Гомель, ул. Тельмана, 1»."""
+    parts = [p.strip() for p in label.split(",") if p.strip()]
+    if not parts:
         return ""
-    g = members[0].get("GeoObject") or {}
-    name = (g.get("name") or "").strip()
-    desc = re.sub(r"^(Беларусь|Гомельская область|Гомельский район),?\s*",
-                  "", (g.get("description") or "").strip())
-    city = desc.split(",")[0].strip()
-    return f"{city}, {name}" if city and name else name
+    if len(parts) >= 2 and not re.match(r"^\d", parts[0]):
+        parts = parts[1:] + [parts[0]]
+    if len(parts) >= 3 and re.match(r"^\d", parts[1]):
+        parts = [parts[0], parts[2], parts[1]]
+    return ", ".join(re.sub(r"^улица\s+", "ул. ", p) for p in parts if p)
+
+
+def suggest_yandex(q, lat, lng):
+    """Подсказки Геосаджеста при печати: только тексты, координат нет —
+    их добирает геокодер, когда пользователь выбрал подсказку.
+    Официальный /v1/suggest; при ошибке — легаси suggest-geo. ll+spn держат
+    подсказки в Гомеле."""
+    ll, spn = f"{lng},{lat}", "0.4,0.4"
+    try:
+        if not YANDEX_KEY:
+            raise RuntimeError("не задан YANDEX_GEOCODER_KEY")
+        raw = _suggest_v1(q, ll, spn)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("geosuggest /v1: %s — перехожу на легаси suggest-geo", exc)
+        raw = _suggest_legacy(q, ll, spn)
+    return [lbl for lbl in (_suggest_normalize(x) for x in raw) if lbl]
+
+def _reverse_yandex(lat, lng):
+    try:
+        if not YANDEX_KEY:
+            raise RuntimeError("не задан YANDEX_GEOCODER_KEY")
+        items = _yandex_v1(f"{lng},{lat}", None, 1, kind="house")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("reverse yandex /v1: %s — перехожу на легаси /1.x", exc)
+        items = _yandex_legacy(f"{lng},{lat}", None, 1, kind="house")
+    for it in items:
+        return it["label"]
+    return ""
 
 
 def _reverse_nominatim(lat, lng):
