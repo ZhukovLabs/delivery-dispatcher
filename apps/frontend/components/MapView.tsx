@@ -92,8 +92,6 @@ const nearestIdx = (pl: [number, number][], p: [number, number]) => {
 };
 const trimAfter = (pl: [number, number][], p: [number, number]) =>
   pl.slice(0, nearestIdx(pl, p) + 1);          // без хвоста после точки p
-const trimFrom = (pl: [number, number][], p: [number, number]) =>
-  pl.slice(nearestIdx(pl, p));                 // без начала до точки p
 
 /* координаты трипа: дорожная геометрия (без возврата на базу) или
    прямая через остановки — тоже только до последней остановки */
@@ -304,8 +302,6 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   const planRef = useRef(plan); planRef.current = plan;
   const pickPtsRef = useRef(pickPts); pickPtsRef.current = pickPts;
   const couriersRef = useRef(state.couriers); couriersRef.current = state.couriers;
-  // кэш перестроенных по OSRM остатков маршрута (съезд с записанной дороги)
-  const osrmPl = useRef<Map<string, [number, number][] | Promise<null>>>(new Map());
 
   /* маршрут выбранного курьера: точный из плана + пунктир выданных (#5) */
   const refreshSelRoute = () => {
@@ -321,51 +317,62 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     if (!r && !orr) return;
     const curPts = pickPtsRef.current;
     const color = cur.color || r?.color || DEFAULT_COURIER_COLOR;
+    // маршрут выбранного курьера рисует сам Яндекс (multiRouter): мы даём
+    // только ПОРЯДОК точек (позиция курьера / база → остановки из плана
+    // или выданные) — дороги, вид и обводка его. Расчёт (кому что и ETA)
+    // остаётся серверным. Роутер Яндекса не ответил — прямыми через
+    // остановки (страховка), чтобы линия не пропадала.
+    {
+      let rp: [number, number][] | null = null;
+      if (orr && orr.stops?.length) {
+        const stops = (orr.stops || []).map(sp => [sp[0], sp[1]] as [number, number]);
+        const hp = orr.home || r?.home_point || curPts[0];
+        const pos0 = cur.pos
+          ? [cur.pos.lat, cur.pos.lng] as [number, number]
+          : (hp ? [hp.lat, hp.lng] as [number, number] : null);
+        if (pos0) rp = [pos0, ...stops];
+        else if (stops.length > 1) rp = stops;
+      } else if (r && curPts.length) {
+        const hp = r.home_point || curPts[0];
+        rp = [[hp.lat, hp.lng], ...(r.stops || []).map(s => [s.lat, s.lng] as [number, number])];
+      }
+      if (rp && rp.length > 1) {
+        const straight = new ym.Polyline(rp, {},
+          { strokeColor: color, strokeWidth: 4, strokeOpacity: .5, zIndex: 30 });
+        const mr = new ym.multiRouter.MultiRoute({
+          referencePoints: rp,
+          params: { routingMode: "auto", results: 1 },
+        }, {
+          wayPointVisible: false, pinVisible: false, balloonAutoPan: false,
+          routeStrokeColor: color + "44", routeStrokeWidth: 4,
+          routeActiveStrokeColor: color, routeActiveStrokeWidth: 6,
+        });
+        mr.events.add("multirouteerror", () => {
+          map.geoObjects.remove(mr);
+          if (L.current.routeLine === mr) {
+            L.current.routeLine = straight;
+            map.geoObjects.add(straight);
+          }
+        });
+        L.current.routeLine = mr;
+        map.geoObjects.add(mr);
+        return;
+      }
+    }
+    // страховка-фолбэк: точки без роутера — прямыми (порядок тот же)
     const lines: any[] = [];
-    // пунктир: выданные заказы — только оставшийся путь от текущей позиции
-    // курьера до последней остановки. Пока он на записанной при «Выдать»
-    // дороге — режем её; съехал на другую дорогу — перестраиваем остаток
-    // по OSRM (та же машина маршрутов, что у ботов), до ответа — прямые.
     if (orr && orr.stops?.length) {
       const stops = (orr.stops || []).map(sp => [sp[0], sp[1]] as [number, number]);
-      const oids = (orr.stops || []).map(sp => sp[2]).filter(Boolean).join(",");
-      const pos0 = cur.pos ? [cur.pos.lat, cur.pos.lng] as [number, number] : null;
-      let dashed: [number, number][] | null = null;
-      if (orr.geom && orr.geom.length > 1) {
-        const pl = trimAfter(orr.geom, stops[stops.length - 1]);
-        if (!pos0 || havKm(pl[nearestIdx(pl, pos0)], pos0) <= 0.15) {
-          dashed = pos0 ? trimFrom(pl, pos0) : pl;
-        }
-      }
-      if (!dashed && pos0) {
-        // курьер съехал с записанной дороги — остаток заново по дорогам
-        const key = `${cid}|${pos0[0].toFixed(3)},${pos0[1].toFixed(3)}|${oids}`;
-        const cached = osrmPl.current.get(key);
-        if (Array.isArray(cached)) {
-          dashed = cached;
-        } else if (!cached) {
-          if (osrmPl.current.size > 80) osrmPl.current.clear();
-          const wp = [pos0, ...stops].map(p => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join(";");
-          osrmPl.current.set(key, Promise.resolve(null));
-          fetch(`https://router.project-osrm.org/route/v1/driving/${wp}?overview=full&geometries=geojson`)
-            .then(rs => rs.json())
-            .then(j => {
-              const cs = j?.routes?.[0]?.geometry?.coordinates || [];
-              const pl2 = cs.map((c2: [number, number]) => [c2[1], c2[0]] as [number, number]);
-              if (pl2.length > 1) { osrmPl.current.set(key, pl2); setSelTick(t => t + 1); }
-              else osrmPl.current.delete(key);
-            })
-            .catch(() => { osrmPl.current.delete(key); });
-        }
-      }
-      if (!dashed) dashed = pos0 ? [pos0, ...stops] : stops;
-      if (dashed.length > 1) {
-        lines.push(new ym.Polyline(dashed, {},
+      const hp = orr.home || r?.home_point || curPts[0];
+      const pos0 = cur.pos ? [cur.pos.lat, cur.pos.lng] as [number, number]
+        : (hp ? [hp.lat, hp.lng] : null);
+      const pts = pos0 ? [pos0, ...stops] : stops;
+      if (pts.length > 1) {
+        lines.push(new ym.Polyline(pts, {},
           { strokeColor: color, strokeWidth: 5, strokeOpacity: .85, strokeStyle: "1 3", zIndex: 30 }));
       }
     }
-    // сплошная: актуальный маршрут из плана
-    if (r && curPts.length) {
+    if (r && curPts.length && !lines.length) {
       const hp = r.home_point || curPts[0];
       const depot: [number, number] = [hp.lat, hp.lng];
       const pts: [number, number][] = [depot];
