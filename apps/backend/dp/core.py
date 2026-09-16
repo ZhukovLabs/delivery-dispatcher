@@ -199,6 +199,7 @@ def _obj_point(x):
     return (STATE.get("points") or [{}])[0].get("id") or ""
 
 OSRM_URLS = [
+    "http://127.0.0.1:5000",                        # свой OSRM (docker, вся Беларусь)
     "https://routing.openstreetmap.de/routed-car",  # серверы сообщества OSM (FOSSGIS) — надёжнее
     "http://router.project-osrm.org",               # официальный демо-сервер — запасной
 ]
