@@ -120,6 +120,13 @@ async def _unhandled(request: Request, exc: Exception):
 # иначе guard-ответы (401) и префлайты уходят без Access-Control-Allow-*.
 # REST в проде ходит с фронта (vercel.app) напрямую на API-хост (funnel);
 # WS (socket.io) имеет собственный cors_allowed_origins.
+
+# gzip обязательна при прямых запросах мимо Vercel: полное состояние депо —
+# десятки КБ JSON, без сжатия h1-канал funnel отдаёт его в разы дольше,
+# чем облако (gzip + h2). Сжатие ~5-10×, окупает себя на любом payload >1КБ.
+from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 _CORS_ORIGINS = [o.strip() for o in os.environ.get(
     "CORS_ORIGINS",
     "https://barak-dispatcher.vercel.app,http://localhost:3000,http://127.0.0.1:3000",
