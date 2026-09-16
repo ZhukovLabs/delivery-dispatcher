@@ -66,6 +66,12 @@ export interface AppState {
  *  до браузерного лимита (~300 с) и пользователь смотрит в «ничего». */
 const API_TIMEOUT_MS = 30_000;
 
+export class NetworkError extends Error {
+  constructor() { super("Сеть недоступна — проверьте подключение к интернету"); }
+}
+export const isNetworkError = (e: unknown): e is NetworkError => e instanceof NetworkError;
+const networkError = () => new NetworkError();
+
 export async function api<T = AppState>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
   const ctl = new AbortController();
   const timeout = setTimeout(() => ctl.abort(), API_TIMEOUT_MS);
@@ -82,7 +88,7 @@ export async function api<T = AppState>(path: string, method = "GET", body?: unk
   } catch {
     // обрыв связи / таймаут: единая понятная ошибка; при восстановлении WS
     // состояние тихо пересинхронизируется (invalidateQueries on connect)
-    throw new Error("Сеть недоступна — проверьте подключение к интернету");
+    throw networkError();
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onOuterAbort);
@@ -91,8 +97,13 @@ export async function api<T = AppState>(path: string, method = "GET", body?: unk
     window.location.href = "/login";
     throw new Error("Требуется вход");
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    // 5xx без нашего JSON-поля error — это прокси за недоступным бэкендом
+    // (dev-реврайт, Vercel, funnel), а не ответ приложения
+    if (!data?.error && res.status >= 500) throw networkError();
+    throw new Error((data as { error?: string } | null)?.error || res.statusText);
+  }
   return data as T;
 }
 

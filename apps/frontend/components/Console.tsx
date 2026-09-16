@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type AppState, type Courier, type Route } from "@/lib/api";
+import { api, isNetworkError, type AppState, type Courier, type Route } from "@/lib/api";
 import { joinDepot, subscribeConn, type WsConnState } from "@/lib/ws";
 import { addrKey } from "./console/format";
 import { optimisticFor } from "./console/optimistic";
@@ -50,7 +50,9 @@ export default function Console() {
   useEffect(() => {
     if (prevConn.current === "offline" && conn === "online") {
       // состояние уже перезапрошено (invalidateQueries в useDispatchState),
-      // юзеру остаётся короткое подтверждение
+      // юзеру остаётся короткое подтверждение; расчётный оверлей, который
+      // «завис» из-за обрыва, снимается актуальным состоянием с сервера
+      setSolving(false); setPinning(null);
       showToast("Связь восстановлена — данные синхронизированы");
     }
     prevConn.current = conn;
@@ -182,26 +184,39 @@ export default function Console() {
     undoToast(`Выдан: ${c.name}`, `выдача ${o.address || ""}`.slice(0, 60), "assign", { order_ids: [oid] });
   };
 
-  const solve = async () => {
+  /* общий прогон «тяжёлых» операций: если связи нет (сокет офлайн или обрыв
+   * запроса) — оверлей НЕ гасим: за прокси мёртвый бэк выглядит как HTTP 5xx,
+   * а сервер мог продолжать расчёт; истина придёт через WS или 60-с авто-скрытие.
+   * Живой сервер с реальной ошибкой — обычный тост и снятие флага. */
+  const connRef = useRef<WsConnState>("connecting");
+  useEffect(() => { connRef.current = conn; }, [conn]);
+  const runSolving = async (fn: () => Promise<void>) => {
     if (solving || !st) return;
     setSolving(true);
+    let keepOverlay = false;
     try {
-      setSt(await api<AppState>("/api/solve", "POST"));
-      showToast("Развозка рассчитана");
-    } catch (e) { showToast((e as Error).message, true); }
-    finally { setSolving(false); }
+      await fn();
+    } catch (e) {
+      if (connRef.current !== "online" || isNetworkError(e)) keepOverlay = true;
+      else showToast((e as Error).message, true);
+    } finally {
+      if (!keepOverlay) setSolving(false);
+    }
   };
 
+  const solve = () => runSolving(async () => {
+    setSt(await api<AppState>("/api/solve", "POST"));
+    showToast("Развозка рассчитана");
+  });
+
   /* закрепление за курьером с видимой фазой пересчёта */
-  const pinOrder = async (oid: string, cid: string) => {
-    if (solving) { showToast("Дождитесь окончания расчёта", true); return; }
-    setSolving(true); setPinning(oid);
+  const pinOrder = (oid: string, cid: string) => runSolving(async () => {
+    setPinning(oid);
     try {
       setSt(await api<AppState>("/api/plan/pin", "POST", { order_id: oid, courier_id: cid }));
       showToast("Заказ закреплён за курьером в плане (выдать — кнопкой в маршруте)");
-    } catch (e) { showToast((e as Error).message, true); }
-    finally { setSolving(false); setPinning(null); }
-  };
+    } finally { setPinning(null); }
+  });
 
   /* перетаскивание курьера в план: свой депо — просто в план, чужой — через подтверждение */
   const courierToPlan = async (cid: string, routeEl: Element | null) => {
@@ -226,16 +241,12 @@ export default function Console() {
     const hisPid = c.point_id || firstPid;
     const inPlan = (st.plan?.routes || []).some(r => r.courier_id === c.id);
 
-    const include = async () => {
+    const include = () => runSolving(async () => {
       if (c.status === "off")
         await api("/api/couriers/" + c.id, "PATCH", { status: "base" });
-      setSolving(true);
-      try {
-        setSt(await api<AppState>("/api/solve", "POST", { force: [c.id] }));
-        showToast(`«${c.name}» добавлен в план`);
-      } catch (e) { showToast((e as Error).message, true); }
-      finally { setSolving(false); }
-    };
+      setSt(await api<AppState>("/api/solve", "POST", { force: [c.id] }));
+      showToast(`«${c.name}» добавлен в план`);
+    });
 
     if (hisPid === targetPid) {
       if (inPlan && c.status !== "off") { showToast(`«${c.name}» уже в плане`); return; }
@@ -247,12 +258,10 @@ export default function Console() {
       `«${c.name}» работает на точке «${ptName(hisPid)}».\n\nПозвать его на помощь к точке «${ptName(targetPid)}»? Он возьмёт один заказ, его точка останется прежней.`,
       { ok: "Позвать на помощь" });
     if (!ok) return;
-    setSolving(true);
-    try {
+    await runSolving(async () => {
       setSt(await api<AppState>("/api/plan/help", "POST", { courier_id: c.id, point_id: targetPid }));
       showToast(`«${c.name}» приедет на помощь: возьмёт один заказ с точки «${ptName(targetPid)}»`);
-    } catch (e) { showToast((e as Error).message, true); }
-    finally { setSolving(false); }
+    });
   };
 
   const applyAdvice = async (mode: string) => {
