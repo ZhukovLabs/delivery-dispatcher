@@ -1440,8 +1440,18 @@ def _refresh_plan_delays(plan):
 
 
 def _plan_for(pid):
-    """План депо по id точки (с живой задержкой старта away-курьеров)."""
-    return _refresh_plan_delays(STATE["plans"].get(pid))
+    """План депо по id (с живой задержкой старта away-курьеров).
+    План, посчитанный пока роутеры молчали, остаётся без дорожной
+    геометрии — дотягиваем на каждом запросе (локальный OSRM ~20 мс):
+    линии на карте должны быть дорогами, прямыми — только последний
+    резерв после всего каскада."""
+    plan = STATE["plans"].get(pid)
+    plan = _refresh_plan_delays(plan)
+    if plan and plan.get("routing") == "roads":
+        if any(not t.get("geometry") for r in plan.get("routes", [])
+               for t in r.get("trips", [])):
+            _attach_geometry(plan)
+    return plan
 
 
 def _courier_plan(c):

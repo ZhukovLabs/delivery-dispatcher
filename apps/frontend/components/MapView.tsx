@@ -93,6 +93,18 @@ const nearestIdx = (pl: [number, number][], p: [number, number]) => {
 };
 const trimAfter = (pl: [number, number][], p: [number, number]) =>
   pl.slice(0, nearestIdx(pl, p) + 1);          // без хвоста после точки p
+/* линия от точки p (позиция курьера) до конца маршрута; если курьер
+   сошёл с кэшированной дороги (>250 м) — кэш не подходит */
+const trimFrom = (pl: [number, number][], p: [number, number]): [number, number][] => {
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < pl.length; i++) {
+    const dx = pl[i][0] - p[0], dy = pl[i][1] - p[1], d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; bi = i; }
+  }
+  const OFF = 0.0022;                          // ~250 м в градусах широты
+  if (bd > OFF * OFF) return [];
+  return pl.slice(bi);
+};
 
 /* координаты трипа: дорожная геометрия (без возврата на базу) или
    прямая через остановки — тоже только до последней остановки */
@@ -320,62 +332,71 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     if (!r && !orr) return;
     const curPts = pickPtsRef.current;
     const color = cur.color || r?.color || DEFAULT_COURIER_COLOR;
-    // маршрут выбранного курьера: базовая линия прямыми (мгновенно), затем
-    // асинхронно подтягиваем дороговую геометрию из бека (тот же каскад
-    // OSRM, ~20 мс локально) и заменяем. Роутер Яндекса вернём, когда оживёт
-    // ключ (модуль 3.0), прямые остаются страховкой на любой сбой.
+    // маршрут выбранного курьера: дороги — норма, прямые — только пока
+    // ждём ответ каскада (4 ступени × 3 с) или он окончательно молчит.
+    // Дорожная геометрия кэшируется по НАБОРУ ОСТАНОВОК (без позиции
+    // курьера): позиция лишь обрезает линию локально — на скорости гео-тик
+    // меняет координаты быстрее, чем приходит ответ, и линия «прыгала»
+    // прямыми. Съезд с маршрута >250 м — маршрут изменился, кэч мимо.
     {
-      let rp: [number, number][] | null = null;
+      let rp: [number, number][] | null = null;          // что показать, пока дорог нет
+      let stopsKey: string | null = null;                // кэш-ключ: остановки
+      let pos0: [number, number] | null = null;          // где курьер сейчас
       if (orr && orr.stops?.length) {
         const stops = (orr.stops || []).map(sp => [sp[0], sp[1]] as [number, number]);
         const hp = orr.home || r?.home_point || curPts[0];
-        const pos0 = cur.pos
-          ? [cur.pos.lat, cur.pos.lng] as [number, number]
+        pos0 = cur.pos ? [cur.pos.lat, cur.pos.lng] as [number, number]
           : (hp ? [hp.lat, hp.lng] as [number, number] : null);
-        if (pos0) rp = [pos0, ...stops];
-        else if (stops.length > 1) rp = stops;
+        rp = pos0 ? [pos0, ...stops] : (stops.length > 1 ? stops : null);
+        stopsKey = cid + "|out|" + stops.map(p => `${p[0].toFixed(4)},${p[1].toFixed(4)}`).join(";");
       } else if (r && curPts.length) {
         const hp = r.home_point || curPts[0];
-        rp = [[hp.lat, hp.lng], ...(r.stops || []).map(s => [s.lat, s.lng] as [number, number])];
+        const stops = (r.stops || []).map(s => [s.lat, s.lng] as [number, number]);
+        pos0 = [hp.lat, hp.lng];
+        rp = [pos0, ...stops];
+        stopsKey = cid + "|plan|" + stops.map(p => `${p[0].toFixed(4)},${p[1].toFixed(4)}`).join(";");
       }
-      if (rp && rp.length > 1) {
-        const key = cid + "|" + rp.map(p => `${p[0].toFixed(3)},${p[1].toFixed(3)}`).join(";");
+      if (rp && rp.length > 1 && stopsKey) {
         const roadStyle = { strokeColor: color, strokeWidth: 5, strokeOpacity: .95, zIndex: 30 } as const;
-        // гео-тики перерисовывают маршрут каждую секунду: если дорогая
-        // геометрия для этих точек уже получена — рисуем её сразу, а не
-        // прямыми (иначе дорога «пропадала» до следующего запроса, а
-        // повторный запрос не уходил — ключ совпадал)
-        const cached = L.current.routeGeom as { key: string; coords: [number, number][] } | null;
-        if (cached && cached.key === key) {
-          const road = new ym.Polyline(cached.coords, {}, roadStyle);
+        const drawRoad = (coords: [number, number][]) => {
+          // старт линии — от текущей позиции курьера (или начала кэша)
+          const line = pos0 ? trimFrom(coords, pos0) : coords;
+          if (line.length < 2) return false;
+          const road = new ym.Polyline(line, {}, roadStyle);
           L.current.routeLine = road;
           map.geoObjects.add(road);
-          return;
+          return true;
+        };
+        const cached = L.current.routeGeom as { key: string; coords: [number, number][] } | null;
+        const ok = cached && cached.key === stopsKey && drawRoad(cached.coords);
+        if (ok) return;
+        if (cached && cached.key === stopsKey) {
+          // остановки те же, но курьер далеко от кэшированной дороги —
+          // съехал/перестроился: кэш больше не про нас, перекачаем
+          L.current.routeGeom = null;
+          L.current.routeFetch = "";
         }
         const straight = new ym.Polyline(rp, {},
           { strokeColor: color, strokeWidth: 5, strokeOpacity: .6, zIndex: 30 });
         L.current.routeLine = straight;
         map.geoObjects.add(straight);
-        if (L.current.routeFetch !== key) {
-          L.current.routeFetch = key;
+        if (L.current.routeFetch !== stopsKey) {
+          L.current.routeFetch = stopsKey;
           const qs = encodeURIComponent(
             rp.map(p => `${p[0].toFixed(6)},${p[1].toFixed(6)}`).join(";"));
           fetchApi(`/api/route?coords=${qs}`)
             .then(res => (res.ok ? res.json() : Promise.reject(new Error("route api"))))
             .then((j: { geometry?: [number, number][] }) => {
-              if (L.current.routeFetch !== key || selCid.current !== cid) return;
+              if (L.current.routeFetch !== stopsKey || selCid.current !== cid) return;
               const g = j.geometry;
               if (!g || g.length < 2) return;
-              L.current.routeGeom = { key, coords: g };
+              L.current.routeGeom = { key: stopsKey, coords: g };
               if (L.current.routeLine) map.geoObjects.remove(L.current.routeLine);
-              const road = new ym.Polyline(g, {}, roadStyle);
-              L.current.routeLine = road;
-              map.geoObjects.add(road);
+              drawRoad(g);
             })
             .catch(() => {
-              // роутер не ответил — прямые уже нарисованы; разрешим повторную
-              // попытку на следующем тике, а не застреваем на прямых
-              if (L.current.routeFetch === key) L.current.routeFetch = "";
+              // каскад молчит: прямые остаются, повторим на следующем тике
+              if (L.current.routeFetch === stopsKey) L.current.routeFetch = "";
             });
         }
         return;
