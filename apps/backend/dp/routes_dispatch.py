@@ -353,6 +353,31 @@ def sim_tgcb():
     return jsonify({"ok": True})
 
 
+@r.post("/api/sim/tgtext")
+@flaskish
+def sim_tgtext():
+    """Симулятор текста боту: «курьер написал» сообщение (для демо без TG).
+
+    Только администратор. Пример: {"chat_id": 9100000, "text": "24.50"}.
+    Проходит через тот же _tg_handle_update, что и настоящие сообщения
+    (в т.ч. флоу «сумма оплаты» после подтверждения доставки).
+    """
+    me = _me()
+    if not me or not me["is_admin"]:
+        return jsonify({"error": "Только администратор"}), 403
+    data = _json()
+    try:
+        chat_id = str(int(str(data.get("chat_id"))))
+        text = str(data["text"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "Нужны chat_id (числом) и text"}), 400
+    _tg_handle_update({"message": {
+        "chat": {"id": int(chat_id)},
+        "from": {"username": str(data.get("login") or "sim")},
+        "text": text, "date": int(time.time())}})
+    return jsonify({"ok": True})
+
+
 @r.delete("/api/couriers/{cid}")
 @flaskish
 def del_courier(cid):
@@ -1129,13 +1154,16 @@ def api_history_export():
     """CSV за период (BOM — чтобы Excel сразу открыл кириллицу)."""
     days = _days_param()
     rows = _history_period(days, point_id=_my_point())["rows"]
-    csv = ["Время закрытия;Адрес;Курьер;Исход;Цикл, мин"]
+    csv = ["Время закрытия;Адрес;Курьер;Исход;Цикл, мин;Оплата;Сумма"]
     for r in rows:
         csv.append(";".join(str(x if x is not None else "")
                             for x in (r["closed_at"].replace("T", " "), r["address"],
                                       r["courier"],
                                       "выдан" if r["outcome"] == "delivered" else "отменён",
-                                      r["cycle_min"])))
+                                      r["cycle_min"],
+                                      {"cash": "наличные", "card": "карта"}
+                                      .get(r.get("payment"), ""),
+                                      r.get("pay_amount"))))
     body = "\ufeff" + "\n".join(csv) + "\n"
     return (body, 200, {"Content-Type": "text/csv; charset=utf-8",
                         "Content-Disposition": f"attachment; filename=history-{days}d.csv"})

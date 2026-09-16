@@ -164,6 +164,8 @@ STATE = {
                          # ТОЛЬКО для расчёта возврата; статус заказа не меняет
     "tg_away": {},       # chat_id -> {"since"} — авто-«в пути» при отъезде от точки
     "tg_ask": {},        # chat_id -> {order_id: {"msg", "stage"}} — бот ждёт «доставил?»
+    "tg_pay": {},        # chat_id -> {"oid", "method", "msg", "addr", "ts"} —
+                         # бот ждёт сумму оплаты после «доставил»
     "tg_offset": 0,
     "tg_bot": "",        # @username бота (для подсказок в интерфейсе)
     "events": [],        # лента активности: {"t", "actor": bot|disp|cour|sys, "text"}
@@ -308,6 +310,8 @@ _DB_MIGRATIONS = [
     ("users", "phone", "ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''"),
     ("history", "point_id", "ALTER TABLE history ADD COLUMN point_id TEXT NOT NULL DEFAULT ''"),
     ("history", "reason", "ALTER TABLE history ADD COLUMN reason TEXT NOT NULL DEFAULT ''"),
+    ("history", "payment", "ALTER TABLE history ADD COLUMN payment TEXT NOT NULL DEFAULT ''"),
+    ("history", "pay_amount", "ALTER TABLE history ADD COLUMN pay_amount REAL"),
 ]
 
 
@@ -341,7 +345,9 @@ def _persist_meta():
             ("tg_ask", json.dumps(STATE["tg_ask"], ensure_ascii=False)
              if STATE.get("tg_ask") else ""),
             ("tg_deliv", json.dumps(STATE["tg_deliv"], ensure_ascii=False)
-             if STATE.get("tg_deliv") else "")])
+             if STATE.get("tg_deliv") else ""),
+            ("tg_pay", json.dumps(STATE["tg_pay"], ensure_ascii=False)
+             if STATE.get("tg_pay") else "")])
         c.execute("DELETE FROM points")
         c.executemany(
             "INSERT INTO points(id, name, address, lat, lng, pos) VALUES(?, ?, ?, ?, ?, ?)",
@@ -431,10 +437,18 @@ def _history_period(days=1, point_id=None):
                     "outcome": r["outcome"], "courier": r["courier"] or "",
                     "cycle_min": cycle_min, "deadline": r["deadline"] or "",
                     "reason": r["reason"] or "",
-                    "created_at": r["created_at"] or ""})
+                    "created_at": r["created_at"] or "",
+                    "payment": r["payment"] or "",
+                    "pay_amount": r["pay_amount"]})
+    pays = [(r["payment"], r["pay_amount"] or 0) for r in out if r["payment"]]
     summary = {"delivered": sum(1 for r in out if r["outcome"] == "delivered"),
                "cancelled": sum(1 for r in out if r["outcome"] == "cancelled"),
-               "avg_cycle_min": round(sum(cycles) / len(cycles)) if cycles else None}
+               "avg_cycle_min": round(sum(cycles) / len(cycles)) if cycles else None,
+               # аналитика оплат (собирается после закрытия заказа курьером)
+               "pay_cash": sum(1 for m, _ in pays if m == "cash"),
+               "pay_cash_sum": round(sum(a for m, a in pays if m == "cash"), 2),
+               "pay_card": sum(1 for m, _ in pays if m == "card"),
+               "pay_card_sum": round(sum(a for m, a in pays if m == "card"), 2)}
     return {"rows": out, "summary": summary}
 
 
@@ -627,10 +641,10 @@ def load_state():
         STATE["color_seq"] = int(meta.get("color_seq") or 0)
     except ValueError:
         pass
-    for key in ("tg_ask", "tg_deliv"):
-        # диалоги «доставлен?» и трекеры простоя переживают рестарт:
-        # без этого после каждого деплоя бот переспрашивал, а нажатия
-        # кнопок на старых сообщениях попадали в «уже неактуально»
+    for key in ("tg_ask", "tg_deliv", "tg_pay"):
+        # диалоги «доставлен?», «сумма оплаты» и трекеры простоя переживают
+        # рестарт: без этого после каждого деплоя бот переспрашивал,
+        # а нажатия кнопок на старых сообщениях попадали в «уже неактуально»
         if meta.get(key):
             try:
                 saved = json.loads(meta[key])
@@ -2241,6 +2255,28 @@ def _bot_keep_rolling(chat, pend, oid, order, courier):
     _ev("cour", f"{courier['name']}: «{order.get('address') or oid}» ещё в развозке")
 
 
+def _pay_method_label(m):
+    return {"cash": "Наличными", "card": "Картой"}.get(m, "")
+
+
+def _pay_set(oid, method=None, amount=None):
+    """Записать аналитику оплаты в архивную строку заказа (заказ уже закрыт
+    на этапе «доставил» — правим history, STATE-заказа больше нет)."""
+    sets, args = [], []
+    if method is not None:
+        sets.append("payment = ?"); args.append(method)
+    if amount is not None:
+        sets.append("pay_amount = ?"); args.append(amount)
+    if not sets:
+        return
+    args.append(oid)
+    try:
+        with _db_lock, _db() as c:
+            c.execute(f"UPDATE history SET {', '.join(sets)} WHERE id = ?", args)
+    except sqlite3.Error:
+        log.exception("pay: не записать оплату заказа %s", oid)
+
+
 def _tg_callback(cb):
     """Нажатие инлайн-кнопки курьером: «доставил?» → «точно?» → закрытие.
 
@@ -2273,14 +2309,20 @@ def _tg_callback(cb):
     order = next((o for o in STATE["orders"] if o["id"] == oid), None)
     courier = next((c for c in STATE["couriers"]
                     if (c.get("tg_chat_id") or "") == chat), None)
-    if not pend or not order or not courier or order.get("assigned") != courier.get("id"):
+    # стадии pay/pay_amount идут ПОСЛЕ закрытия заказа (аналитика оплаты):
+    # заказа в STATE уже нет — это не «неактуально», а нормальный флоу
+    paying = pend and pend.get("stage") in ("pay", "pay_amount")
+    if (not pend or not courier
+            or (not order and not paying)
+            or (order and order.get("assigned") != courier.get("id"))):
         if pend:
             _tg_edit_msg(chat, pend["msg"],
                          "Этот вопрос уже неактуален — заказ закрыт диспетчером.")
             STATE["tg_ask"].get(chat, {}).pop(oid, None)
+            STATE["tg_pay"].pop(chat, None)
         _tg_answer_cb(cbid, "Уже неактуально")
         return
-    addr = _esc(order.get("address") or "")
+    addr = _esc((order or {}).get("address") or pend.get("addr") or oid)
     if act == "y" and pend["stage"] == "ask":
         pend["stage"] = "confirm"
         _tg_edit_msg(chat, pend["msg"], f"Точно доставлен? Заказ: <b>{addr}</b>",
@@ -2323,15 +2365,49 @@ def _tg_callback(cb):
             _tg_edit_msg(chat, pend["msg"], "Не получилось закрыть — уже неактуален.")
             _tg_answer_cb(cbid, "Уже неактуально")
     elif act == "ok" and pend["stage"] == "confirm":
+        pend["addr"] = order.get("address") or oid  # адрес для флоу оплаты
         ok, _ = _bot_close_delivered(oid)
-        STATE["tg_ask"].get(chat, {}).pop(oid, None)
         if ok:
+            # заказ закрыт тут же, как раньше; дальше — только аналитика:
+            # как оплатил клиент и сколько
+            pend["stage"] = "pay"
             _tg_edit_msg(chat, pend["msg"],
-                         f"✅ Записано: <b>{addr}</b> доставлен. Спасибо!")
+                         f"✅ Записано: <b>{addr}</b> доставлен.\n\n"
+                         "Как оплатил клиент?",
+                         [[{"text": "💵 Наличными",
+                            "callback_data": f"dlv:{oid}:pay:cash"}],
+                          [{"text": "💳 Картой",
+                            "callback_data": f"dlv:{oid}:pay:card"}],
+                          [{"text": "⏭ Без оплаты / не важно",
+                            "callback_data": f"dlv:{oid}:payskip"}]])
             _tg_answer_cb(cbid, "Заказ закрыт ✓")
         else:
+            STATE["tg_ask"].get(chat, {}).pop(oid, None)
             _tg_edit_msg(chat, pend["msg"], "Не получилось закрыть — уже неактуален.")
             _tg_answer_cb(cbid, "Уже неактуально")
+    elif act.startswith("pay:") and pend["stage"] == "pay":
+        method = act[4:]
+        if method not in ("cash", "card"):
+            _tg_answer_cb(cbid, "Кнопка не распознана")
+            return
+        _pay_set(oid, method=method)
+        STATE["tg_pay"][chat] = {"oid": oid, "method": method,
+                                 "msg": pend["msg"], "addr": pend.get("addr") or oid,
+                                 "ts": time.time()}
+        pend["stage"] = "pay_amount"
+        _tg_edit_msg(chat, pend["msg"],
+                     f"✅ <b>{addr}</b> доставлен. Оплата: <b>"
+                     f"{_pay_method_label(method)}</b>.\n\n"
+                     "Напишите сумму числом в чат — например: <b>24.50</b>",
+                     [[{"text": "⏭ Сумму не знаю",
+                        "callback_data": f"dlv:{oid}:payskip"}]])
+        _tg_answer_cb(cbid)
+    elif act == "payskip" and pend["stage"] in ("pay", "pay_amount"):
+        STATE["tg_ask"].get(chat, {}).pop(oid, None)
+        STATE["tg_pay"].pop(chat, None)
+        _tg_edit_msg(chat, pend["msg"],
+                     f"✅ Записано: <b>{addr}</b> доставлен. Спасибо!")
+        _tg_answer_cb(cbid, "Заказ закрыт ✓")
     elif act == "no":
         # «Назад»: на шаг диалога назад, диалог не закрываем
         if pend["stage"] in ("confirm", "refconfirm", "noconfirm"):
@@ -2372,6 +2448,50 @@ def _tg_handle_update(u):
 
     courier = next((c for c in STATE["couriers"]
                     if (c.get("tg_chat_id") or "") == chat_id), None)
+    # флоу оплаты: бот ждёт от курьера сумму числом. Диалог живёт под чатом
+    # КУРЬЕРА; в тест-режиме человек пишет из редирект-чата — ремапим
+    pay_chat = chat_id
+    if TG_TEST_REDIRECT and chat_id == TG_TEST_REDIRECT and \
+            pay_chat not in STATE.get("tg_pay", {}):
+        for cand in STATE.get("tg_pay", {}):
+            pay_chat = cand
+            break
+    pay = STATE.get("tg_pay", {}).get(pay_chat)
+    if pay and not courier and pay_chat != chat_id:
+        courier = next((c for c in STATE["couriers"]
+                        if (c.get("tg_chat_id") or "") == pay_chat), None)
+    if pay and (not pay.get("method")
+                or time.time() - pay.get("ts", 0) > 1800):
+        # зависший диалог (рестарт/полчаса тишины) — не мешаем остальному
+        STATE["tg_pay"].pop(pay_chat, None)
+        pay = None
+    if pay:
+        text = (msg.get("text") or "").strip()
+        m = re.search(r"\d+(?:[.,]\d{1,2})?", text)
+        if not m:
+            _tg_send(chat_id,
+                     "Не понял сумму — напишите числом, например: "
+                     "<b>24.50</b> (или нажмите «Сумму не знаю»)")
+            return
+        amount = round(float(m.group(0).replace(",", ".")), 2)
+        if not 0 < amount <= 1_000_000:
+            _tg_send(chat_id, "Сумма странная — проверьте и напишите ещё раз")
+            return
+        _pay_set(pay["oid"], amount=amount)
+        pend = STATE.get("tg_ask", {}).get(pay_chat, {}).get(pay["oid"])
+        if pend:
+            STATE["tg_ask"].get(pay_chat, {}).pop(pay["oid"], None)
+        STATE["tg_pay"].pop(pay_chat, None)
+        _tg_edit_msg(pay_chat, pay["msg"],
+                     f"✅ Записано: <b>{_esc(pay.get('addr') or pay['oid'])}</b>"
+                     f" доставлен. Оплата: <b>{_pay_method_label(pay['method'])}</b>, "
+                     f"<b>{amount:g}</b>.")
+        who = courier["name"] if courier else pay_chat
+        _ev("bot", f"оплата: {_pay_method_label(pay['method']).lower()} "
+                   f"{amount:g} — «{pay.get('addr') or pay['oid']}» ({who})")
+        log.info("bot pay: заказ %s — %s %s", pay["oid"], pay["method"], amount)
+        _bump()
+        return
     loc = msg.get("location")
     log.info("tg upd: chat=%s %s%s bound=%s", chat_id,
              "edit " if u.get("edited_message") else "msg ",
@@ -2421,7 +2541,8 @@ def _tg_handle_update(u):
                             "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
                             [("tg_ask", json.dumps(STATE["tg_ask"], ensure_ascii=False)),
                              ("tg_deliv",
-                              json.dumps(STATE["tg_deliv"], ensure_ascii=False))])
+                              json.dumps(STATE["tg_deliv"], ensure_ascii=False)),
+                             ("tg_pay", json.dumps(STATE["tg_pay"], ensure_ascii=False))])
                 except sqlite3.Error:
                     pass
             _bump(geo=True)  # движение курьера — карта обновится (хаб батчит ≥1 с)
@@ -2558,7 +2679,7 @@ def _payload(me=None, myp=None):
     couriers.sort(key=lambda cc: 0 if _obj_point(cc) == myp else 1)
     st = {k: v for k, v in STATE.items()
           if k not in ("tg_seen", "tg_pos", "tg_offset", "tg_nagged", "tg_load",
-                       "tg_deliv", "tg_away", "plans", "advice_modes", "solving")}
+                       "tg_deliv", "tg_away", "tg_pay", "plans", "advice_modes", "solving")}
     seen = sorted(STATE["tg_seen"].values(), key=lambda x: -x["ts"])[:20]
     # живые счётчики по точкам: курьеры + админы онлайн
     now2 = time.time()
