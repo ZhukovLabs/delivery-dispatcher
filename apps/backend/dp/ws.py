@@ -17,7 +17,7 @@ import time
 
 import socketio
 
-from .core import STATE, _payload, _points_ids
+from .core import STATE, _db, _db_lock, _payload, _points_ids
 
 log = logging.getLogger("dispatcher")
 
@@ -34,6 +34,8 @@ _sessions: dict = {}  # sid → {"uid", "point"} — AsyncServer не храни
 
 _DEBOUNCE_S = 0.15
 _GEO_MIN_INTERVAL_S = 1.0  # чистое движение шлём не чаще раза в секунду
+_SESSION_RECHECK_S = 60.0   # раз в минуту сверяем пользователей открытых сокетов
+_next_recheck = 0.0
 
 
 def start(loop: asyncio.AbstractEventLoop) -> None:
@@ -63,9 +65,16 @@ def notify_changed(geo: bool = False) -> None:
 
 async def _flusher() -> None:
     """Коалесер: события — после дебаунса, чистое движение — не чаще 1/с."""
-    global _dirty, _geo, _last_flush
+    global _dirty, _geo, _last_flush, _next_recheck
     while True:
         await asyncio.sleep(_DEBOUNCE_S)
+        now = time.monotonic()
+        if now >= _next_recheck:
+            _next_recheck = now + _SESSION_RECHECK_S
+            try:
+                await _recheck_sessions()
+            except Exception:  # noqa: BLE001 — хаб не должен умирать
+                log.exception("ws hub session recheck failed")
         with _notify_lock:
             if not _dirty:
                 continue
@@ -91,12 +100,56 @@ async def _broadcast() -> None:
 
 
 def _verify_token(token: str) -> dict | None:
-    """Токен = подписанная cookie-сессия → {uid, sid, point} или None."""
+    """Токен = подписанная cookie-сессия → {uid, sid, point} или None.
+
+    Подписи мало: пользователь ещё должен быть жив в БД. HTTP-cookie это
+    проверяет _me() на каждом запросе, а сокет живёт своей жизнью — без
+    сверки удалённый диспетчер продолжал бы получать состояние депо
+    до конца 12-часовой жизни токена.
+    """
     from .shims import unsign_session
     try:
-        return unsign_session(token)
+        data = unsign_session(token)
     except Exception:  # noqa: BLE001
         return None
+    if not data or not data.get("uid"):
+        return None
+    try:
+        with _db_lock, _db() as c:
+            row = c.execute("SELECT id FROM users WHERE id = ?",
+                            (data["uid"],)).fetchone()
+    except Exception:  # noqa: BLE001
+        log.exception("ws hub: не смогли проверить пользователя %s", data["uid"])
+        return None
+    return data if row else None
+
+
+def _alive_uids(uids: set) -> set:
+    """Какие из uid ещё есть в users (одним запросом)."""
+    marks = ",".join("?" * len(uids))
+    with _db_lock, _db() as c:
+        return {r["id"] for r in c.execute(
+            f"SELECT id FROM users WHERE id IN ({marks})", tuple(uids))}
+
+
+async def _recheck_sessions() -> None:
+    """Раз в минуту: пользователь удалён — его открытые сокеты закрываются.
+
+    Пассивного слушателя иначе не выбросить: connect был давно и валиден.
+    """
+    if not _sessions:
+        return
+    uids = {dp.get("uid") for dp in _sessions.values() if dp.get("uid")}
+    if not uids:
+        return
+    alive = await asyncio.to_thread(_alive_uids, uids)
+    for sid, dp in list(_sessions.items()):
+        if dp.get("uid") and dp["uid"] not in alive:
+            log.info("ws hub: пользователь %s удалён — закрываю сокет", dp["uid"])
+            await sio.disconnect(sid)
+            # событие disconnect вычистит само, но для sid, которого уже нет
+            # у менеджера (полуоткрытый), события не будет — чистим явно
+            _sessions.pop(sid, None)
 
 
 @sio.event
@@ -140,7 +193,7 @@ async def workpoint(sid: str, data: dict | None = None) -> None:
     # сразу отдать состояние нового депо (не ждать следующего изменения)
     payload = await asyncio.to_thread(_payload, None, pid)
     await sio.emit("state", payload, to=sid)
-from .shims import unsign_session as _unsign
+
 
 def socketio_app():
     """ASGI-приложение socket.io (монтируется в FastAPI на /)."""
