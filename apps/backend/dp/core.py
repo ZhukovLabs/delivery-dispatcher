@@ -496,10 +496,18 @@ def _speed_current_kmh(pos, now):
     if len(hist) < 2:
         return None
     m_sum = t_sum = 0.0
-    for a, b in zip(hist, hist[1:]):
-        dt = b["ts"] - a["ts"]
+    # цепочка якорей ≥5 с: тики бывают чаще (боты 0.5 с) — соседние пары
+    # не набирают dt, ждём следующую «зрелую» точку от последнего якоря
+    anchor = None
+    for h in hist:
+        if anchor is None:
+            anchor = h
+            continue
+        dt = h["ts"] - anchor["ts"]
         if dt < 5:
             continue
+        a, b = anchor, h
+        anchor = h
         if max(a.get("acc") or 0, b.get("acc") or 0) > _SPEED_MAX_ACC_M:
             continue
         m_raw = haversine_km(a, b) * 1000.0
@@ -2066,9 +2074,11 @@ def _tg_handle_update(u):
             raw = {"lat": loc["latitude"], "lng": loc["longitude"],
                    "ts": time.time(), "live": bool(loc.get("live_period")),
                    "acc": loc.get("horizontal_accuracy") or 0}
-            # анти-дребезг: буфер последних точек, сглаживание медианой
+            # анти-дребезг: буфер последних точек, сглаживание медианой.
+            # Буфер длинный: тики бывают частые (боты 0.5 с) — окну текущей
+            # скорости (240 с) нужен запас, реальным гео 8-15 с хватает с избытком
             hist = STATE["tg_pos"].get(chat_id, {}).get("hist", [])
-            hist = [h for h in hist if raw["ts"] - h["ts"] <= 600][-4:]
+            hist = [h for h in hist if raw["ts"] - h["ts"] <= 600][-520:]
             hist.append(raw)
             recent = [h for h in hist if raw["ts"] - h["ts"] <= 600][-3:]
             lats = sorted(h["lat"] for h in recent)
@@ -2076,14 +2086,19 @@ def _tg_handle_update(u):
             smoothed = {"lat": lats[len(lats) // 2], "lng": lngs[len(lngs) // 2],
                         "ts": raw["ts"], "acc": raw["acc"]}
             # замер скорости — по сглаженному треку: одиночный GPS-прыжок
-            # гасится медианой и в отрезок не попадает
+            # гасится медианой и в отрезок не попадает. Якорь замера двигается
+            # только на «зрелые» точки (≥3 с от предыдущей): при частых тиках
+            # (боты 0.5 с) соседние пары не набирают dt — меряем раз в 3+ с
             prev_s = STATE["tg_pos"].get(chat_id, {}).get("sprev")
             if prev_s:
                 _speed_geo_sample(courier["id"], prev_s, smoothed)
+                sprev_new = smoothed if smoothed["ts"] - prev_s["ts"] >= 3 else prev_s
+            else:
+                sprev_new = smoothed
             STATE["tg_pos"][chat_id] = {
                 "lat": smoothed["lat"], "lng": smoothed["lng"],
                 "ts": raw["ts"], "live": raw["live"], "acc": raw["acc"],
-                "hist": hist, "sprev": smoothed}
+                "hist": hist, "sprev": sprev_new}
             _load_track(courier, smoothed, raw["ts"])
             _deliver_track(courier, smoothed, raw["ts"])
             _auto_status_track(courier, smoothed, raw["ts"])

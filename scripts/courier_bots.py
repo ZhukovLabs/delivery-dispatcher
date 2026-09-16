@@ -23,7 +23,7 @@
   --add "Точка:N,Точка:M"  создать недостающих ботов на точках (idempotent)
   --speed KM/H             скорость езды (по умолчанию 150 — тест-режим)
   --dwell SEC              простой у адреса (по умолчанию 60)
-  --tick SEC               период пуша гео (по умолчанию 5)
+  --tick SEC               период пуша гео (по умолчанию 0.5)
   --chat-base N            база синтетических chat_id (по умолчанию 9100000)
 """
 import argparse
@@ -196,7 +196,7 @@ def main():
     ap.add_argument("--prefix", default="Бот")
     ap.add_argument("--speed", type=float, default=150.0, help="км/ч")
     ap.add_argument("--dwell", type=float, default=60.0, help="сек у адреса")
-    ap.add_argument("--tick", type=float, default=5.0, help="сек между тиками")
+    ap.add_argument("--tick", type=float, default=0.5, help="сек между тиками")
     ap.add_argument("--chat-base", type=int, default=9100000)
     ap.add_argument("--osrm", default="https://router.project-osrm.org")
     ap.add_argument("--no-autoclose", action="store_true",
