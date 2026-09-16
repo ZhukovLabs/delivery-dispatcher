@@ -124,6 +124,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   const [err, setErr] = useState<string | null>(null);
   // зеркало выбора в стейт: клик по курьеру мгновенно перекрашивает его точки
   const [selTick, setSelTick] = useState(0);
+  const [roadsTick, setRoadsTick] = useState(0);   // дороги plана доехали — перерисовать слой
 
   // свежие колбэки для обработчиков карты без пересоздания карты
   const pickRef = useRef(pickMode);
@@ -145,6 +146,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     routeSig: "",
     routeFetch: "",                    // последний запрос дорогой геометрии
     routeGeom: null as { key: string; coords: [number, number][] } | null,
+    planGeom: new Map<string, [number, number][]>() as Map<string, [number, number][]>,
     orderCircle: null as any | null,   // радиус простоя у выбранного заказа
     orderCircleOid: null as string | null,
   });
@@ -660,7 +662,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     /* 4) линии планов: пересобираем при смене состава ИЛИ пересчёте (solved_at),
        а для выбранного курьера — ещё и при изменении его выданной части */
     const selSig = `${selCid.current || "-"}:${selCourier?.out_route?.stops?.length || 0}:${selCourier?.out_route?.geom?.length || 0}`;
-    const lineSig = selSig + "|" + (plan
+    const lineSig = roadsTick + "|" + selSig + "|" + (plan
       ? `${plan.solved_at}|` + plan.routes.map(r => [r.courier_id, r.color, (r.trips || [])
           .map(t => t.stops.map(s => s.order_id).join(",")).join(";")].join("|")).join("~")
       : "");
@@ -669,15 +671,33 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       L.current.lines.forEach(l => map.geoObjects.remove(l));
       L.current.lines = [];
       if (plan && pickPts.length) {
-        // eslint-disable-next-line no-console
-        console.debug("[plan-lines] draw", plan.solved_at,
-          plan.routes.map(r => ({ n: r.courier_name, trips: (r.trips || []).map(t => ({ s: (t.stops || []).length, g: (t.geometry || []).length })) })));
         plan.routes.forEach(r => (r.trips || []).forEach(tr => {
           const hp = r.home_point || pickPts[0];
           const depotPt: [number, number] = [hp.lat, hp.lng];
-          const pts = tripCoords(tr, depotPt);
+          // дороги — норма: кэш по составу остановок; если геометрии в
+          // плане нет (роутеры молчали при расчёте) — тянем /api/route
+          // тем же каскадом и подменяем линию, прямыми — только резерв
+          const oids = (tr.stops || []).map(s => s.order_id).join(",");
+          const key = "plan|" + oids;
+          const cached = (L.current.planGeom as Map<string, [number, number][]>).get(key);
+          const base = cached || (tr.geometry && tr.geometry.length > 1 ? tr.geometry : null);
+          const stops = (tr.stops || []).map(s => [s.lat, s.lng] as [number, number]);
+          const pts = base ? trimAfter(base, stops[stops.length - 1] || depotPt)
+            : [depotPt, ...stops];
           L.current.lines.push(new ym.Polyline(pts, {},
             { strokeColor: r.color, strokeWidth: 4, strokeOpacity: 0.9, zIndex: 10 }));
+          if (!cached) {
+            const qs = encodeURIComponent(
+              [depotPt, ...stops].map(p => `${p[0].toFixed(6)},${p[1].toFixed(6)}`).join(";"));
+            fetchApi(`/api/route?coords=${qs}`)
+              .then(res => (res.ok ? res.json() : Promise.reject(new Error("route api"))))
+              .then((j: { geometry?: [number, number][] }) => {
+                if (!j.geometry || j.geometry.length < 2) return;
+                (L.current.planGeom as Map<string, [number, number][]>).set(key, j.geometry);
+                setRoadsTick(t => (t + 1) % 1e6);   // перерисовать слой с дорогами
+              })
+              .catch(() => { /* остались как есть — прямой резерв уже нарисован */ });
+          }
         }));
         L.current.lines.forEach(l => map.geoObjects.add(l));
       }
@@ -689,7 +709,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       didInitialFit.current = true;
       fitAll(ym, map, state);
     }
-  }, [ready, state, dupOids, selTick, pickPreview]);
+  }, [ready, state, dupOids, selTick, roadsTick, pickPreview]);
 
   /* смена депо: сбрасываем выбор и подтягиваемся к новой точке (#1/#7) */
   useEffect(() => {
