@@ -206,19 +206,21 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
      приоритет → дедлайн → опоздание (см. требование к точке доставки) */
   const popupHtml = (p: { address: string; courier?: string; eta?: string;
                           inMin?: number; kmLeft?: number; lateMin?: number;
-                          prio?: boolean; deadline?: string; note?: string }) =>
+                          prio?: boolean; deadline?: string; note?: string;
+                          onSite?: boolean }) =>
     `<b>${esc(p.address)}</b>` +
     (p.courier ? `<br>Курьер: ${esc(p.courier)}` : "") +
+    (p.onSite ? "<br>📍 курьер на месте" : "") +
     (p.eta ? `<br>Время прибытия ≈${esc(p.eta)}` +
-      (p.inMin != null ? ` (через ${p.inMin} мин)` : "") +
-      (p.kmLeft != null ? `, осталось ${p.kmLeft.toFixed(2)} км` : "") +
-      (p.lateMin ? ` · <span style="color:#b3261e">опоздание ~${p.lateMin} мин</span>` : "") : "") +
+      (p.inMin != null ? ` (через ${p.inMin} мин)` : "") : "") +
+    (p.kmLeft != null ? `<br>осталось ${p.kmLeft.toFixed(2)} км` : "") +
+    (p.lateMin ? `<br><span style="color:#b3261e">опоздание ~${p.lateMin} мин</span>` : "") +
     (p.prio ? "<br>⭐ приоритетный" : "") +
     (p.deadline ? `<br>⏰ до ${esc(p.deadline)}` : "") +
     (p.note ? `<br>${p.note}` : "");
 
-  // ETA выданного заказа: по остатку его маршрута из позиции курьера
-  // (примерно: расстояние по стопам / скорость × трафик + выдача до него)
+  // ETA выданного заказа: по остатку его маршрута из позиции курьера.
+  // Скорость — реальная курьера (avg_kmh уже включает трафик), не дефолт настроек
   const outEta = (o: Order, cour: Courier): { min: number; km: number } | null => {
     const stops = (cour.out_route?.stops || [])
       .filter(sp => sp.length > 2) as [number, number, string][];
@@ -229,8 +231,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       ...stops.slice(0, idx + 1).map(sp => [sp[0], sp[1]] as [number, number])];
     let km = 0;
     for (let i = 0; i < pts.length - 1; i++) km += havKm(pts[i], pts[i + 1]);
-    const min = km / ((state.settings.speed_kmh || 60) / 60) * (state.settings.traffic || 1.25)
-      + (state.settings.handover_min ?? 5) * idx;
+    const kmh = cour.avg_kmh && cour.avg_kmh > 20 ? cour.avg_kmh
+      : (state.settings.speed_kmh || 60);
+    const min = km / (kmh / 60) + (state.settings.handover_min ?? 5) * idx;
     return { min, km };
   };
 
@@ -422,12 +425,15 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         content = p.popup;
       } else if (oCour) {
         const eta = outEta(o, oCour);
+        // курьер в 100 м от заказа — тот же радиус, что и зачёт простоя
+        const onSite = !!(oCour.pos && o.lat != null && o.lng != null &&
+          havKm([oCour.pos.lat, oCour.pos.lng], [o.lat, o.lng]) <= 0.1);
         content = popupHtml({ address: o.address, courier: oCour.name,
-          eta: eta ? clockIn(eta.min) : undefined,
-          inMin: eta ? Math.round(eta.min) : undefined,
-          kmLeft: eta ? eta.km : undefined,
-          lateMin: eta ? (lateByDeadline(o.deadline, eta.min) ?? undefined) : undefined,
-          prio: o.prio, deadline: o.deadline });
+          eta: !onSite && eta ? clockIn(eta.min) : undefined,
+          inMin: !onSite && eta ? Math.round(eta.min) : undefined,
+          kmLeft: !onSite && eta ? eta.km : undefined,
+          lateMin: !onSite && eta ? (lateByDeadline(o.deadline, eta.min) ?? undefined) : undefined,
+          prio: o.prio, deadline: o.deadline, onSite });
       } else {
         content = popupHtml({ address: o.address,
           note: `(ещё не рассчитано)${dupOids?.has(o.id) ? ` · <span style="color:${DUP_RED}">дублирующийся адрес</span>` : ""}`,
