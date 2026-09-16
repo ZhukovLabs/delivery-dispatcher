@@ -365,13 +365,6 @@ export default function Console() {
     catch (err) { showToast("Не удалось скопировать: " + (err as Error).message, true); }
   };
 
-  const sendTg = async (cid: string) => {
-    try {
-      const r = await api<{ ok?: boolean }>("/api/notify/courier/" + cid, "POST");
-      showToast(r.ok ? "Маршрут отправлен курьеру в Telegram" : "Не отправлено");
-    } catch (e) { showToast((e as Error).message, true); }
-  };
-
   /* ---------- производные ---------- */
   // дубли адресов: два диспетчера могут добавить один адрес одновременно (#3)
   // (хук обязан стоять до раннего return при !st — Rules of Hooks)
@@ -505,7 +498,6 @@ export default function Console() {
               onMode={m => void applyAdvice(m)}
               onGive={r => void giveRoute(r)}
               onCopy={r => void copyRoute(r)}
-              onTg={cid => void sendTg(cid)}
               dragOverRoute={dragOverRoute}
               setDragOverRoute={setDragOverRoute}
               onMoveStop={async (oid, to) => {

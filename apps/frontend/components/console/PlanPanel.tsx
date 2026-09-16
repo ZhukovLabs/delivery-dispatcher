@@ -1,20 +1,19 @@
 "use client";
 
-import { Check, ClipboardCopy, Clock, Gauge, Hand, Package, RefreshCw, Route as RouteIcon, Send, Timer, TriangleAlert, X, Zap } from "lucide-react";
+import { Check, ClipboardCopy, Clock, Gauge, Hand, Package, RefreshCw, Route as RouteIcon, Timer, TriangleAlert, X, Zap } from "lucide-react";
 import type { AppState, Route } from "@/lib/api";
 import AdviceCard from "./AdviceCard";
 import { plural } from "./format";
 
 /* ---------- панель плана развозки: маршруты по курьерам, заезды, стопы ---------- */
 
-export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOverRoute, setDragOverRoute, onMoveStop, onPin, onUnassign }: {
+export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, dragOverRoute, setDragOverRoute, onMoveStop, onPin, onUnassign }: {
   st: AppState;
   clock: (m: number) => string;
   busyMode: boolean;
   onMode: (m: string) => void;
   onGive: (r: Route) => void;
   onCopy: (r: Route) => void;
-  onTg: (cid: string) => void;
   dragOverRoute: string | null;
   setDragOverRoute: (v: string | null) => void;
   onMoveStop: (oid: string, to: string) => Promise<void>;
@@ -88,9 +87,6 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
               <span className="r-dot" style={{ background: r.color }} />
               <b>{r.courier_name}</b>
               <span className="r-acts">
-                {st.cfg?.tg && r.tg_chat_id && (
-                  <button className="r-tg" title="Отправить маршрут курьеру в Telegram" onClick={() => onTg(r.courier_id)}><Send size={14} /></button>
-                )}
                 <button className="r-copy" title="Скопировать маршрут текстом, чтобы отправить курьеру" onClick={() => onCopy(r)}><ClipboardCopy size={14} /></button>
               </span>
               {giveIds.length > 0 && (
@@ -134,6 +130,7 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                 <ol className="stops">
                   {tr.stops.map(s => {
                     stopNo += 1;
+                    const so = st.orders.find(x => x.id === s.order_id);
                     return (
                       <li key={s.order_id} draggable
                         title={`${s.address} · +${s.eta_min} мин от расчёта`}
@@ -147,7 +144,13 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                         <span className="s-a">
                           {!!s.prio && (
                             <span className="s-prio" title={`Приоритетный${s.auto ? ", поднялся сам по возрасту" : ""}`}><Zap size={11} /></span>
-                          )} {s.address} {s.deadline && <span className="s-dl" title="Обещанное время доставки"><Timer size={11} />{s.deadline}</span>}
+                          )} {s.address}
+                          {so && so.lat != null && so.lng != null && (
+                            <a className="s-map" target="_blank" rel="noreferrer"
+                              title="Построить маршрут до точки в Яндекс Картах"
+                              href={`https://yandex.ru/maps/?rtext=~${so.lat},${so.lng}&rtt=auto`}
+                              onClick={e => e.stopPropagation()}>Яндекс Маршрут</a>
+                          )} {s.deadline && <span className="s-dl" title="Обещанное время доставки"><Timer size={11} />{s.deadline}</span>}
                           {!!s.late_min && s.late_min > 0 && (
                             <span className="late-chip" title="Успеть к обещанному времени не получится">
                               опоздание ~{s.late_min} мин

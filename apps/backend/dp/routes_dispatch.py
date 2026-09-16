@@ -757,6 +757,17 @@ def assign_orders():
         return jsonify({"error": f"Заказ из точки «{pt}» — выдать может только "
                                  f"курьер этой точки"}), 400
     now = _now().isoformat(timespec="seconds")
+    # снимаем адреса/ETA выданных стопов ДО патча плана — для авто-сообщения курьеру
+    me = _me()
+    oid_set = set(oids)
+    route = next((r for r in (_courier_plan(courier) or {}).get("routes", [])
+                  if r["courier_id"] == cid), None)
+    given_stops = ([{"address": s["address"], "eta_clock": s.get("eta_clock")}
+                    for tr in (route or {}).get("trips", [])
+                    for s in tr["stops"] if s["order_id"] in oid_set]) if route else []
+    if not given_stops:  # выдача мимо плана — хотя бы адреса
+        given_stops = [{"address": o["address"], "eta_clock": None}
+                       for o in STATE["orders"] if o["id"] in oid_set]
     given = 0
     for o in STATE["orders"]:
         if o["id"] in oids and (o.get("status") or "ready") == "ready":
@@ -772,6 +783,34 @@ def assign_orders():
         _invalidate_plan(drop_plan=True, pid=courier_pid)
     log.info("assign: %d заказ(ов) -> %s", given, courier["name"])
     _ev("disp", f"выдал {given} заказ(ов) → {courier['name']}")
+
+    # маршрут уходит курьеру в Telegram автоматически — раньше была
+    # отдельная кнопка; шлём в фоне, выдача не ждёт сеть Telegram
+    chat = (courier.get("tg_chat_id") or "").strip()
+    if chat and CFG["tg_bot_token"] and given_stops:
+        def _tg_assign():
+            z_word = _plural(len(given_stops), ("заказ", "заказа", "заказов"))
+            lines = [f"🛵 <b>{_esc(courier['name'])}, в развозку</b>: "
+                     f"{len(given_stops)} {z_word}"]
+            for i, s in enumerate(given_stops, start=1):
+                lines.append(f"{i}. {_esc(s['address'])}"
+                             + (f" · ≈{s['eta_clock']}" if s.get("eta_clock") else ""))
+            lines.append("Время приблизительное, следите за сообщениями.")
+            if (me or {}).get("name") and (me or {}).get("phone"):
+                lines.append(f"\nЕсть вопросы? - {_esc(me['name'])}, {me['phone']}")
+            try:
+                resp = requests.post(
+                    f"https://api.telegram.org/bot{CFG['tg_bot_token']}/sendMessage",
+                    json={"chat_id": chat, "text": "\n".join(lines),
+                          "parse_mode": "HTML"}, timeout=10)
+                if not resp.json().get("ok"):
+                    log.warning("assign tg: не ушло курьеру %s: %s",
+                                courier["name"], resp.text[:200])
+                else:
+                    log.info("telegram sent (assign): %s", courier["name"])
+            except (requests.RequestException, ValueError) as e:
+                log.warning("assign tg: %s", e)
+        threading.Thread(target=_tg_assign, daemon=True).start()
     return _payload()
 
 
