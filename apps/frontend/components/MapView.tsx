@@ -3,10 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fmtAge, type AppState, type Plan, type Courier, type Order } from "@/lib/api";
 
-// = TG_GEO_AT_PLACE бэкенда: радиус, в котором курьеру зачтётся простой
-// «у адреса» (после 30 с — вопрос «доставлен?» в TG)
-const GEO_AT_PLACE_M = 150;
-
 const havKm = (a: [number, number], b: [number, number]) => {
   const r = Math.PI / 180;
   const h = Math.sin((b[0] - a[0]) * r / 2) ** 2 +
@@ -203,7 +199,6 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     `<b>${esc(p.address)}</b>` +
     (p.courier ? `<br>🛍 ${esc(p.courier)}` : "") +
     (p.eta ? `<br>≈${esc(p.eta)}${p.lateMin ? ` · <span style="color:#b3261e">опоздание ~${p.lateMin} мин</span>` : ""}` : "") +
-    `<br><span style="color:#666">📍 простой зачтётся в ${GEO_AT_PLACE_M} м</span>` +
     (p.prio ? "<br>⭐ приоритетный" : "") +
     (p.deadline ? `<br>⏰ до ${esc(p.deadline)}` : "") +
     (p.note ? `<br>${p.note}` : "");
