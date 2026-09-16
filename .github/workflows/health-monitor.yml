@@ -21,11 +21,9 @@ jobs:
             https://zhukovlabs.taila8c324.ts.net:8443/health || echo 000)
           echo "health_code=$code"
           if [ "$code" != "200" ]; then
-            echo "Сайт/тоннель лежит — шлём алерт"
+            msg="Диспетчерская недоступна: health ответил '$code'. Проверь ноут (192.168.0.161): питание, интернет, tailscaled (funnel), dispatcher.service."
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_ALERT_TOKEN }}/sendMessage" \
               --data-urlencode "chat_id=${{ secrets.ALERT_CHAT }}" \
-              --data-urlencode "text="\
-"🔴 Диспетчерская недоступна: health ответил '$code'.
-Проверь ноут (192.168.0.161): питание, интернет, tailscaled (funnel), dispatcher.service." \
+              --data-urlencode "text=🔴 $msg" \
               > /dev/null || true
           fi
