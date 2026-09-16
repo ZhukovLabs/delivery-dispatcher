@@ -82,7 +82,7 @@ def advance(route, pos, dist_deg):
 
 
 class Osrm:
-    """Дорожные трассы через публичный OSRM (кэш + прямой фолбэк)."""
+    """Дорожные трассы через OSRM (по умолчанию локальный; кэш + прямой фолбэк)."""
 
     def __init__(self, base):
         self.base = base.rstrip("/")
@@ -198,7 +198,7 @@ def main():
     ap.add_argument("--dwell", type=float, default=60.0, help="сек у адреса")
     ap.add_argument("--tick", type=float, default=0.5, help="сек между тиками")
     ap.add_argument("--chat-base", type=int, default=9100000)
-    ap.add_argument("--osrm", default="https://router.project-osrm.org")
+    ap.add_argument("--osrm", default="http://127.0.0.1:5000")  # локальный OSRM: боты едут ровно по тем же дорогам, что рисует карта
     ap.add_argument("--no-autoclose", action="store_true",
                     help="не подтверждать доставку в диалоге (кнопки жмёт человек)")
     args = ap.parse_args()

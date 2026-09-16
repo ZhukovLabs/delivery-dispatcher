@@ -104,15 +104,15 @@ const nearestIdxFrom = (pl: [number, number][], p: [number, number], start: numb
   }
   return bi;
 };
-/* линия от точки p (позиция курьера) до конца маршрута; если курьер
-   сошёл с кэшированной дороги (>250 м) — кэш не подходит */
+/* линия от ближайшей к курьеру точки маршрута до его конца: даже если
+   курьер чуть в стороне от нарисованной дороги (другая версия данных
+   роутера), оставшийся путь рисуем от ближайшей точки — не гася линию */
 const trimFrom = (pl: [number, number][], p: [number, number]): [number, number][] => {
   let bi = 0, bd = Infinity;
   for (let i = 0; i < pl.length; i++) {
     const dx = pl[i][0] - p[0], dy = pl[i][1] - p[1], d = dx * dx + dy * dy;
     if (d < bd) { bd = d; bi = i; }
   }
-  if (bd > OFF_ROUTE * OFF_ROUTE) return [];
   return pl.slice(bi);
 };
 
@@ -413,12 +413,6 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         const cached = L.current.routeGeom as { key: string; coords: [number, number][] } | null;
         const ok = cached && cached.key === stopsKey && drawRoad(cached.coords);
         if (ok) return;
-        if (cached && cached.key === stopsKey) {
-          // остановки те же, но курьер далеко от кэшированной дороги —
-          // съехал/перестроился: кэш больше не про нас, перекачаем
-          L.current.routeGeom = null;
-          L.current.routeFetch = "";
-        }
         // прямых у выбранного курьера не рисуем — только дороги; пока идёт
         // запрос каскада, линии нет вообще (старую чужого набора убрали)
         dropLine();
