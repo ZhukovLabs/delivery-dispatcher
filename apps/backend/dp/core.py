@@ -430,7 +430,8 @@ def _history_period(days=1, point_id=None):
         out.append({"closed_at": r["closed_at"], "address": r["address"],
                     "outcome": r["outcome"], "courier": r["courier"] or "",
                     "cycle_min": cycle_min, "deadline": r["deadline"] or "",
-                    "reason": r["reason"] or ""})
+                    "reason": r["reason"] or "",
+                    "created_at": r["created_at"] or ""})
     summary = {"delivered": sum(1 for r in out if r["outcome"] == "delivered"),
                "cancelled": sum(1 for r in out if r["outcome"] == "cancelled"),
                "avg_cycle_min": round(sum(cycles) / len(cycles)) if cycles else None}
@@ -816,10 +817,10 @@ _MATRIX_CACHE_MAX = 40
 
 
 def _matrix_key(points):
-    # депо — на своём месте: матрица индексна, одинаковый набор точек
-    # с другим депо (депо = чей-то адрес) не должен попадать на чужой кэш
-    return (tuple((round(points[0]["lat"], 5), round(points[0]["lng"], 5))),
-            tuple(sorted((round(p["lat"], 5), round(p["lng"], 5)) for p in points[1:])))
+    # Ключ СТРОГО ПО ПОРЯДКУ точек: матрица индексна — один и тот же набор
+    # точек в другом порядке это ДРУГАЯ матрица. Сортировка в ключе (как было)
+    # молча склеивала разные порядки после удаления+пересоздания заказа.
+    return tuple((round(p["lat"], 5), round(p["lng"], 5)) for p in points)
 
 
 def _cache_matrix(key, value):
@@ -865,8 +866,10 @@ def routing_table(points):
     локальный OSRM → FOSSGIS → демо → ORS. Ступень, молчащая дольше
     ROUTE_HEDGE_S, подстраховывается следующей; побеждает первый ответ.
 
-    Результат кэшируется по набору точек (30 мин): повторный расчёт того же
-    набора не тратит квоту внешних сервисов и занимает миллисекунды.
+    Успешный результат кэшируется по набору точек (30 мин): повторный расчёт
+    того же набора не тратит квоту внешних сервисов и занимает миллисекунды.
+    Неудача НЕ кэшируется: транзиентный сбой каскада не «отравляет» кэш на
+    полчаса фоллбеком — следующий расчёт снова пробует роутеры.
     Возвращает (durations|None, distances|None, provider).
     """
     key = _matrix_key(points)
@@ -877,32 +880,63 @@ def routing_table(points):
     won = hedged_first(_routing_providers("matrix", points),
                        hedge_s=ROUTE_HEDGE_S, final_wait=ROUTE_FINAL_S)
     provider, (durations, distances) = won if won else (None, (None, None))
+    if durations is None:
+        log.warning("routing_table: каскад роутеров молчит (%d точек) — "
+                    "фоллбек скорости, без кэша", len(points))
+        return None, None, provider or "offline"
     _cache_matrix(key, (durations, distances, provider or "offline"))
     return durations, distances, provider or "offline"
 
 
+_GEOM_CACHE = {}          # ключ(точки) -> (ts, geometry)
+_GEOM_TTL = 1800          # дороги за полчаса не меняются
+_GEOM_CACHE_MAX = 60
+
+
+def _geom_key(points):
+    return tuple((round(p["lat"], 5), round(p["lng"], 5)) for p in points)
+
+
 def routing_geometry(points):
-    """Геометрия маршрута тем же каскадом, что и матрицы. None при сбое всех."""
+    """Геометрия маршрута тем же каскадом, что и матрицы. None при сбое всех.
+
+    Успешные ответы кэшируются по набору точек (30 мин): повторный расчёт
+    того же заезда и клики по курьеру на карте не ходят в сеть лишний раз.
+    """
+    key = _geom_key(points)
+    hit = _GEOM_CACHE.get(key)
+    if hit and time.time() - hit[0] < _GEOM_TTL:
+        return hit[1]
     won = hedged_first(_routing_providers("geometry", points),
                        hedge_s=ROUTE_HEDGE_S, final_wait=ROUTE_FINAL_S)
-    return won[1] if won else None
+    geom = won[1] if won else None
+    if geom:
+        if len(_GEOM_CACHE) >= _GEOM_CACHE_MAX:  # простая вытесняющая чистка
+            oldest = min(_GEOM_CACHE, key=lambda k: _GEOM_CACHE[k][0])
+            _GEOM_CACHE.pop(oldest, None)
+        _GEOM_CACHE[key] = (time.time(), geom)
+    return geom
 
 
-def build_time_matrix(points, settings):
-    """Матрица времени в минутах.
+def build_time_matrix(points, settings, k_homes=1):
+    """Матрица времени в СЕКУНДАХ.
 
-    Время дуги = (OSRM-время × коэффициент пробок)
-               + (расстояние × задержка на светофорах, с/км)
-               + вручение (на дуге прибытия в заказ).
+    points = k_homes точек выдачи + заказы. Время дуги =
+    (OSRM-время + светофоры_с/км) × коэффициент пробок + вручение
+    (ТОЛЬКО на дугах прибытия в заказ, узлы >= k_homes:
+    возврат в свою/чужую точку выдачи вручением не является).
     OSRM отдаёт время свободного потока: без пробок и без остановок на
     регулируемых перекрёстках, поэтому светофоры моделируются отдельной
     надбавкой за километр пути (по умолчанию 15 с/км ≈ светофор каждые
-    ~1.2 км и ~18 с ожидания). Возврат в депо учитывается.
-    Возвращает (матрица, дороги_использованы, матрица_расстояний_м|None, провайдер).
+    ~1.2 км и ~18 с ожидания).
+    Секунды (а не минуты, как раньше) убирают «пол в 1 минуту» на коротких
+    городских дугах — решатель видит честную геометрию близких адресов.
+    Возвращает (матрица_сек, дороги_использованы, матрица_расстояний_м|None,
+    провайдер).
     """
-    handover = max(0, int(settings["handover_min"]))
+    handover_s = max(0, int(settings["handover_min"])) * 60
     traffic = max(1.0, float(settings.get("traffic", 1.3)))
-    lights = max(0.0, float(settings.get("lights_sec_per_km", 24))) / 60.0  # мин/км
+    lights = max(0.0, float(settings.get("lights_sec_per_km", 24)))  # с/км
     speed = max(5.0, float(settings["speed_kmh"]))
     n = len(points)
     durations, distances, provider = (routing_table(points) if n >= 2
@@ -913,16 +947,21 @@ def build_time_matrix(points, settings):
             if i == j:
                 continue
             if durations is not None:
-                minutes = durations[i][j] / 60.0 * traffic
                 km = (distances[i][j] / 1000.0 if distances
                       else haversine_km(points[i], points[j]) * ROAD_FACTOR)
+                seconds = durations[i][j] + km * lights
             else:  # запасной вариант: оценка по прямой
                 km = haversine_km(points[i], points[j]) * ROAD_FACTOR
-                minutes = km / speed * 60
-            minutes += km * lights
-            t = max(1, int(round(minutes)))
-            if j != 0:
-                t += handover
+                seconds = km / speed * 3600.0 + km * lights
+            # traffic (и почасовой коэффициент при пересчёте /base*час)
+            # масштабирует дорожное время ЦЕЛИКОМ — светофорные очереди
+            # растут вместе с потоком. Раньше lights добавлялись ПОСЛЕ
+            # traffic: обратное деление /base_traffic их «сдувало» на
+            # 1/traffic (~-23% при 1.3) в плоские часы
+            seconds *= traffic
+            t = max(1, int(round(seconds)))
+            if j >= k_homes:
+                t += handover_s
             m[i][j] = t
     return m, durations is not None, distances, provider
 
@@ -937,8 +976,21 @@ _HOURLY_TRAFFIC = {0: 0.90, 1: 0.90, 2: 0.90, 3: 0.90, 4: 0.90, 5: 0.90,
                    12: 1.10, 13: 1.05, 14: 1.00, 15: 1.00, 16: 1.05,
                    17: 1.20, 18: 1.35, 19: 1.15, 20: 1.00, 21: 0.95,
                    22: 0.95, 23: 0.90}
-_LATE_WEIGHT = 25    # штраф за минуту опоздания к дедлайну
-_MAX_ROUNDS = 3      # максимальное число «заездов» на курьера
+_LATE_WEIGHT = 25    # штраф за минуту опоздания к дедлайну; складывается с
+                     # приоритетом (60/мин «поскорее»): у заказа с обоими
+                     # флагами давят ОБА давления через две размерности
+_PRIO_WEIGHT = 60    # вес минуты доставки приоритетного заказа (против 1 у обычного)
+_ASAP_WEIGHT = 1     # вес минуты ожидания обычного заказа (лёгкое «поскорее»)
+_SPAN_WEIGHT = 100   # вес секунды длительности заезда: компактность против
+                     # срочности. Подобрано экспериментом (3 сценария ×
+                     # 3 повтора GLS): при 200 тесные сценарии с дедлайнами
+                     # воспроизводимо деградируют (max доставка +29 мин),
+                     # при 100 — нет; соотношения span:late = 4:1, span:prio = 1.7:1
+_MAX_TRIPS = 3       # максимум заездов на курьера (виртуальные машины-копии)
+_LOOP_EST_FACTOR = 1.5  # оценка длительности заезда для нижних границ стартов
+                        # копий k>=1: минимальный круг ×1.5. Чистый минимум —
+                        # «идеальный мир»: решатель верил в слишком ранний
+                        # возврат и обещал невлезающие дедлайны
 
 
 def _deadline_rel_min(hhmm, now_hm):
@@ -970,27 +1022,30 @@ def _eta_pass(stop_nodes, delay, matrix, settings, solved_dt, appr=None, home=0,
               spd_factor=1.0):
     """ETA остановок поездки (минуты от solved_dt) с почасовыми коэффициентами.
 
-    Матрица построена с базовым коэффициентом traffic: дуга очищается от него
-    и домножается на коэффициент часа фактического выезда на дугу.
+    Матрица в СЕКУНДАХ, построена с базовым коэффициентом traffic и вручением
+    на дугах прибытия в заказ: дуга очищается от них и домножается на
+    коэффициент часа фактического выезда на дугу.
     spd_factor — индивидуальный множитель курьера (замедленная/быстрая езда).
-    Возвращает (список ETA остановок, полная длительность поездки).
+    Возвращает (список ETA остановок в минутах, полная длительность в минутах).
     """
     hourly = int(settings.get("hour_traffic", 1))
     base_traffic = max(1.0, float(settings.get("traffic", 1.3)))
     handover = max(0, int(settings["handover_min"]))
+    handover_s = handover * 60
     t = float(delay)
     node = home
     etas = []
     for g in stop_nodes:
         hour = (solved_dt + timedelta(minutes=t)).hour
         factor = _HOURLY_TRAFFIC.get(hour, 1.0) if hourly else 1.0
-        travel = (matrix[node][g] - handover) / base_traffic * factor * spd_factor
-        t += travel + handover + (appr.get(g, 0) if appr else 0)
+        travel = (matrix[node][g] - handover_s) / base_traffic * factor * spd_factor
+        t += travel / 60.0 + handover + (appr.get(g, 0) if appr else 0)
         etas.append(int(round(t)))
         node = g
     hour = (solved_dt + timedelta(minutes=t)).hour
     factor = _HOURLY_TRAFFIC.get(hour, 1.0) if hourly else 1.0
-    t += matrix[node][home] / base_traffic * factor * spd_factor
+    # возвратная дуга вручения не содержит (строится без него)
+    t += matrix[node][home] / base_traffic / 60.0 * factor * spd_factor
     return etas, int(round(t))
 
 
@@ -1000,9 +1055,16 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
 
     include_away=False — сценарий «не ждать»: только курьеры на базе.
 
-    Заказов больше, чем влезает в один заезд (вместимость x курьеры), решается
-    несколькими раундами: курьер вернётся на базу и поедет вторым заездом
-    (задержка старта = длительность первого заезда + перезагрузка).
+    Все заезды всех курьеров решаются ОДНОЙ OR-Tools-задачей: у каждого
+    курьера до _MAX_TRIPS виртуальных машин-копий (заезд 1, 2, 3...),
+    связанных цепочкой по времени — старт заезда k+1 не раньше конца заезда
+    k плюс перезагрузка. Состав пачек, порядок объезда и «кто поедет вторым
+    заездом» оптимизируются совместно, а не раундами по остатку, как раньше.
+    Задержку возврата away-курьера моделируем стартовым кумулятором его
+    первой копии (пустые копии времени не занимают и на span не влияют).
+
+    Время внутри решателя — в СЕКУНДАХ (матрица build_time_matrix тоже):
+    веса штрафов не менялись, вся цель масштабируется равномерно.
 
     helpers: {courier_id: point_id} — разовая «помощь»: курьер в этом расчёте
     стартует с чужой точки выдачи и берёт максимум один заказ. Его собственная
@@ -1048,14 +1110,18 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
             homes.append(hp)
     K = len(homes)
     points = homes + orders
-    matrix, by_roads, distances, provider = build_time_matrix(points, settings)
-    appr_home = [_approach_map(points, h, K, settings) for h in homes]
+    matrix, by_roads, distances, provider = build_time_matrix(points, settings,
+                                                              k_homes=K)
+    appr_home = [_approach_map(points, h, K, settings) for h in homes]  # минуты
     solved_dt = _now()
     now_hm = solved_dt.hour * 60 + solved_dt.minute
     handover = max(0, int(settings["handover_min"]))
+    handover_s = handover * 60
     auto_prio = int(settings.get("auto_prio_min", 0) or 0)
     max_orders = int(settings["max_orders"])
-    reload_min = max(0, int(settings.get("reload_min", 10)))
+    reload_s = max(0, int(settings.get("reload_min", 10))) * 60
+    hourly_on = bool(int(settings.get("hour_traffic", 1)))
+    base_traffic = max(1.0, float(settings.get("traffic", 1.3)))
 
     # Индивидуальная скорость: дорожное время масштабируется на default/замер.
     default_kmh = max(5.0, float(settings.get("speed_kmh", 60)))
@@ -1076,196 +1142,351 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
         auto_flag[g] = bool(auto_prio > 0 and age_min >= auto_prio)
         eff_prio[g] = bool(o.get("prio") or auto_flag[g])
 
-    avail = {c["id"]: (0 if c["status"] != "away" else _start_delay_min(c))
-             for c in couriers}
     home_of = {c["id"]: home_idx[_eff_home(c)["id"]] for c in couriers}
     # Точка выдачи каждого заказа: везти его могут только курьеры этой точки.
     first_pid = STATE["points"][0]["id"]
     order_pid = {K + i: (o.get("point_id") or first_pid) for i, o in enumerate(orders)}
     home_pid = {c["id"]: _eff_home(c)["id"] for c in couriers}
-    trips_by_cid = {}
-    remaining = list(range(K, len(points)))
 
-    for round_no in range(_MAX_ROUNDS):
-        if not remaining:
-            break
-        pool = [c for c in couriers if c["id"] not in helper_ids or round_no == 0]
-        # все машины в игре: решатель сам оставит невыгодным пустой маршрут.
-        # Раньше один заказ доставался только первому курьеру списка
-        # (n_veh = min(курьеры, заказы)) — сравнивать было не с кем.
-        n_veh = len(pool)
-        round_couriers = pool[:n_veh]
-        round_homes = []
-        for c in round_couriers:
-            if home_of[c["id"]] not in round_homes:
-                round_homes.append(home_of[c["id"]])
-        sub = round_homes + remaining        # узлы раунда: дома, потом заказы
-        pos_of = {a: i for i, a in enumerate(sub)}
-        starts = [pos_of[home_of[c["id"]]] for c in round_couriers]
-        manager = pywrapcp.RoutingIndexManager(len(sub), n_veh, starts, starts)
+    # Виртуальные машины: копия курьера = один его заезд. Риифицированные
+    # цепочки «конец заезда k + перезагрузка <= старт заезда k+1» здесь
+    # НЕ используются: нелинейные произведения ломают фильтры локального
+    # поиска OR-Tools (GLS застревает, кумуляторы не минимизируются —
+    # проверено на изолированном воспроизведении). Вместо них линейные
+    # нижние границы старта копии k: возврат + k × (перезагрузка +
+    # оценка заезда ×1.5). Истинные задержки/ETA восстанавливаются
+    # цепочкой при сборке плана (см. ниже), здесь важна относительная цена
+    # дуг в правильный час.
+    veh = []
+    for c in couriers:
+        cid = c["id"]
+        h = home_idx[home_pid[cid]]
+        allowed = {K + i for i, o in enumerate(orders)
+                   if order_pid[K + i] == home_pid[cid]
+                   and (not o.get("pin") or o["pin"] == cid)}
+        min_loop_s = (min(matrix[h][g] + matrix[g][h] for g in allowed)
+                      if allowed else 0)
+        est_loop_s = int(min_loop_s * _LOOP_EST_FACTOR)
+        release_s = 0 if c["status"] != "away" else _start_delay_min(c) * 60
+        trips_n = 1 if cid in helper_ids else _MAX_TRIPS
+        for k in range(trips_n):
+            start_min_s = release_s + k * (reload_s + est_loop_s)
+            hour = (solved_dt + timedelta(seconds=round(start_min_s))).hour
+            veh.append({"courier": c, "home": h, "allowed": allowed, "k": k,
+                        "appr": appr_home[h], "factor": spd_factor.get(cid, 1.0),
+                        "hour_f": (_HOURLY_TRAFFIC.get(hour, 1.0)
+                                   if hourly_on else 1.0),
+                        "release_s": release_s, "start_min_s": start_min_s})
+
+    def _solve_once(budget_ms):
+        """Одна OR-Tools-модель по текущему состоянию veh + решение.
+
+        Между проходами меняются только hour_f копий (обновление почасовых
+        коэффициентов по фактическим стартам) — модель и ограничения
+        идентичны, поэтому замыкание без параметров модели.
+        """
+        manager = pywrapcp.RoutingIndexManager(len(points), len(veh),
+                                               [v["home"] for v in veh],
+                                               [v["home"] for v in veh])
         routing = pywrapcp.RoutingModel(manager)
 
-        def make_cb(delay, hpos, appr, allowed, factor):
+        def make_cb(v, start_index, with_trip_cost):
             def cb(from_index, to_index):
-                i, j = sub[manager.IndexToNode(from_index)], sub[manager.IndexToNode(to_index)]
+                i, j = (manager.IndexToNode(from_index),
+                        manager.IndexToNode(to_index))
                 arc = matrix[i][j]
-                if j != 0 and arc > handover:
-                    # дуга прибытия в заказ содержит вручение — его не масштабируем
-                    # (arc == 0 — петля непосещённого узла, её не трогаем)
-                    arc = int(round((arc - handover) * factor)) + handover
-                cost = arc + (delay if i == sub[hpos] else 0)
+                if j >= K and arc > handover_s:
+                    # базовый трафик уже зашит в матрицу (traffic=1.3 к среднему);
+                    # почасовой коэффициент ЗАМЕНЯЕТ его часовую часть, поэтому
+                    # сначала делим на базу — как в _eta_pass. Иначе факторы
+                    # перемножаются (1.3×0.9) и дедлайны сравниваются с завышенными
+                    # кумуляторами: решатель «паникует» у дедлайнов.
+                    arc = int(round((arc - handover_s) / base_traffic
+                                    * v["factor"] * v["hour_f"])) + handover_s
+                elif j < K and arc > 0:
+                    # возвратная дуга (заказ -> дом): вручения нет, но трафик,
+                    # час и скорость курьера действуют так же — раньше дуга шла
+                    # по базовой матрице без пересчёта (решатель недооценивал
+                    # возвраты в час пик и переоценивал ночью)
+                    arc = int(round(arc / base_traffic
+                                    * v["factor"] * v["hour_f"]))
+                cost = arc
                 if j >= K:
-                    cost += appr.get(j, 0)
-                    if j not in allowed:      # чужая точка выдачи — везти нельзя
+                    cost += v["appr"].get(j, 0) * 60  # парковка/подъезд: мин -> сек
+                    if j not in v["allowed"]:      # чужая точка/чужой pin — везти нельзя
                         cost += 1_000_000_000
+                if with_trip_cost and from_index == start_index and v["k"] > 0:
+                    # фиксированная цена активации заезда k>0 (возврат + перезагрузка):
+                    # без неё PCI не различает копии одного курьера и может посадить
+                    # единственный заезд в k1/k2, завышая ETА на полчаса, а одиночные
+                    # переносы не вытащат (промежуточное расщепление дороже).
+                    # Только в ЦЕЛЕВУЮ функцию — в размерность времени надбавка
+                    # не идёт (нижние границы стартов уже учитывают перезагрузку)
+                    cost += reload_s
                 return cost
             return cb
 
-        cb_idxs = [routing.RegisterTransitCallback(
-                       make_cb(avail[c["id"]], pos_of[home_of[c["id"]]],
-                               appr_home[home_of[c["id"]]],
-                               {K + i for i, o in enumerate(orders)
-                                if order_pid[K + i] == home_pid[c["id"]]
-                                and (not o.get("pin") or o["pin"] == c["id"])},
-                               spd_factor.get(c["id"], 1.0)))
-                   for c in round_couriers]
-        for v, cb_idx in enumerate(cb_idxs):
-            routing.SetArcCostEvaluatorOfVehicle(cb_idx, v)
+        cb_idxs = []      # транзиты времени (без цены активации)
+        for vi, v in enumerate(veh):
+            vi_start = routing.Start(vi)
+            cb_idx = routing.RegisterTransitCallback(make_cb(v, vi_start, False))
+            cb_idxs.append(cb_idx)
+            routing.SetArcCostEvaluatorOfVehicle(
+                routing.RegisterTransitCallback(make_cb(v, vi_start, True)), vi)
+
         routing.AddConstantDimension(1, max_orders + 1, True, "Orders")
         orders_dim = routing.GetDimensionOrDie("Orders")
-        for v, c in enumerate(round_couriers):
-            if c["id"] in helper_ids:
+        first_copy = {}   # courier_id -> индекс первой копии (заезд k = 0)
+        for vi, v in enumerate(veh):
+            cid = v["courier"]["id"]
+            first = first_copy.setdefault(cid, vi)
+            if cid in helper_ids:
                 # размерность считает дуги: простой = 1, ровно один заказ = 2
-                orders_dim.CumulVar(routing.End(v)).SetRange(2, 2)
-            elif round_no == 0 and c["id"] in force_ids:
-                # перетащен в план вручную: обязан взять хотя бы один заказ
-                orders_dim.CumulVar(routing.End(v)).SetMin(2)
-        routing.AddDimensionWithVehicleTransits(cb_idxs, 0, 24 * 60, True, "Time")
+                orders_dim.CumulVar(routing.End(vi)).SetRange(2, 2)
+            elif vi == first and cid in force_ids:
+                # перетащен в план вручную: первый заезд обязан взять заказ
+                orders_dim.CumulVar(routing.End(vi)).SetMin(2)
+
+        routing.AddDimensionWithVehicleTransits(cb_idxs, 0, 24 * 3600, False, "Time")
         time_dim = routing.GetDimensionOrDie("Time")
-        time_dim.SetGlobalSpanCostCoefficient(200)
+        # Давление на длительность — ПЕР-ВЕХИКЛЬНЫЙ span (конец − старт копии), а не
+        # глобальный max(End) − min(Start): в модели с копиями-заездами глобальный
+        # span ломает поиск — решатель выравнивает старты копий и прячет заказы в
+        # поздние копии (воспроизведено изолированно: глобальный span -> первый
+        # заезд пустой, старты +45 мин, просроченный дедлайн в хвосте; пер-
+        # вехикльный -> первый заезд загружен, старты на нижних границах). Пустая
+        # копия при этом даёт span 0 и не шумит.
+        for vi in range(len(veh)):
+            time_dim.SetSpanCostCoefficientForVehicle(_SPAN_WEIGHT, vi)
 
-        # Штраф за ожидание доставки: обычный заказ 1 мин, приоритетный 60,
-        # просрочка дедлайна 25 (дедлайн сильнее приоритета).
-        for ln in range(len(sub)):
-            g = sub[ln]
-            if g < K:
-                continue  # точки выдачи - не остановки
-            idx = manager.NodeToIndex(ln)
-            if deadline_rel[g] is not None:
-                time_dim.SetCumulVarSoftUpperBound(idx, max(0, deadline_rel[g]),
-                                                   _LATE_WEIGHT)
-            elif eff_prio[g]:
-                time_dim.SetCumulVarSoftUpperBound(idx, 0, _PRIO_WEIGHT)
+        # Нижние границы стартов копий: заезд k не раньше возврата курьера +
+        # (перезагрузка + холостой заезд) × k. Старт ПЕРВОЙ копии фиксируем
+        # жёстко на релизе — ETА и почасовой коэффициент считаются от него;
+        # для остальных копий достаточно нижней границы: на старт нет давления
+        # в цель, локальный поиск кладёт его на границу.
+        for vi, v in enumerate(veh):
+            start = time_dim.CumulVar(routing.Start(vi))
+            if v["k"] == 0:
+                start.SetRange(v["start_min_s"], v["start_min_s"])
             else:
-                time_dim.SetCumulVarSoftUpperBound(idx, 0, 1)
+                start.SetMin(v["start_min_s"])
 
-        # Разрешаем оставить заказ на следующий заезд: дроп-визит с подавляющим
-        # штрафом. Без этого раунд без полной вместимости был бы неосуществим.
-        # (Привязка заказа к точке выдачи уже в колбэке стоимости: чужой заказ
-        # стоит миллиард и никогда не попадёт к курьеру другой точки.)
-        for ln in range(len(sub)):
-            if sub[ln] >= K:
-                routing.AddDisjunction([manager.NodeToIndex(ln)], 1_000_000)
+        # Штрафы ожидания доставки: обычный заказ 1 мин, просрочка дедлайна 25 —
+        # на размерности Time; приоритет 60/мин «поскорее» — на отдельной
+        # размерности Urg, чтобы заказ с приоритетом И дедлайном давился ОБЕИМИ
+        # (раньше elif терял приоритет у заказов с дедлайном).
+        has_prio = any(eff_prio.values())
+        if has_prio:
+            routing.AddDimensionWithVehicleTransits(cb_idxs, 0, 24 * 3600, False, "Urg")
+            urg_dim = routing.GetDimensionOrDie("Urg")
+        for ln in range(K, len(points)):
+            idx = manager.NodeToIndex(ln)
+            if deadline_rel[ln] is not None:
+                time_dim.SetCumulVarSoftUpperBound(idx, max(0, deadline_rel[ln]) * 60,
+                                                   _LATE_WEIGHT)
+            elif not eff_prio[ln]:
+                time_dim.SetCumulVarSoftUpperBound(idx, 0, _ASAP_WEIGHT)
+            if eff_prio[ln] and has_prio:
+                urg_dim.SetCumulVarSoftUpperBound(idx, 0, _PRIO_WEIGHT)
+
+        # Разрешаем оставить заказ вне плана: дроп-визит с подавляющим штрафом
+        # (чужой заказ стоит миллиард и к курьеру другой точки не попадёт).
+        for ln in range(K, len(points)):
+            routing.AddDisjunction([manager.NodeToIndex(ln)], 1_000_000)
 
         params = pywrapcp.DefaultRoutingSearchParameters()
         params.first_solution_strategy = (
             routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION)
         params.local_search_metaheuristic = (
             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
-        # Бюджет оптимизации масштабируем от размера задачи: маленькие наборы
-        # находят оптимум за миллисекунды, и большой бюджет только жёг время
-        # (GLS работает до исчерпания лимита). 4/2 с — для крупных развозок.
-        n_stops = len(sub)
-        big = n_stops > 12
-        params.time_limit.FromMilliseconds(
-            (4000 if big else 1000) if round_no == 0 else (2000 if big else 500))
+        params.time_limit.FromMilliseconds(budget_ms)
         solution = routing.SolveWithParameters(params)
         if solution is None:
-            log.warning("solve round %d: no solution (status=%s, veh=%d, nodes=%d)",
-                        round_no, routing.status(), n_veh, len(sub))
-            if round_no == 0:
-                raise RuntimeError("OR-Tools не нашёл решение, попробуйте ещё раз")
-            break
-        round_stops = set()
-        for v in range(n_veh):
-            idx, stops = routing.Start(v), []
+            log.warning("solve: no solution (status=%s, veh=%d, nodes=%d)",
+                        routing.status(), len(veh), len(points))
+            raise RuntimeError("OR-Tools не нашёл решение, попробуйте ещё раз")
+        return solution, routing, manager, time_dim
+
+    def _make_plan(solution, routing, manager, time_dim):
+        """Сборка плана из решения: цепочка заездов, честные ETA, агрегаты.
+
+        Возвращает (plan, start_s): start_s — фактические (цепочкой) старты
+        использованных копий в секундах; по ним второй проход обновляет
+        почасовые коэффициенты копий.
+        """
+        trips_by_cid = {}
+        visited = set()
+        start_s = {}
+        if log.isEnabledFor(logging.DEBUG):
+            for vi, v in enumerate(veh):
+                log.debug(
+                    "copy %d %s k=%d floor=%dмин start=%dмин end=%dмин "
+                    "factor=%.2f hour_f=%.2f allowed=%d",
+                    vi, v["courier"]["name"], v["k"],
+                    v["start_min_s"] // 60,
+                    solution.Value(time_dim.CumulVar(routing.Start(vi))) // 60,
+                    solution.Value(time_dim.CumulVar(routing.End(vi))) // 60,
+                    v["factor"], v["hour_f"], len(v["allowed"]))
+        for vi, v in enumerate(veh):
+            idx, stops = routing.Start(vi), []
             while not routing.IsEnd(idx):
-                p = manager.IndexToNode(idx)
-                if sub[p] >= K:  # пропускаем свою точку выдачи (старт)
-                    stops.append(sub[p])
+                nd = manager.IndexToNode(idx)
+                if nd >= K:  # пропускаем свою точку выдачи (старт)
+                    stops.append(nd)
                 idx = solution.Value(routing.NextVar(idx))
             if not stops:
                 continue
-            c = round_couriers[v]
+            c = v["courier"]
+            delay_min = solution.Value(time_dim.CumulVar(routing.Start(vi))) / 60.0
             trips_by_cid.setdefault(c["id"], []).append(
-                {"courier": c, "stops": stops, "delay": avail[c["id"]]})
-            avail[c["id"]] = solution.Value(time_dim.CumulVar(routing.End(v))) + reload_min
-            round_stops.update(stops)
-        if not round_stops:
-            break
-        remaining = [g for g in remaining if g not in round_stops]
+                {"courier": c, "stops": stops, "delay": delay_min, "vi": vi})
+            visited.update(stops)
 
-    routes = []
-    for c in couriers:
-        trips_raw = trips_by_cid.get(c["id"])
-        if not trips_raw:
-            continue
-        h = home_of[c["id"]]
-        home_view = {k: homes[h][k] for k in ("id", "name", "address", "lat", "lng")}
-        trips, flat = [], []
-        for tr in trips_raw:
-            etas, total = _eta_pass(tr["stops"], tr["delay"], matrix, settings,
-                                    solved_dt, appr_home[h], home=h,
-                                    spd_factor=spd_factor.get(c["id"], 1.0))
-            stops = []
-            for g, eta in zip(tr["stops"], etas):
-                o = orders[g - K]
-                late = max(0, eta - deadline_rel[g]) if deadline_rel[g] is not None else 0
-                stops.append({
-                    "order_id": o["id"], "address": o["address"],
-                    "prio": eff_prio[g], "auto": auto_flag[g],
-                    "deadline": o.get("deadline") or "", "late_min": late,
-                    "lat": o["lat"], "lng": o["lng"], "eta_min": eta,
-                    "eta_clock": (solved_dt + timedelta(minutes=eta)).strftime("%H:%M")})
-            dist_m = None
-            if distances:
-                dist_m = 0
-                seq = [h] + tr["stops"] + [h]
-                for a, b in zip(seq, seq[1:]):
-                    dist_m += distances[a][b] or 0
-            trips.append({
-                "stops": stops, "total_min": total,
-                "start_delay_min": tr["delay"],
-                "start_clock": (solved_dt + timedelta(minutes=tr["delay"])).strftime("%H:%M"),
-                "end_clock": (solved_dt + timedelta(minutes=total)).strftime("%H:%M"),
-                "distance_km": round(dist_m / 1000.0, 1) if dist_m is not None else None})
-            flat.extend(stops)
-        routes.append({
-            "courier_id": c["id"], "courier_name": c["name"], "status": c["status"],
-            "color": c.get("color") or PALETTE[len(routes) % len(PALETTE)],
-            "count": len(flat), "trips": trips, "stops": flat,
-            "total_min": max(t["total_min"] for t in trips),
-            "start_delay_min": trips[0]["start_delay_min"],
-            "distance_km": (round(sum(t["distance_km"] for t in trips), 1)
-                            if all(t["distance_km"] is not None for t in trips) else None),
-            "tg_chat_id": c.get("tg_chat_id") or "",
-            "home_point": home_view,
-            "speed_kmh": round(speeds[c["id"]][0], 1),
-            "speed_src": speeds[c["id"]][1]})
+        routes = []
+        reload_min = reload_s // 60   # цепочка заездов: старт k+1 >= конец k + это
+        for c in couriers:
+            trips_raw = trips_by_cid.get(c["id"])
+            if not trips_raw:
+                continue
+            h = home_of[c["id"]]
+            home_view = {k: homes[h][k] for k in ("id", "name", "address", "lat", "lng")}
+            trips, flat = [], []
+            prev_end = None  # конец предыдущего заезда: цепочим старт следующего
+            for tr in trips_raw:
+                delay = tr["delay"]
+                if prev_end is not None:
+                    # решатель знает только нижнюю границу старта копии;
+                    # истинное время — после возврата с предыдущего заезда
+                    delay = max(delay, prev_end + reload_min)
+                start_s[tr["vi"]] = delay * 60
+                etas, total = _eta_pass(tr["stops"], delay, matrix, settings,
+                                        solved_dt, appr_home[h], home=h,
+                                        spd_factor=spd_factor.get(c["id"], 1.0))
+                prev_end = total
+                stops = []
+                for g, eta in zip(tr["stops"], etas):
+                    o = orders[g - K]
+                    late = max(0, eta - deadline_rel[g]) if deadline_rel[g] is not None else 0
+                    stops.append({
+                        "order_id": o["id"], "address": o["address"],
+                        "prio": eff_prio[g], "auto": auto_flag[g],
+                        "deadline": o.get("deadline") or "", "late_min": late,
+                        "lat": o["lat"], "lng": o["lng"], "eta_min": eta,
+                        "eta_clock": (solved_dt + timedelta(minutes=eta)).strftime("%H:%M")})
+                dist_m = None
+                if distances:
+                    dist_m = 0
+                    seq = [h] + tr["stops"] + [h]
+                    for a, b in zip(seq, seq[1:]):
+                        dist_m += distances[a][b] or 0
+                trips.append({
+                    "stops": stops, "total_min": total,
+                    "start_delay_min": int(round(delay)),
+                    "start_clock": (solved_dt + timedelta(minutes=delay)).strftime("%H:%M"),
+                    "end_clock": (solved_dt + timedelta(minutes=total)).strftime("%H:%M"),
+                    "distance_km": round(dist_m / 1000.0, 1) if dist_m is not None else None})
+                flat.extend(stops)
+            routes.append({
+                "courier_id": c["id"], "courier_name": c["name"], "status": c["status"],
+                "color": c.get("color") or PALETTE[len(routes) % len(PALETTE)],
+                "count": len(flat), "trips": trips, "stops": flat,
+                "total_min": max(t["total_min"] for t in trips),
+                "start_delay_min": trips[0]["start_delay_min"],
+                "distance_km": (round(sum(t["distance_km"] for t in trips), 1)
+                                if all(t["distance_km"] is not None for t in trips) else None),
+                "tg_chat_id": c.get("tg_chat_id") or "",
+                "home_point": home_view,
+                "speed_kmh": round(speeds[c["id"]][0], 1),
+                "speed_src": speeds[c["id"]][1]})
 
-    # Сначала «отдать сейчас» (на базе), потом «следующим»
-    routes.sort(key=lambda r: 0 if r["status"] == "base" else 1)
-    all_etas = [s["eta_min"] for r in routes for s in r["stops"]]
-    plan = {
-        "solved_at": solved_dt.isoformat(timespec="seconds"),
-        "routes": routes,
-        "routing": "roads" if by_roads else "straight",
-        "provider": provider,
-        "last_delivery_min": max(all_etas, default=0),
-        "last_delivery_clock": None,
-        "avg_delivery_min": round(sum(all_etas) / len(all_etas)) if all_etas else 0,
-        "unassigned": len(remaining),
-    }
+        # Сначала «отдать сейчас» (на базе), потом «следующим»
+        routes.sort(key=lambda r: 0 if r["status"] == "base" else 1)
+        all_etas = [s["eta_min"] for r in routes for s in r["stops"]]
+        plan = {
+            "solved_at": solved_dt.isoformat(timespec="seconds"),
+            "routes": routes,
+            "routing": "roads" if by_roads else "straight",
+            "provider": provider,
+            "last_delivery_min": max(all_etas, default=0),
+            "last_delivery_clock": None,
+            "avg_delivery_min": round(sum(all_etas) / len(all_etas)) if all_etas else 0,
+            "unassigned": len([g for g in range(K, len(points)) if g not in visited]),
+            # контекст матрицы: ретайминг после выдачи/переноса берёт ТОН ЖЕ
+            # набор точек — кэш матрицы срабатывает без похода в сеть
+            "matrix_ctx": {"k": K,
+                           "homes": [[p["lat"], p["lng"]] for p in homes],
+                           "order_ids": [o["id"] for o in orders]},
+        }
+        return plan, start_s
+
+    # Бюджет оптимизации масштабируем от размера задачи: одна задача на все
+    # заезды (раньше — до трёх моделей по раундам), поэтому берём бюджет
+    # крупнее раундового, но меньше старой суммы. DP_TIME_MS — override для
+    # тестов/диагностики (задаёт бюджет ПРОХОДА); мусорное значение молча
+    # игнорируем. Недетерминизм GLS (бюджет в стенных часах, состав пачек
+    # немного плавает между прогонами) принят осознанно: детерминированные
+    # альтернативы (solution_limit) дают менее предсказуемое от размера
+    # задачи качество.
+    big = len(orders) > 12
+    try:
+        budget_ms = int(os.environ.get("DP_TIME_MS", ""))
+    except ValueError:
+        budget_ms = 0
+    per_pass_ms = budget_ms or (5000 if big else 1500)
+
+    solution, routing, manager, time_dim = _solve_once(per_pass_ms)
+    plan, start_s = _make_plan(solution, routing, manager, time_dim)
+
+    # Второй проход решателя: hour_f копии закреплён по нижней границе
+    # старта, а фактический старт (цепочка заездов, удлинение первых
+    # заездов) может попасть в другой час — дуги поздних копий оценены не
+    # тем часом (пик/межпик различаются до ×1.5). Обновляем hour_f по
+    # фактическим стартам и решаем ещё раз с вдвое меньшим бюджетом;
+    # принимаем только при лучшей ЧЕСТНОЙ метрике — (неразвезено,
+    # суммарное опоздание, средняя, последняя доставка).
+    if hourly_on:
+        refreshed = {}
+        for vi, v in enumerate(veh):
+            s = start_s.get(vi)
+            if s is None:
+                continue
+            hour = (solved_dt + timedelta(seconds=round(s))).hour
+            f = _HOURLY_TRAFFIC.get(hour, 1.0)
+            if abs(f - v["hour_f"]) > 1e-6:
+                refreshed[vi] = f
+        if refreshed:
+            for vi, f in refreshed.items():
+                veh[vi]["hour_f"] = f
+            try:
+                sol2, rout2, man2, td2 = _solve_once(max(1, per_pass_ms // 2))
+                plan2, _ = _make_plan(sol2, rout2, man2, td2)
+
+                def _quality(p):
+                    return (p["unassigned"],
+                            sum(st["late_min"] for r in p["routes"]
+                                for st in r["stops"]),
+                            p["avg_delivery_min"], p["last_delivery_min"])
+
+                if _quality(plan2) < _quality(plan):
+                    log.debug("solve: второй проход принят "
+                              "(%d копий сменили почасовой коэффициент)",
+                              len(refreshed))
+                    plan = plan2
+                else:
+                    log.debug("solve: второй проход отклонён по честной метрике")
+            except RuntimeError:
+                log.warning("solve: второй проход не нашёл решение, "
+                            "оставлен первый")
+
+    warnings = []
+    if plan["unassigned"]:
+        warnings.append(f"Не поместились в маршруты: {plan['unassigned']} "
+                        "заказ(ов) — лимит заездов на курьера исчерпан")
+    if not by_roads:
+        warnings.append("Роутеры недоступны — время и километры оценены по прямой")
+    if warnings:
+        plan["warnings"] = warnings
+    all_etas = [s["eta_min"] for r in plan["routes"] for s in r["stops"]]
     if all_etas:
         plan["last_delivery_clock"] = (solved_dt + timedelta(
             minutes=plan["last_delivery_min"])).strftime("%H:%M")
@@ -1276,16 +1497,35 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
 
 
 def _attach_geometry(plan):
-    """Геометрия маршрутов (для линий на карте), по точке выдачи курьера."""
+    """Геометрия маршрутов (для линий на карте), по точке выдачи курьера.
+
+    Заезды запрашиваются ПАРАЛЛЕЛЬНО (до 4 одновременно): при деградации
+    роутеров последовательная довеска тянула каждую линию до таймаута каскада.
+    Уже готовая геометрия не пересчитывается.
+    """
+    jobs = []
     for r in plan["routes"]:
         home = r.get("home_point") or STATE["depot"]
         for t in r.get("trips", []):
+            if t.get("geometry"):
+                continue
             seq = [home] + [{"lat": s["lat"], "lng": s["lng"]}
                             for s in t["stops"]] + [home]
-            t["geometry"] = routing_geometry(seq) if plan["routing"] == "roads" else None
-            if plan["routing"] == "roads" and not t["geometry"]:
-                log.warning("geometry: маршрут %s без дорог (роутеры недоступны) "
-                            "— на карте будет прямыми", r.get("courier_name"))
+            jobs.append((t, seq))
+
+    def fetch(job):
+        t, seq = job
+        return t, (routing_geometry(seq) if plan["routing"] == "roads" else None)
+
+    if jobs:
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for t, geom in ex.map(fetch, jobs):
+                t["geometry"] = geom
+        for r in plan["routes"]:
+            for t in r.get("trips", []):
+                if plan["routing"] == "roads" and not t.get("geometry"):
+                    log.warning("geometry: маршрут %s без дорог (роутеры недоступны) "
+                                "— на карте будет прямыми", r.get("courier_name"))
 
 
 # ---------- аутентификация по email (пользователи в БД) ----------
@@ -1419,31 +1659,67 @@ def _start_delay_min(c):
 
 def _refresh_plan_delays(plan):
     """План — снимок на момент расчёта, а «старт +N мин» на карточке
-    должен показывать, сколько ждать СЕЙЧАС: away-курьер мог вернуться
-    быстрее или застрять. Обновляем задержку первого заезда и сдвигаем
-    его ETA; сами назначение заказов не трогаем."""
+    должен показывать, сколько ждать СЕЙЧАС. Сдвигаем задержку ВСЕХ заездов
+    курьера с сохранением цепочки (заезд k+1 не раньше конца заезда k +
+    перезагрузка); сами назначение заказов не трогаем.
+
+    away — по живой оценке возврата; base — на время, прошедшее с расчёта
+    (только пока курьер ещё не выехал: нет выданных заказов; выехавший без
+    выдачи остаётся base и сдвигается — ошибка редкая и односторонняя).
+    off не трогаем: он не поедет, сдвиг был бы враньём.
+    """
     if not plan or not plan.get("routes"):
         return plan
-    now = datetime.now()
+    now = _now()  # единые часы приложения (Минск), не системные
+    now_hm = now.hour * 60 + now.minute
+    reload_min = max(0, int(STATE["settings"].get("reload_min", 10)))
     cmap = {c["id"]: c for c in STATE["couriers"]}
+    elapsed_min = None
+    try:
+        # якорь — момент, к которому привязаны задержки плана СЕЙЧАС:
+        # ретайминг (выдача/перенос) перепривязывает их к своему «сейчас»,
+        # и считать elapsed от solved_at стало бы двойным сдвигом
+        anchor = plan.get("anchored_at") or plan["solved_at"]
+        elapsed_min = ((now - datetime.fromisoformat(anchor))
+                       .total_seconds() / 60.0)
+    except (KeyError, ValueError, TypeError):
+        elapsed_min = None
+    shifted = False
     for r in plan["routes"]:
         c = cmap.get(r.get("courier_id"))
-        if not c or c.get("status") != "away" or not r.get("trips"):
+        if not c or not r.get("trips"):
             continue
-        new_d = min(480, _start_delay_min(c))
-        tr = r["trips"][0]
-        d = new_d - (tr.get("start_delay_min") or 0)
+        if c.get("status") == "away":
+            new_d = min(480, _start_delay_min(c))
+        elif (c.get("status") == "base" and elapsed_min is not None
+              and not _courier_has_out(c)):
+            new_d = min(480, elapsed_min)
+        else:
+            continue
+        d = new_d - (r["trips"][0].get("start_delay_min") or 0)
         if abs(d) < 1:
             continue
-        tr["start_delay_min"] = new_d
-        tr["start_clock"] = (now + timedelta(minutes=new_d)).strftime("%H:%M")
-        tr["total_min"] += d
-        tr["end_clock"] = (now + timedelta(minutes=tr["total_min"])).strftime("%H:%M")
-        for s in tr["stops"]:
-            s["eta_min"] += d
-            s["eta_clock"] = (now + timedelta(minutes=s["eta_min"])).strftime("%H:%M")
+        prev_total = 0  # конец предыдущего заезда после сдвига (мин от now)
+        for i, tr in enumerate(r["trips"]):
+            old = tr.get("start_delay_min") or 0
+            new = new_d if i == 0 else max(old + d, prev_total + reload_min)
+            shift = new - old
+            tr["start_delay_min"] = new
+            tr["start_clock"] = (now + timedelta(minutes=new)).strftime("%H:%M")
+            tr["total_min"] += shift
+            tr["end_clock"] = (now + timedelta(minutes=tr["total_min"])).strftime("%H:%M")
+            tr["eta_at"] = now.isoformat(timespec="seconds")
+            for s in tr["stops"]:
+                s["eta_min"] += shift
+                s["eta_clock"] = (now + timedelta(minutes=s["eta_min"])).strftime("%H:%M")
+                rel = _deadline_rel_min(s.get("deadline"), now_hm)
+                s["late_min"] = max(0, s["eta_min"] - rel) if rel is not None else 0
+            prev_total = tr["total_min"]
         r["start_delay_min"] = new_d
         r["total_min"] = max(t["total_min"] for t in r["trips"])
+        shifted = True
+    if shifted:
+        plan["anchored_at"] = now.isoformat(timespec="seconds")
     return plan
 
 
@@ -1764,7 +2040,7 @@ def _auto_status_track(c, pos, now=None):
             away_km, dwell_s = _AWAY_AUTO_KM, _AWAY_DWELL_S
         if d > away_km:
             rec["since"] = rec["since"] or now
-            if now - rec["since"] >= _AWAY_DWELL_S:
+            if now - rec["since"] >= dwell_s:
                 rec["since"] = None
                 log.info("auto-away: %s уехал от точки «%s» (%.0f м) — статус «в пути»",
                          c.get("name"), home.get("name"), d * 1000)
