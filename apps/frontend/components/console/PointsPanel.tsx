@@ -25,7 +25,7 @@ function orderLabelDepot(p: GeoItem) { return p.label; }
 type Mutate = (method: string, path: string, body?: Record<string, unknown>) => Promise<void>;
 type Confirm = (text: string, opts?: { ok?: string; danger?: boolean }) => Promise<boolean>;
 
-export default function PointsPanel({ st, open, onToggle, mutate, showToast, askConfirm, focusMap, pickTarget, setPickTarget, onEditChange }: {
+export default function PointsPanel({ st, open, onToggle, mutate, showToast, askConfirm, focusMap, pickTarget, setPickTarget, onEditChange, registerPointPick }: {
   st: AppState;
   open: boolean;
   onToggle: () => void;
@@ -36,6 +36,7 @@ export default function PointsPanel({ st, open, onToggle, mutate, showToast, ask
   pickTarget: "point" | "order" | null;
   setPickTarget: (v: "point" | "order" | null) => void;
   onEditChange: (pid: string | null) => void;
+  registerPointPick: (cb: ((ll: { lat: number; lng: number }) => void) | null) => void;
 }) {
   // редактируемая точка: null - список закрыт, "new" - добавление, id - правка
   const [pointEdit, setPointEdit] = useState<string | null>(null);
@@ -45,6 +46,18 @@ export default function PointsPanel({ st, open, onToggle, mutate, showToast, ask
 
   // клик по карте при открытой правке должен обновлять редактируемую точку
   useEffect(() => { onEditChange(pointEdit); }, [pointEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // клик по карте в режиме пика заполняет форму: адрес правки сохраняем прежним,
+  // для новой точки оставляем пустым (бэк сделает reverse-geocode)
+  useEffect(() => {
+    registerPointPick(ll => {
+      const keep = pointEdit !== "new" && pointEdit
+        ? (st.points?.find(p => p.id === pointEdit)?.address || "") : "";
+      pendingPoint.current = { label: keep, lat: ll.lat, lng: ll.lng };
+      setPointNote(`точка выбрана (${fmtCoords(ll)})`);
+    });
+    return () => registerPointPick(null);
+  }, [pointEdit, st.points, registerPointPick]);
 
   const closeForm = () => {
     setPointEdit(null); pendingPoint.current = null; setPointNote(""); setPointName("");

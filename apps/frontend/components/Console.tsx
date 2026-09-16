@@ -274,11 +274,20 @@ export default function Console() {
 
   // точка, открытая на правку в аккордеоне «Места выдачи»: клик по карте обновляет её, а не создаёт новую
   const pointEditRef = useRef<string | null>(null);
+  // клик по карте при открытой форме точки идёт в форму (pendingPoint), а не в API —
+  // иначе «Сохранить»/«Отмена» работают шиворот-навыворот: пик уже сохранил, кнопки его перекрывают
+  const pointPickRef = useRef<((ll: { lat: number; lng: number }) => void) | null>(null);
+  const registerPointPick = useCallback(
+    (cb: ((ll: { lat: number; lng: number }) => void) | null) => { pointPickRef.current = cb; }, []);
 
   const onMapPick = async (ll: { lat: number; lng: number }) => {
     if (!pickTarget) return;
     const target = pickTarget;
     setPickTarget(null);
+    if (target === "point" && pointPickRef.current) {
+      pointPickRef.current(ll);
+      return;
+    }
     try {
       if (target === "point") {
         showToast("Сохраняем точку…");
@@ -380,6 +389,7 @@ export default function Console() {
             onToggle={() => setOpenAcc(a => a === "points" ? null : "points")}
             mutate={mutate} showToast={showToast} askConfirm={askConfirm}
             focusMap={focusMap} pickTarget={pickTarget} setPickTarget={setPickTarget}
+            registerPointPick={registerPointPick}
             onEditChange={pid => { pointEditRef.current = pid; }}
           />
           <div className="acc">
