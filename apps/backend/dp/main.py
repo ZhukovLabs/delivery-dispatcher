@@ -89,10 +89,15 @@ async def flask_compat(request: Request, call_next):
     #    За https-прокси (funnel) фронт живёт на другом домене — cookie
     #    должна быть SameSite=None; Secure, иначе браузер её не пошлёт.
     if sess.modified:
+        # host в заголовке может нести порт (funnel на 8443) — для проверки
+        # домена порт срезаем, иначе «...ts.net:8443» не матчится с .ts.net
+        # и cookie уходит SameSite=Lax: кросс-доменный фронт её не пришлёт
+        _host = (request.headers.get("host") or "").lower()
+        _host = _host.rpartition(":")[0] if _host.rpartition(":")[2].isdigit() else _host
         behind_https = (
             request.url.scheme == "https"
             or request.headers.get("x-forwarded-proto") == "https"
-            or (request.headers.get("host") or "").lower().endswith(".ts.net")
+            or _host.endswith(".ts.net")
         )
         if behind_https:
             response.set_cookie(_SESSION_COOKIE, sign_session(dict(sess)),
