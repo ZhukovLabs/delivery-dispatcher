@@ -661,7 +661,11 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
 
     /* 4) линии планов: пересобираем при смене состава ИЛИ пересчёте (solved_at),
        а для выбранного курьера — ещё и при изменении его выданной части */
-    const selSig = `${selCid.current || "-"}:${selCourier?.out_route?.stops?.length || 0}:${selCourier?.out_route?.geom?.length || 0}`;
+    const selSig = `${selCid.current || "-"}:${selCourier?.out_route?.stops?.length || 0}:${selCourier?.out_route?.geom?.length || 0}` +
+      // позиция выбранного курьера в сигнатуре: гео-тик двигает его — линия
+      // маршрута перерисовывается и обрезается по новой позиции (пройденное
+      // исчезает); toFixed(4) ≈ 11 м — стоящего на месте не дёргает
+      (selCourier?.pos ? `@${selCourier.pos.lat.toFixed(4)},${selCourier.pos.lng.toFixed(4)}` : "");
     const lineSig = roadsTick + "|" + selSig + "|" + (plan
       ? `${plan.solved_at}|` + plan.routes.map(r => [r.courier_id, r.color, (r.trips || [])
           .map(t => t.stops.map(s => s.order_id).join(",")).join(";")].join("|")).join("~")
