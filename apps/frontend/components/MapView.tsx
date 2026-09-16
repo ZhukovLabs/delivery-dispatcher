@@ -424,15 +424,16 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       if (p) {
         content = p.popup;
       } else if (oCour) {
-        const eta = outEta(o, oCour);
-        // курьер в 150 м от заказа — тот же радиус, что и зачёт простоя
+        // курьер в 150 м от заказа — тот же радиус, что и зачёт простоя;
+        // ближе — ETA не показываем, заказ фактически уже у адресата
         const onSite = !!(oCour.pos && o.lat != null && o.lng != null &&
           havKm([oCour.pos.lat, oCour.pos.lng], [o.lat, o.lng]) <= 0.15);
+        const e = !onSite ? outEta(o, oCour) : null;
         content = popupHtml({ address: o.address, courier: oCour.name,
-          eta: !onSite && eta ? clockIn(eta.min) : undefined,
-          inMin: !onSite && eta ? Math.round(eta.min) : undefined,
-          kmLeft: !onSite && eta ? eta.km : undefined,
-          lateMin: !onSite && eta ? (lateByDeadline(o.deadline, eta.min) ?? undefined) : undefined,
+          eta: e ? clockIn(e.min) : undefined,
+          inMin: e ? Math.round(e.min) : undefined,
+          kmLeft: e ? e.km : undefined,
+          lateMin: e ? (lateByDeadline(o.deadline, e.min) ?? undefined) : undefined,
           prio: o.prio, deadline: o.deadline, onSite });
       } else {
         content = popupHtml({ address: o.address,

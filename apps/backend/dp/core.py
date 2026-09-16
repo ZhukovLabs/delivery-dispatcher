@@ -490,21 +490,6 @@ def _speed_fleet_cycle_avg(day):
     return (r["s"] / r["n"]) if r and r["n"] else None
 
 
-def _courier_del_avg_min(courier):
-    """Средние минуты на один доставленный заказ: свой темп, иначе флот, иначе 15."""
-    rows = _speed_rows(courier.get("id") or "", limit=7)
-    for r in rows:
-        if (r["del_n"] or 0) >= 1 and (r["del_min"] or 0) > 0:
-            return min(90.0, r["del_min"] / r["del_n"])
-    for r in rows:
-        if r["day"]:
-            fleet = _speed_fleet_cycle_avg(r["day"])
-            if fleet:
-                return min(90.0, fleet)
-            break
-    return 15.0
-
-
 def _speed_from_row(row, default_kmh):
     """Скорость из строки дня: сначала гео, иначе темп доставок. None — нет данных."""
     if row["geo_s"] >= _SPEED_MIN_GEO_S:
@@ -1716,11 +1701,13 @@ def _courier_geo(c, depot, now=None):
                        ((c.get("out_route") or {}).get("stops") or [])
                        if len(s) > 2}
         rem.sort(key=lambda o: stops_order.get(o["id"], 10 ** 9))
-        pts = [g] + [o for o in rem if o.get("lat") is not None] + [depot]
+        # без координат адрес в цепочку не попадает — только в порядок объезда
+        routed = [o for o in rem if o.get("lat") is not None]
+        pts = [g] + routed + [depot]
         chain_km = sum(haversine_km(a, b) for a, b in zip(pts, pts[1:]))
         per_stop = max(0, int(STATE["settings"].get("handover_min", 5)))
         g["back_min"] = int(min(480, max(1, round(
-            chain_km * ROAD_FACTOR / kmh * 60 + per_stop * len(rem)))))
+            chain_km * ROAD_FACTOR / kmh * 60 + per_stop * len(routed)))))
     if not has_out and not g["at_depot"]:
         # заказы ещё не в машине: честный ETA — сначала доехать до точки
         kmh2, _ = _courier_speed(c)
