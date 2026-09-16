@@ -831,10 +831,10 @@ def assign_orders():
             payload = {"chat_id": chat, "text": "\n".join(lines),
                        "parse_mode": "HTML"}
             if len(pts) >= 2:  # маршрут строим минимум по двум точкам
-                kb = [{"text": "🗺 Весь маршрут · Яндекс",
+                kb = [{"text": "Яндекс | Весь маршрут",
                        "url": "https://yandex.ru/maps/?rtext=~"
                               + "~".join(pts[:10]) + "&rtt=auto"},
-                      {"text": "🗺 Google",
+                      {"text": "Google | Весь маршрут",
                        "url": ("https://www.google.com/maps/dir/?api=1"
                                "&destination=" + pts[min(len(pts), 10) - 1]
                                + "&waypoints=" + "%7C".join(pts[:min(len(pts), 10) - 1])
