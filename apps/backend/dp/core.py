@@ -943,25 +943,17 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
     orders = [o for o in STATE["orders"]
               if (o.get("status") or "ready") == "ready" and _obj_point(o) == point_id]
     mine = [c for c in STATE["couriers"] if _obj_point(c) == point_id]
-    # курьер с открытыми заказами — в развозке, новые ему не отдаём:
-    # сначала закрыть текущие, вернуться на базу (статус сам станет «base»)
-    busy = {c["id"] for c in STATE["couriers"] if _courier_out_orders(c)}
     active = [c for c in mine
-              if c["id"] not in busy
-              and (c["status"] == "base" or (include_away and c["status"] == "away"))]
+              if c["status"] == "base" or (include_away and c["status"] == "away")]
     helper_ids = {cid for cid in helpers
                   if any(c["id"] == cid for c in STATE["couriers"])}
     couriers = active + [c for c in STATE["couriers"]
-                         if c["id"] in helper_ids and c not in active
-                         and c["id"] not in busy]
+                         if c["id"] in helper_ids and c not in active]
     if not STATE.get("points"):
         raise ValueError("Сначала задайте место выдачи заказов (точку на карте)")
     if not orders:
         raise ValueError("Нет готовых заказов, добавьте хотя бы один")
     if not couriers:
-        if busy:
-            raise ValueError("Все курьеры точки ещё в развозке — дождитесь "
-                             "закрытия заказов (статус сам вернётся на «на базе»)")
         raise ValueError("Нет активных курьеров, добавьте курьера")
 
     def _eff_home(c):
@@ -1012,11 +1004,17 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
         eff_prio[g] = bool(o.get("prio") or auto_flag[g])
 
     def _start_delay(c):
-        """Когда курьер сможет выехать со своей точки выдачи с новой партией."""
+        """Когда курьер сможет выехать со своей точки выдачи с новой партией.
+        Занятость не выкидывает курьера из расчёта — она честно удорожает
+        его старт, и решатель сам взвешивает, выгодно ли его ждать."""
         if c["status"] != "away":
             return 0
         g = _courier_geo(c, _home_point(c))
         if g:  # живая гео точнее ручной оценки
+            if g.get("has_out"):
+                # ещё развозит: довезти остаток по адресам + вернуться +
+                # перезагрузиться (back_min уже содержит цепочку адресов)
+                return min(480, g["back_min"] + reload_min)
             if g.get("to_point_min") is not None:
                 # заказы прежней партии ещё не забраны: доехать + погрузиться
                 return min(480, g["to_point_min"] + reload_min)
