@@ -16,6 +16,7 @@ export interface MapViewProps {
   onMarkerClick: (oid: string) => void;
   dupOids?: Set<string>;
   focus?: { kind: "order" | "courier" | "point"; id: string; n: number } | null;
+  pickPreview?: { lat: number; lng: number } | null;
 }
 
 /* ---------- загрузка api-maps один раз на страницу ---------- */
@@ -61,7 +62,7 @@ const tripCoords = (tr: { geometry?: [number, number][]; stops: { lat: number; l
     ? tr.geometry
     : [depot, ...tr.stops.map(s => [s.lat, s.lng] as [number, number]), depot];
 
-export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, onMarkerClick, dupOids, focus }: MapViewProps) {
+export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, onMarkerClick, dupOids, focus, pickPreview }: MapViewProps) {
   const divRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const ymRef = useRef<any>(null);
@@ -307,6 +308,21 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       if (!seenP.has(k)) { map.geoObjects.remove(L.current.depots.get(k)!); L.current.depots.delete(k); }
     }
 
+    /* 1b) превью несохранённой точки: клик по карте в режиме пика */
+    if (pickPreview) {
+      seenP.add("__preview");
+      let pv = L.current.depots.get("__preview");
+      if (!pv) {
+        pv = new ym.Placemark([pickPreview.lat, pickPreview.lng],
+          { balloonContent: "<b>Новая точка (не сохранена)</b><br>Проверьте форму слева и нажмите «Сохранить»" },
+          { preset: "islands#violetCircleDotIcon", zIndex: 1900, cursor: "help" });
+        map.geoObjects.add(pv);
+        L.current.depots.set("__preview", pv);
+      } else {
+        pv.geometry.setCoordinates([pickPreview.lat, pickPreview.lng]);
+      }
+    }
+
     /* 2) заказы: дубли — красные (#3), точки выбранного курьера — его цветом */
     const selCourier = selCid.current
       ? state.couriers.find(c => c.id === selCid.current) : null;
@@ -454,7 +470,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       didInitialFit.current = true;
       fitAll(ym, map, state);
     }
-  }, [ready, state, dupOids, selTick]);
+  }, [ready, state, dupOids, selTick, pickPreview]);
 
   /* смена депо: сбрасываем выбор и подтягиваемся к новой точке (#1/#7) */
   useEffect(() => {

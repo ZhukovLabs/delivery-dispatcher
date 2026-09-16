@@ -279,6 +279,8 @@ export default function Console() {
   const pointPickRef = useRef<((ll: { lat: number; lng: number }) => void) | null>(null);
   const registerPointPick = useCallback(
     (cb: ((ll: { lat: number; lng: number }) => void) | null) => { pointPickRef.current = cb; }, []);
+  // превью несохранённой точки на карте (пик в форме места выдачи)
+  const [pickPreview, setPickPreview] = useState<{ lat: number; lng: number } | null>(null);
 
   const onMapPick = async (ll: { lat: number; lng: number }) => {
     if (!pickTarget) return;
@@ -286,6 +288,7 @@ export default function Console() {
     setPickTarget(null);
     if (target === "point" && pointPickRef.current) {
       pointPickRef.current(ll);
+      setPickPreview(ll);
       return;
     }
     try {
@@ -390,7 +393,7 @@ export default function Console() {
             mutate={mutate} showToast={showToast} askConfirm={askConfirm}
             focusMap={focusMap} pickTarget={pickTarget} setPickTarget={setPickTarget}
             registerPointPick={registerPointPick}
-            onEditChange={pid => { pointEditRef.current = pid; }}
+            onEditChange={pid => { pointEditRef.current = pid; if (!pid) setPickPreview(null); }}
           />
           <div className="acc">
             <OrdersPanel
@@ -428,6 +431,7 @@ export default function Console() {
             onMarkerClick={onMarkerClick}
             dupOids={dupOids}
             focus={focus}
+            pickPreview={pickPreview}
           />
           {wpSwitching && (
             <div className="map-loading" role="status" aria-live="polite">
