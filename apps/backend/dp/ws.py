@@ -27,10 +27,13 @@ sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 _loop: asyncio.AbstractEventLoop | None = None
 _notify_lock = threading.Lock()
 _dirty = False
+_geo = False  # грязь только от гео-тика движения (не событие)
+_last_flush = 0.0
 _flusher_started = False
 _sessions: dict = {}  # sid → {"uid", "point"} — AsyncServer не хранит environ
 
 _DEBOUNCE_S = 0.15
+_GEO_MIN_INTERVAL_S = 1.0  # чистое движение шлём не чаще раза в секунду
 
 
 def start(loop: asyncio.AbstractEventLoop) -> None:
@@ -43,22 +46,34 @@ def start(loop: asyncio.AbstractEventLoop) -> None:
         log.info("ws hub: flusher started")
 
 
-def notify_changed() -> None:
-    """Пометить состояние грязным (безопасно из любого потока)."""
-    global _dirty
+def notify_changed(geo: bool = False) -> None:
+    """Пометить состояние грязным (безопасно из любого потока).
+
+    geo=True — изменение только в отслеживании движения курьера: хаб
+    доставляет такие обновления не чаще раза в секунду (позиция на карте
+    не требует большей частоты). Любое другое событие — без ограничений.
+    """
+    global _dirty, _geo
     with _notify_lock:
         _dirty = True
+        # классификация «только гео» живёт до hard-события: оно снимает
+        # ограничение — предстоящая отправка и так понесёт всё состояние
+        _geo = geo
 
 
 async def _flusher() -> None:
-    """Коалесер: не чаще раза в _DEBOUNCE_S рассылает payload по румам."""
-    global _dirty
+    """Коалесер: события — после дебаунса, чистое движение — не чаще 1/с."""
+    global _dirty, _geo, _last_flush
     while True:
         await asyncio.sleep(_DEBOUNCE_S)
         with _notify_lock:
             if not _dirty:
                 continue
+            if _geo and time.monotonic() - _last_flush < _GEO_MIN_INTERVAL_S:
+                continue  # движение уже отправляли менее секунды назад — ждём
             _dirty = False
+            _geo = False
+            _last_flush = time.monotonic()
         try:
             await _broadcast()
         except Exception:  # noqa: BLE001 — хаб не должен умирать

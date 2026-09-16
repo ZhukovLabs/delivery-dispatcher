@@ -1547,10 +1547,14 @@ def _auto_status_apply(c, new_status):
     was = c.get("status")
     c["status"] = new_status
     _persist_couriers()
-    _invalidate_plan(courier_id=c["id"])
+    _invalidate_plan(courier_id=c["id"], geo=True)
     if was != new_status:
         _ev("sys", f"{c['name']}: " + ("уехал в путь" if new_status == "away"
                                        else "вернулся на базу"))
+    else:
+        # статус не сменился — это просто гео-тик движения, не событие
+        _bump(geo=True)
+        return
     _bump()
 
 
@@ -1846,7 +1850,7 @@ def _tg_handle_update(u):
             _load_track(courier, smoothed, raw["ts"])
             _deliver_track(courier, smoothed, raw["ts"])
             _auto_status_track(courier, smoothed, raw["ts"])
-            _bump()  # курьер двигается — карта обновится у всех
+            _bump(geo=True)  # движение курьера — карта обновится (хаб батчит ≥1 с)
         else:
             # live-локация шлёт правки каждые несколько секунд — «не привязан»
             # отправляем не чаще раза в 30 минут на чат
@@ -2011,15 +2015,17 @@ def _payload(me=None, myp=None):
 
 # ---------- live-рассылка: WS-хаб (socket.io) вместо long-poll /api/rev ----------
 
-def _bump():
+def _bump(geo: bool = False):
     """Пометить состояние изменённым и разбудить подписчиков WS-хаба.
 
     Вызывается из любого потока (HTTP-обработчики, TG-поллер); хаб
-    коалесит частые бампы (гео каждые 5 с) и рассылает payload по румам депо.
+    коалесит частые бампы. geo=True — обновление только отслеживания
+    (движение курьера): хаб шлёт такое не чаще раза в секунду; любое
+    событие (выдача, статус, заказ) доставляется сразу.
     """
     STATE["rev"] = STATE.get("rev", 0) + 1
     from . import ws  # поздний импорт: ws импортирует core — рвём цикл
-    ws.notify_changed()
+    ws.notify_changed(geo=geo)
 
 def _points_ids():
     """Все id точек выдачи (румы WS-хаба)."""
@@ -2027,7 +2033,7 @@ def _points_ids():
 
 
 # ---------- инвалидация плана (используется и HTTP-ручками, и TG-ботом) ----------
-def _invalidate_plan(drop_plan=False, pid=None, courier_id=None):
+def _invalidate_plan(drop_plan=False, pid=None, courier_id=None, geo=False):
     """╨ƒ╨╗╨░╨╜ ╨╜╨╡ ╨┐╨╡╤Ç╨╡╤ü╤ç╨╕╤é╤ï╨▓╨░╨╡╨╝ ╨▓ ╤ä╨╛╨╜╨╡ ΓÇö ╤é╨╛╨╗╤î╨║╨╛ ╨┐╨╛╨╝╨╡╤ç╨░╨╡╨╝/╤ü╨▒╤Ç╨░╤ü╤ï╨▓╨░╨╡╨╝.
 
     pid ΓÇö ╨┤╨╡╨┐╨╛, ╤ç╨╡╨╣ ╨┐╨╗╨░╨╜ ╨╕╨╜╨▓╨░╨╗╨╕╨┤╨╕╤Ç╤â╨╡╨╝ (None = ╨▓╤ü╨╡ ╨┤╨╡╨┐╨╛: ╨┐╤Ç╨░╨▓╨║╨░ ╤é╨╛╤ç╨╡╨║/╨╜╨░╤ü╤é╤Ç╨╛╨╡╨║).
@@ -2040,23 +2046,28 @@ def _invalidate_plan(drop_plan=False, pid=None, courier_id=None):
     ╤ü ╨┐╨╛╨╝╨╡╤é╨║╨╛╨╣ ┬½╤â╤ü╤é╨░╤Ç╨╡╨╗┬╗ ΓÇö ╨┤╨╕╤ü╨┐╨╡╤é╤ç╨╡╤Ç ╨╝╨╛╨╢╨╡╤é ╨▓╤ï╨┤╨░╤é╤î ╨╕╤à ╨▒╨╡╨╖ ╨┐╨╡╤Ç╨╡╤ü╤ç╤æ╤é╨░.
     """
     if courier_id is not None:
+        changed = False
         for key, plan in list(STATE["plans"].items()):
             if plan is None:
                 continue
             routes = plan.get("routes") or []
             kept = [r for r in routes if r.get("courier_id") != courier_id]
             if len(kept) == len(routes):
-                continue  # ╤ì╤é╨╛╨│╨╛ ╨║╤â╤Ç╤î╨╡╤Ç╨░ ╨▓ ╨┐╨╗╨░╨╜╨╡ ╨╜╨╡╤é ΓÇö ╤ç╤â╨╢╨╕╨╡ ╨╝╨░╤Ç╤ê╤Ç╤â╤é╤ï ╨╜╨╡ ╤é╤Ç╨╛╨│╨░╨╡╨╝
+                continue  # этого курьера в плане нет — чужие маршруты не трогаем
+            changed = True
             if kept:
                 plan["routes"] = kept
                 plan["stale"] = True
             else:
                 STATE["plans"].pop(key, None)
-        try:
-            _persist_meta()
-        except sqlite3.Error:
-            pass
-        _bump()
+        if changed:
+            try:
+                _persist_meta()
+            except sqlite3.Error:
+                pass
+        # реальная правка планов — событие (доставляем сразу); плановое
+        # сопровождение гео-тика — движение, хаб батчит его до 1/с
+        _bump(geo=geo and not changed)
         return
     plans = STATE["plans"] if pid is None else {pid: STATE["plans"].get(pid)}
     for key, plan in list(plans.items()):
