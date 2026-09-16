@@ -108,8 +108,10 @@ async def flask_compat(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception):
+    # детали (тип, путь, стектрейс) — в лог; клиенту — генерик-текст,
+    # чтобы наружу не утекали внутренности (пути, SQL и пр.)
     log.exception("unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse({"error": f"Внутренняя ошибка: {exc}"}, status_code=500)
+    return JSONResponse({"error": "Внутренняя ошибка сервера"}, status_code=500)
 
 
 # CORS регистрируем ПОСЛЕДНИМ (в конец файла): Starlette ставит последний

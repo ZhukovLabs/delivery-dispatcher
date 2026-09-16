@@ -169,13 +169,16 @@ def search_yandex(q, lat, lng):
 
 
 _NOM_LAST = [0.0]  # темп 1 запрос/сек к Nominatim: спим только остаток, а не вслепую
+_NOM_LOCK = threading.Lock()  # глобальный темп один на всех: параллельные
+                              # запросы выстраиваются, а не просачиваются мимо паузы
 
 
 def search_nominatim(q, lat, lng):
-    wait = 1.05 - (time.monotonic() - _NOM_LAST[0])
-    if wait > 0:
-        time.sleep(wait)
-    _NOM_LAST[0] = time.monotonic()
+    with _NOM_LOCK:
+        wait = 1.05 - (time.monotonic() - _NOM_LAST[0])
+        if wait > 0:
+            time.sleep(wait)
+        _NOM_LAST[0] = time.monotonic()
     resp = requests.get("https://nominatim.openstreetmap.org/search",
                         params={"q": q, "format": "json", "limit": 7, "addressdetails": 1,
                                 "accept-language": "ru", "countrycodes": "by",
@@ -421,6 +424,7 @@ def geocode():
     gkey = (q.lower(), round(lat, 3), round(lng, 3))
     hit = _GEO_CACHE.get(gkey)
     if hit and time.time() - hit[0] < _GEO_TTL:
+        _GEO_CACHE.move_to_end(gkey)  # LRU: свежеиспользованный живёт дольше
         return jsonify(hit[1])
     qnum = _extract_house(q)
     q_words = _tok(re.sub(r"\d+[а-яa-z]*", " ", q))  # слова запроса без номера дома
