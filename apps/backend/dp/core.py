@@ -1275,6 +1275,9 @@ def _attach_geometry(plan):
             seq = [home] + [{"lat": s["lat"], "lng": s["lng"]}
                             for s in t["stops"]] + [home]
             t["geometry"] = routing_geometry(seq) if plan["routing"] == "roads" else None
+            if plan["routing"] == "roads" and not t["geometry"]:
+                log.warning("geometry: маршрут %s без дорог (роутеры недоступны) "
+                            "— на карте будет прямыми", r.get("courier_name"))
 
 
 # ---------- аутентификация по email (пользователи в БД) ----------
