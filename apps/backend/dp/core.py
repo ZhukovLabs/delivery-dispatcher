@@ -1034,7 +1034,10 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
         if not remaining:
             break
         pool = [c for c in couriers if c["id"] not in helper_ids or round_no == 0]
-        n_veh = min(len(pool), len(remaining))
+        # все машины в игре: решатель сам оставит невыгодным пустой маршрут.
+        # Раньше один заказ доставался только первому курьеру списка
+        # (n_veh = min(курьеры, заказы)) — сравнивать было не с кем.
+        n_veh = len(pool)
         round_couriers = pool[:n_veh]
         round_homes = []
         for c in round_couriers:
