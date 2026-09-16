@@ -345,7 +345,8 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         const key = cid + "|" + rp.map(p => `${p[0].toFixed(3)},${p[1].toFixed(3)}`).join(";");
         if (L.current.routeFetch !== key) {
           L.current.routeFetch = key;
-          const qs = rp.map(p => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join(";");
+          const qs = encodeURIComponent(
+            rp.map(p => `${p[0].toFixed(6)},${p[1].toFixed(6)}`).join(";"));
           fetchApi(`/api/route?coords=${qs}`)
             .then(res => (res.ok ? res.json() : Promise.reject(new Error("route api"))))
             .then((j: { geometry?: [number, number][] }) => {
