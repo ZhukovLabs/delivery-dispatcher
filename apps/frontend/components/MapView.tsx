@@ -352,7 +352,6 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     if (!ym || !map) return;
     // линию по возможности НЕ пересоздаём, а обновляем координаты на месте:
     // remove+add на каждом гео-тике даёт заметное мигание полилинии
-    const prevLine = L.current.routeLine as any;
     const dropLine = () => {
       if (L.current.routeLine) { map.geoObjects.remove(L.current.routeLine); }
       L.current.routeLine = null;
@@ -393,16 +392,25 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       }
       if (rp && rp.length > 1 && stopsKey) {
         const roadStyle = { strokeColor: color, strokeWidth: 5, strokeOpacity: .95, zIndex: 30 } as const;
+        // старт линии — там, где маркер ПРЯМО СЕЙЧАС (он скользит к геопозиции
+        // до 2.4 с): режем по анимированной позиции, а не по цели — иначе нос
+        // линии убегает вперёд курьера на время скольжения
+        const mpm = (L.current.couriers as Map<string, any>).get(cid);
+        const animC = mpm && mpm.geometry && mpm.geometry.getCoordinates
+          ? mpm.geometry.getCoordinates() : null;
+        const posDraw: [number, number] | null = animC
+          ? [animC[0], animC[1]] : pos0;
         const drawRoad = (coords: [number, number][]) => {
-          // старт линии — от текущей позиции курьера (или начала кэша)
-          const line = pos0 ? trimFrom(coords, pos0) : coords;
+          const line = posDraw ? trimFrom(coords, posDraw) : coords;
           if (line.length < 2) return false;
-          if (prevLine && prevLine.geometry
-              && typeof prevLine.geometry.setCoordinates === "function") {
-            prevLine.geometry.setCoordinates(line);      // та же дорога — на месте
-            L.current.routeLine = prevLine;
+          // обновляем на месте только линию, СЕЙЧАС висящую на карте: после
+          // dropLine (смена курьера) прежний объект уже снят — рисуем новую
+          const live = L.current.routeLine as any;
+          if (live && live.geometry
+              && typeof live.geometry.setCoordinates === "function") {
+            live.geometry.setCoordinates(line);          // та же дорога — на месте
           } else {
-            if (prevLine) map.geoObjects.remove(prevLine);
+            if (live) map.geoObjects.remove(live);
             const road = new ym.Polyline(line, {}, roadStyle);
             L.current.routeLine = road;
             map.geoObjects.add(road);
