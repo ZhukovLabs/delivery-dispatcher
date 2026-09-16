@@ -17,7 +17,7 @@ from collections import OrderedDict
 import requests
 from fastapi import APIRouter
 
-from .core import STATE, haversine_km, log
+from .core import STATE, haversine_km, hedged_first, log
 from .shims import flaskish, jsonify, request
 
 r = APIRouter()
@@ -80,30 +80,9 @@ def _place_label(street, place, hn="", is_street=True):
 
 
 def _hedged(providers, hedge_s=GEO_HEDGE_S, final_wait=GEO_FINAL_S):
-    """Каскад с подстраховкой. providers — коллбэки без аргументов, каждый
-    возвращает список (пустой список/исключение = промах). Возвращает список
-    первого ответившего; при одновременном ответе — более приоритетного."""
-    got, done, lock = {}, threading.Event(), threading.Lock()
-
-    def _run(fn):
-        try:
-            items = fn()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("geocoder %s: %s", getattr(fn, "__name__", "?"), exc)
-            return
-        if items:
-            with lock:
-                if "items" not in got:  # первый зафиксировавшийся и выигрывает
-                    got["items"] = items
-                    done.set()
-
-    for fn in providers:
-        if done.is_set():
-            break
-        threading.Thread(target=_run, args=(fn,), daemon=True).start()
-        done.wait(hedge_s)
-    done.wait(final_wait)
-    return got.get("items") or []
+    """Каскад геокодера поверх общего hedged_first (живёт в core, чтобы не
+    тянуть цикл импортов). Возвращает список (может быть пустым)."""
+    return hedged_first(providers, hedge_s=hedge_s, final_wait=final_wait) or []
 
 
 # ---------- провайдеры прямого поиска: единый формат ----------
@@ -371,10 +350,10 @@ def _reverse_photon(lat, lng):
 
 def reverse_geocode(lat, lng):
     """Адрес по координате (клик по карте) каскадом Яндекс → Nominatim → Photon."""
-    items = _hedged([lambda: [_reverse_yandex(lat, lng)],
-                     lambda: [_reverse_nominatim(lat, lng)],
-                     lambda: [_reverse_photon(lat, lng)]],
-                    hedge_s=1.5, final_wait=3.0)
+    items = hedged_first([lambda: [_reverse_yandex(lat, lng)],
+                          lambda: [_reverse_nominatim(lat, lng)],
+                          lambda: [_reverse_photon(lat, lng)]],
+                         hedge_s=1.5, final_wait=3.0) or []
     return items[0] if items else ""
 
 
@@ -450,9 +429,9 @@ def geocode():
                           daemon=True)
     th.start()
     try:
-        items = _hedged([lambda: search_yandex(q, lat, lng),
-                         lambda: search_nominatim(q, lat, lng),
-                         lambda: search_photon(q, lat, lng)])
+        items = hedged_first([lambda: search_yandex(q, lat, lng),
+                              lambda: search_nominatim(q, lat, lng),
+                              lambda: search_photon(q, lat, lng)]) or []
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": f"Геокодер недоступен: {e}"}), 502
     th.join(timeout=2)

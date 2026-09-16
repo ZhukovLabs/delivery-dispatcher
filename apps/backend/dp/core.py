@@ -198,12 +198,47 @@ def _obj_point(x):
         return pid
     return (STATE.get("points") or [{}])[0].get("id") or ""
 
+def hedged_first(providers, hedge_s, final_wait):
+    """Каскад с подстраховкой (hedged request). providers — коллбэки без
+    аргументов; каждый возвращает результат, ложное значение/исключение =
+    промах. Ступени стартуют по одной; если очередная не ответила за hedge_s,
+    параллельно запускается следующая. Побеждает первый зафиксировавшийся
+    результат (при одновременном ответе — более приоритетный), остальные
+    игнорируются (потоки-демоны дорабатывают вхолостую). None = все молчат."""
+    got, done, lock = {}, threading.Event(), threading.Lock()
+
+    def _run(fn):
+        try:
+            res = fn()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s: %s", getattr(fn, "__name__", "?"), exc)
+            return
+        if res:
+            with lock:
+                if "res" not in got:  # первый зафиксировавшийся и выигрывает
+                    got["res"] = res
+                    done.set()
+
+    for fn in providers:
+        if done.is_set():
+            break
+        threading.Thread(target=_run, args=(fn,), daemon=True).start()
+        done.wait(hedge_s)
+    done.wait(final_wait)
+    return got.get("res")
+
+
 OSRM_URLS = [
     "http://127.0.0.1:5000",                        # свой OSRM (docker, вся Беларусь)
-    "https://routing.openstreetmap.de/routed-car",  # серверы сообщества OSM (FOSSGIS) — надёжнее
-    "http://router.project-osrm.org",               # официальный демо-сервер — запасной
+    "https://routing.openstreetmap.de/routed-car",  # серверы сообщества OSM (FOSSGIS)
+    "http://router.project-osrm.org",               # официальный демо-сервер
 ]
-_osrm_base = None  # последний рабочий сервер (проверяется первым)
+OSRM_NAMES = {OSRM_URLS[0]: "OSRM(local)", OSRM_URLS[1]: "OSRM(fossgis)",
+              OSRM_URLS[2]: "OSRM(demo)"}
+# каскад маршрутизации: 3 с на ступень, потом параллельно следующая; итоговый
+# потолок ожидания — 8 с (дольше считает только полностью мёртвый интернет)
+ROUTE_HEDGE_S = 3.0
+ROUTE_FINAL_S = 8.0
 
 # OpenRouteService: основной источник матриц/геометрии (по ключу, бесплатный тариф).
 # Квота суток ограничена, поэтому: считаем запросы сами, при приближении
@@ -648,27 +683,23 @@ def haversine_km(a, b):
     return 2 * r * math.asin(math.sqrt(h))
 
 
-def osrm_get(path, params):
-    global _osrm_base
-    bases = ([_osrm_base] if _osrm_base else []) + [u for u in OSRM_URLS if u != _osrm_base]
-    for base in bases:
-        try:
-            resp = requests.get(f"{base}{path}", params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            if data.get("code") == "Ok":
-                _osrm_base = base
-                return data
-            log.warning("OSRM %s: code=%s", base, data.get("code"))
-        except Exception as e:  # noqa: BLE001
-            log.warning("OSRM %s недоступен: %s", base, e)
+def osrm_get(base, path, params):
+    """Один запрос к конкретному OSRM-серверу. None при любом сбое."""
+    try:
+        resp = requests.get(f"{base}{path}", params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code") == "Ok":
+            return data
+        log.warning("OSRM %s: code=%s", base, data.get("code"))
+    except Exception as e:  # noqa: BLE001
+        log.warning("OSRM %s недоступен: %s", base, e)
     return None
 
 
-def osrm_table(points):
-    """Матрицы времени (сек) и расстояния (м) по дорогам. (None, None), если OSRM недоступен."""
-    coords = ";".join(f"{p['lng']:.6f},{p['lat']:.6f}" for p in points)
-    data = osrm_get(f"/table/v1/driving/{coords}", {"annotations": "duration,distance"})
+def _osrm_matrix_at(base, points):
+    data = osrm_get(base, f"/table/v1/driving/{_osrm_coords(points)}",
+                    {"annotations": "duration,distance"})
     durations = data and data.get("durations")
     if not durations or any(d is None for row in durations for d in row):
         return None, None
@@ -678,15 +709,17 @@ def osrm_table(points):
     return durations, distances
 
 
-def osrm_geometry(points):
-    """Геометрия маршрута по дорогам: список [lat, lng]. None при сбое."""
-    coords = ";".join(f"{p['lng']:.6f},{p['lat']:.6f}" for p in points)
-    data = osrm_get(f"/route/v1/driving/{coords}",
+def _osrm_geometry_at(base, points):
+    data = osrm_get(base, f"/route/v1/driving/{_osrm_coords(points)}",
                     {"overview": "full", "geometries": "geojson"})
     try:
         return [[c[1], c[0]] for c in data["routes"][0]["geometry"]["coordinates"]]
     except (KeyError, IndexError, TypeError):
         return None
+
+
+def _osrm_coords(points):
+    return ";".join(f"{p['lng']:.6f},{p['lat']:.6f}" for p in points)
 
 
 # ---------- OpenRouteService (с защитой от исчерпания квоты) ----------
@@ -781,9 +814,41 @@ def _cache_matrix(key, value):
     _MATRIX_CACHE[key] = (time.time(), *value)
 
 
+def _routing_providers(kind, points):
+    """Ступени каскада маршрутизации в порядке приоритета. Каждая возвращает
+    (метка_провайдера, значение) или None (промах): OSRM local → FOSSGIS →
+    демо → ORS. ORS пропускаем сразу при исчерпанной квоте/отключении."""
+    def osrm_step(base):
+        def call():
+            if kind == "matrix":
+                dur, dist = _osrm_matrix_at(base, points)
+                val = (dur, dist) if dur is not None else None
+            else:
+                val = _osrm_geometry_at(base, points)
+            return (OSRM_NAMES[base], val) if val else None
+        call.__name__ = f"routing:{OSRM_NAMES[base]}"
+        return call
+
+    def ors_step():
+        def call():
+            if len(points) > ORS_MAX_POINTS:
+                return None
+            if kind == "matrix":
+                dur, dist = ors_matrix(points)
+                val = (dur, dist) if dur is not None else None
+            else:
+                val = ors_geometry(points)
+            return ("ORS", val) if val else None
+        call.__name__ = "routing:ORS"
+        return call
+
+    return [osrm_step(b) for b in OSRM_URLS] + [ors_step()]
+
+
 def routing_table(points):
-    """Матрица времени/расстояния: OSRM (локальный docker -> FOSSGIS -> демо)
-    -> ORS (запасной, квота) -> offline.
+    """Матрица времени/расстояния каскадом с подстраховкой (hedged):
+    локальный OSRM → FOSSGIS → демо → ORS. Ступень, молчащая дольше
+    ROUTE_HEDGE_S, подстраховывается следующей; побеждает первый ответ.
 
     Результат кэшируется по набору точек (30 мин): повторный расчёт того же
     набора не тратит квоту внешних сервисов и занимает миллисекунды.
@@ -794,24 +859,18 @@ def routing_table(points):
     if hit and time.time() - hit[0] < _MATRIX_TTL:
         ts, durations, distances, provider = hit
         return durations, distances, provider
-    durations, distances = osrm_table(points)
-    provider = "OSRM" if durations is not None else "offline"
-    if durations is None and len(points) <= ORS_MAX_POINTS:
-        durations, distances = ors_matrix(points)
-        if durations is not None:
-            provider = "ORS"
-    _cache_matrix(key, (durations, distances, provider))
-    return durations, distances, provider
+    won = hedged_first(_routing_providers("matrix", points),
+                       hedge_s=ROUTE_HEDGE_S, final_wait=ROUTE_FINAL_S)
+    provider, (durations, distances) = won if won else (None, (None, None))
+    _cache_matrix(key, (durations, distances, provider or "offline"))
+    return durations, distances, provider or "offline"
 
 
 def routing_geometry(points):
-    """Геометрия маршрута: OSRM -> ORS. None при полном сбое."""
-    geom = osrm_geometry(points)
-    if geom:
-        return geom
-    if len(points) <= ORS_MAX_POINTS:
-        return ors_geometry(points)
-    return None
+    """Геометрия маршрута тем же каскадом, что и матрицы. None при сбое всех."""
+    won = hedged_first(_routing_providers("geometry", points),
+                       hedge_s=ROUTE_HEDGE_S, final_wait=ROUTE_FINAL_S)
+    return won[1] if won else None
 
 
 def build_time_matrix(points, settings):
