@@ -294,7 +294,11 @@ def _persist_meta():
             ("settings", json.dumps(STATE["settings"], ensure_ascii=False)),
             ("color_seq", str(STATE["color_seq"])),
             ("plans", json.dumps(STATE["plans"], ensure_ascii=False)
-             if STATE.get("plans") else "")])
+             if STATE.get("plans") else ""),
+            ("tg_ask", json.dumps(STATE["tg_ask"], ensure_ascii=False)
+             if STATE.get("tg_ask") else ""),
+            ("tg_deliv", json.dumps(STATE["tg_deliv"], ensure_ascii=False)
+             if STATE.get("tg_deliv") else "")])
         c.execute("DELETE FROM points")
         c.executemany(
             "INSERT INTO points(id, name, address, lat, lng, pos) VALUES(?, ?, ?, ?, ?, ?)",
@@ -582,6 +586,17 @@ def load_state():
         STATE["color_seq"] = int(meta.get("color_seq") or 0)
     except ValueError:
         pass
+    for key in ("tg_ask", "tg_deliv"):
+        # диалоги «доставлен?» и трекеры простоя переживают рестарт:
+        # без этого после каждого деплоя бот переспрашивал, а нажатия
+        # кнопок на старых сообщениях попадали в «уже неактуально»
+        if meta.get(key):
+            try:
+                saved = json.loads(meta[key])
+                if isinstance(saved, dict):
+                    STATE[key].update(saved)
+            except ValueError:
+                pass
     STATE["couriers"] = [{"id": r["id"], "name": r["name"], "status": r["status"],
                           "color": r["color"] or None,
                           "back_min": int(r["back_min"] if r["back_min"] is not None else 15),
@@ -1442,8 +1457,11 @@ def _tg_edit_msg(chat_id, message_id, text, buttons=None):
     if buttons is not None:
         payload["reply_markup"] = {"inline_keyboard": buttons}
     try:
-        requests.post(_tg_api("editMessageText"), json=payload, timeout=5)
-    except requests.RequestException as e:
+        r = requests.post(_tg_api("editMessageText"), json=payload, timeout=5)
+        data = r.json()
+        if not data.get("ok") and data.get("description") != "message is not modified":
+            log.warning("tg editMessageText: %s", data.get("description"))
+    except (requests.RequestException, ValueError) as e:
         log.warning("tg editMessageText: %s", e)
 
 
