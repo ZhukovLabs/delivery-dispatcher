@@ -146,10 +146,17 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                             <span className="s-prio" title={`Приоритетный${s.auto ? ", поднялся сам по возрасту" : ""}`}><Zap size={11} /></span>
                           )} {s.address}
                           {so && so.lat != null && so.lng != null && (
-                            <a className="s-map" target="_blank" rel="noreferrer"
-                              title="Построить маршрут до точки в Яндекс Картах"
-                              href={`https://yandex.ru/maps/?rtext=~${so.lat},${so.lng}&rtt=auto`}
-                              onClick={e => e.stopPropagation()}>Яндекс Маршрут</a>
+                            <span className="s-mapw"> Маршрут:{" "}
+                              <a className="s-map" target="_blank" rel="noreferrer"
+                                title="Маршрут до точки в Яндекс Картах — осталось нажать «Поехали»"
+                                href={`https://yandex.ru/maps/?rtext=~${so.lat},${so.lng}&rtt=auto`}
+                                onClick={e => e.stopPropagation()}>Яндекс</a>
+                              {" | "}
+                              <a className="s-map" target="_blank" rel="noreferrer"
+                                title="Маршрут до точки в Google Картах — осталось нажать «Начать»"
+                                href={`https://www.google.com/maps/dir/?api=1&destination=${so.lat},${so.lng}&travelmode=driving`}
+                                onClick={e => e.stopPropagation()}>Google</a>
+                            </span>
                           )} {s.deadline && <span className="s-dl" title="Обещанное время доставки"><Timer size={11} />{s.deadline}</span>}
                           {!!s.late_min && s.late_min > 0 && (
                             <span className="late-chip" title="Успеть к обещанному времени не получится">

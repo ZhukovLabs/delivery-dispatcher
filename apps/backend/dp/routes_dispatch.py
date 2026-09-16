@@ -800,33 +800,46 @@ def assign_orders():
     if chat and CFG["tg_bot_token"] and given_stops:
         def _tg_assign():
             def _ya_link(sp):
-                # маршрут до точки: откуда — определит сам Яндекс (по гео открывшего)
+                # Яндекс: маршрут от геопозиции открывшего до точки, готов к «Поехали»
                 if sp.get("lat") is None or sp.get("lng") is None:
                     return None
                 return (f"https://yandex.ru/maps/?rtext=~{sp['lat']},{sp['lng']}"
                         "&rtt=auto")
+            def _gg_link(sp):
+                if sp.get("lat") is None or sp.get("lng") is None:
+                    return None
+                return (f"https://www.google.com/maps/dir/?api=1"
+                        f"&destination={sp['lat']},{sp['lng']}&travelmode=driving")
             z_word = _plural(len(given_stops), ("заказ", "заказа", "заказов"))
             lines = [f"🛵 <b>{_esc(courier['name'])}, в развозку</b>: "
                      f"{len(given_stops)} {z_word}"]
             for i, s in enumerate(given_stops, start=1):
-                link = _ya_link(s)
-                addr = (_esc(s["address"]) if not link
-                        else f'<a href="{link}">{_esc(s["address"])}</a>')
-                lines.append(f"{i}. {addr}"
-                             + (f" · ≈{s['eta_clock']}" if s.get("eta_clock") else ""))
+                ya, gg = _ya_link(s), _gg_link(s)
+                route_links = ""
+                if ya and gg:
+                    route_links = (f' · Маршрут: <a href="{ya}">Яндекс</a>'
+                                   f' | <a href="{gg}">Google</a>')
+                lines.append(f"{i}. {_esc(s['address'])}"
+                             + (f" · ≈{s['eta_clock']}" if s.get("eta_clock") else "")
+                             + route_links)
             lines.append("Время приблизительное, следите за сообщениями.")
             if (me or {}).get("name") and (me or {}).get("phone"):
                 lines.append(f"\nЕсть вопросы? - {_esc(me['name'])}, {me['phone']}")
-            # кнопка «весь маршрут»: от текущей геопозиции курьера по всем точкам
+            # кнопки «весь маршрут»: от текущей геопозиции по всем выданным точкам
             pts = [f"{s['lat']},{s['lng']}" for s in given_stops
                    if s.get("lat") is not None and s.get("lng") is not None]
             payload = {"chat_id": chat, "text": "\n".join(lines),
                        "parse_mode": "HTML"}
-            if len(pts) >= 2:  # Яндекс строит маршрут минимум по двум точкам
-                payload["reply_markup"] = {"inline_keyboard": [[
-                    {"text": "🗺 Весь маршрут в Яндекс Картах",
-                     "url": "https://yandex.ru/maps/?rtext=~"
-                            + "~".join(pts[:10]) + "&rtt=auto"}]]}
+            if len(pts) >= 2:  # маршрут строим минимум по двум точкам
+                kb = [{"text": "🗺 Весь маршрут · Яндекс",
+                       "url": "https://yandex.ru/maps/?rtext=~"
+                              + "~".join(pts[:10]) + "&rtt=auto"},
+                      {"text": "🗺 Google",
+                       "url": ("https://www.google.com/maps/dir/?api=1"
+                               "&destination=" + pts[min(len(pts), 10) - 1]
+                               + "&waypoints=" + "%7C".join(pts[:min(len(pts), 10) - 1])
+                               + "&travelmode=driving")}]
+                payload["reply_markup"] = {"inline_keyboard": [kb]}
             try:
                 resp = requests.post(
                     f"https://api.telegram.org/bot{CFG['tg_bot_token']}/sendMessage",
