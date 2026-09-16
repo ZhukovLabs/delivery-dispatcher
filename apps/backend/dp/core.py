@@ -555,12 +555,15 @@ def load_state():
         except ValueError:
             pass
     if not STATE.get("points"):
-        # миграция: единственное депо -> первая точка выдачи
-        base = STATE.get("depot") or dict(DEFAULT_DEPOT)
-        STATE["points"] = [{"id": uuid.uuid4().hex[:8], "name": "Основная",
-                            "address": base.get("address") or "",
-                            "lat": float(base.get("lat") or 0),
-                            "lng": float(base.get("lng") or 0)}]
+        # сид: две точки выдачи Barak (Гомель)
+        STATE["points"] = [
+            {"id": uuid.uuid4().hex[:8], "name": "Подгорная",
+             "address": "ул. Подгорная 12/1, Гомель",
+             "lat": 52.44146, "lng": 31.01476},
+            {"id": uuid.uuid4().hex[:8], "name": "Барыкина",
+             "address": "ул. Барыкина 230Б, Гомель",
+             "lat": 52.4231538, "lng": 30.9336801},
+        ]
     STATE["depot"] = _depot_view()
     _pt_ids = {p["id"] for p in STATE["points"]}
     _first = STATE["points"][0]["id"]
