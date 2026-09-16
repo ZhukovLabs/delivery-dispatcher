@@ -48,14 +48,19 @@ export function AskDialog({ ask, onResolve }: { ask: AskState; onResolve: (v: bo
   );
 }
 
-export function SolveOverlay() {
-  // полный экран: расчёт развозки идёт (у нас или у другого диспетчера депо)
+export function SolveOverlay({ offline }: { offline: boolean }) {
+  // полный экран: расчёт развозки идёт (у нас или у другого диспетчера депо);
+  // если связь потерялась посреди расчёта — говорим об этом и не держим
+  // блокировку дольше минуты (после восстановления всё сверится с сервером)
   return (
-    <div className="solve-ov" role="status" aria-live="assertive" aria-label="Идёт расчёт развозки">
+    <div className="solve-ov" role="status" aria-live="assertive"
+      aria-label={offline ? "Связь потеряна во время расчёта" : "Идёт расчёт развозки"}>
       <div className="solve-ov-box">
-        <span className="solve-ov-spin" aria-hidden="true" />
-        <h3>Идёт расчёт развозки</h3>
-        <p>Данные обновятся автоматически — страница разблокируется сама</p>
+        <span className={"solve-ov-spin" + (offline ? " warn" : "")} aria-hidden="true" />
+        <h3>{offline ? "Связь потеряна" : "Идёт расчёт развозки"}</h3>
+        <p>{offline
+          ? "Расчёт шёл, когда пропал интернет. Восстанавливаем связь — страница разблокируется сама (не дольше минуты)"
+          : "Данные обновятся автоматически — страница разблокируется сама"}</p>
       </div>
     </div>
   );

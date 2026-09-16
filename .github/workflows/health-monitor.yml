@@ -1,0 +1,31 @@
+name: health-monitor
+
+# Каждые 5 минут пингуем прод через Tailscale Funnel; если health не отвечает —
+# Telegram-алерт владельцу (секреты TG_ALERT_TOKEN / ALERT_CHAT в репозитории).
+# GitHub-крон по времени может плавать на минуту-другую — для наших целей ок.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check health
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 25 \
+            https://zhukovlabs.taila8c324.ts.net:8443/health || echo 000)
+          echo "health_code=$code"
+          if [ "$code" != "200" ]; then
+            echo "Сайт/тоннель лежит — шлём алерт"
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_ALERT_TOKEN }}/sendMessage" \
+              --data-urlencode "chat_id=${{ secrets.ALERT_CHAT }}" \
+              --data-urlencode "text="\
+"🔴 Диспетчерская недоступна: health ответил '$code'.
+Проверь ноут (192.168.0.161): питание, интернет, tailscaled (funnel), dispatcher.service." \
+              > /dev/null || true
+          fi

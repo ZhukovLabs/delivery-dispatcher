@@ -62,13 +62,31 @@ export interface AppState {
   solving?: boolean; // в этом депо идёт расчёт развозки (блокирует UI)
 }
 
+/** Сетевой таймаут для запросов: без него fetch на рваной связи висит
+ *  до браузерного лимита (~300 с) и пользователь смотрит в «ничего». */
+const API_TIMEOUT_MS = 30_000;
+
 export async function api<T = AppState>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal,
-  });
+  const ctl = new AbortController();
+  const timeout = setTimeout(() => ctl.abort(), API_TIMEOUT_MS);
+  const onOuterAbort = () => ctl.abort(); // внешний сигнал тоже должен рвать запрос
+  signal?.addEventListener("abort", onOuterAbort);
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: ctl.signal,
+    });
+  } catch {
+    // обрыв связи / таймаут: единая понятная ошибка; при восстановлении WS
+    // состояние тихо пересинхронизируется (invalidateQueries on connect)
+    throw new Error("Сеть недоступна — проверьте подключение к интернету");
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", onOuterAbort);
+  }
   if (res.status === 401 && typeof window !== "undefined") {
     window.location.href = "/login";
     throw new Error("Требуется вход");

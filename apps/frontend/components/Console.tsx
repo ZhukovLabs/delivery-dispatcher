@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type AppState, type Courier, type Route } from "@/lib/api";
-import { joinDepot } from "@/lib/ws";
+import { joinDepot, subscribeConn, type WsConnState } from "@/lib/ws";
 import { addrKey } from "./console/format";
 import { optimisticFor } from "./console/optimistic";
 import { useDispatchState } from "./console/useDispatchState";
@@ -42,6 +42,32 @@ export default function Console() {
     new Promise<boolean>(resolve => {
       setAsk({ text, ok: opts.ok || "Да", danger: !!opts.danger, resolve });
     }), []);
+
+  /* связь с сервером: индикатор в шапке + поведение оверлея расчёта */
+  const [conn, setConn] = useState<WsConnState>("connecting");
+  useEffect(() => subscribeConn(setConn), []);
+  const prevConn = useRef<WsConnState>("connecting");
+  useEffect(() => {
+    if (prevConn.current === "offline" && conn === "online") {
+      // состояние уже перезапрошено (invalidateQueries в useDispatchState),
+      // юзеру остаётся короткое подтверждение
+      showToast("Связь восстановлена — данные синхронизированы");
+    }
+    prevConn.current = conn;
+  }, [conn, showToast]);
+
+  /* блокировка на время расчёта не должна быть вечной: пропала связь —
+     через минуту снимаем оверлей сами (иначе мёртвый WS навсегда «морозит»
+     консоль последним состоянием solving=true) */
+  const [solveHide, setSolveHide] = useState(false);
+  useEffect(() => {
+    if (conn !== "offline") {
+      setSolveHide(false); // связь есть — блокировка честная, таймер не нужен
+      return;
+    }
+    const t = setTimeout(() => setSolveHide(true), 60_000);
+    return () => clearTimeout(t);
+  }, [conn]);
 
   const { undoLen, lastLabel, doUndo, undoToast, pushUndo } = useUndo(refresh, showToast);
 
@@ -441,7 +467,7 @@ export default function Console() {
         />
       )}
 
-      {(solving || !!st?.solving) && <SolveOverlay />}
+      {((solving || !!st?.solving) && !solveHide) && <SolveOverlay offline={conn !== "online"} />}
 
       {helpOpen && <HelpOverlay onClose={() => setHelpOpen(false)} />}
 
