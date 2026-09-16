@@ -256,6 +256,21 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     return { min, km };
   };
 
+  // живой остаток выданного маршрута для балуна курьера: от текущей позиции
+  // через оставшиеся остановки, скорость — реальная курьера
+  const outRemain = (c: Courier): { min: number; n: number } | null => {
+    const stops = (c.out_route?.stops || []).filter(sp => sp.length > 2);
+    if (!c.pos || !stops.length) return null;
+    const pts: [number, number][] = [[c.pos.lat, c.pos.lng],
+      ...stops.map(sp => [sp[0], sp[1]] as [number, number])];
+    let km = 0;
+    for (let i = 0; i < pts.length - 1; i++) km += havKm(pts[i], pts[i + 1]);
+    const kmh = c.avg_kmh && c.avg_kmh > 20 ? c.avg_kmh
+      : (state.settings.speed_kmh || 60);
+    return { min: km / (kmh / 60) + (state.settings.handover_min ?? 5) * (stops.length - 1),
+             n: stops.length };
+  };
+
   const planMap: Record<string, { color: string; label: string; popup: string }> = {};
   const plan = state.plan as Plan | null;
   if (plan) {
@@ -276,12 +291,12 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   const courierBalloon = (c: Courier) => {
     const r = routeOf(plan, c.id);
     const endClk = r && r.trips?.length ? r.trips[r.trips.length - 1].end_clock : undefined;
-    const outN = c.out_route?.stops?.length || 0;
+    const rem = outRemain(c);
     return `<b>${esc(c.name)}</b><br>📍 ${fmtAge(c.pos!.ts)} назад${c.pos!.live ? " · live" : ""}` +
       (c.pos!.acc ? ` · ±${Math.round(c.pos!.acc)} м` : "") +
-      (r ? `<br>Маршрут: ${r.count} зак. · ≈${Math.round(r.total_min)} мин · финиш ${endClk || "?"}` : "") +
-      (!r && outN ? `<br>В развозке: ${outN} зак. (пунктир — выданные)` : "") +
-      (!r && !outN && (c.out_route?.geom?.length || 0) > 1 ? "<br>↩ Возвращается на базу" : "");
+      (rem ? `<br>⏳ осталось ≈${Math.round(rem.min)} мин · ${rem.n} зак.` :
+        (r ? `<br>Маршрут: ${r.count} зак. · ≈${Math.round(r.total_min)} мин · финиш ${endClk || "?"}` : "")) +
+      (!r && !rem && (c.out_route?.geom?.length || 0) > 1 ? "<br>↩ Возвращается на базу" : "");
   };
 
   // живые ссылки для обработчиков, привязанных к долгоживущим маркерам:
@@ -289,6 +304,8 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   const planRef = useRef(plan); planRef.current = plan;
   const pickPtsRef = useRef(pickPts); pickPtsRef.current = pickPts;
   const couriersRef = useRef(state.couriers); couriersRef.current = state.couriers;
+  // кэш перестроенных по OSRM остатков маршрута (съезд с записанной дороги)
+  const osrmPl = useRef<Map<string, [number, number][] | Promise<null>>>(new Map());
 
   /* маршрут выбранного курьера: точный из плана + пунктир выданных (#5) */
   const refreshSelRoute = () => {
@@ -305,19 +322,43 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     const curPts = pickPtsRef.current;
     const color = cur.color || r?.color || DEFAULT_COURIER_COLOR;
     const lines: any[] = [];
-    // пунктир: выданные заказы — только оставшийся путь: от текущей позиции
-    // курьера до последней остановки, без уже проеханного и без возврата
-    // на базу. Геометрия дороги, если сохранили на «Выдать», иначе по прямой.
+    // пунктир: выданные заказы — только оставшийся путь от текущей позиции
+    // курьера до последней остановки. Пока он на записанной при «Выдать»
+    // дороге — режем её; съехал на другую дорогу — перестраиваем остаток
+    // по OSRM (та же машина маршрутов, что у ботов), до ответа — прямые.
     if (orr && orr.stops?.length) {
       const stops = (orr.stops || []).map(sp => [sp[0], sp[1]] as [number, number]);
+      const oids = (orr.stops || []).map(sp => sp[2]).filter(Boolean).join(",");
       const pos0 = cur.pos ? [cur.pos.lat, cur.pos.lng] as [number, number] : null;
-      let dashed: [number, number][];
+      let dashed: [number, number][] | null = null;
       if (orr.geom && orr.geom.length > 1) {
-        let pl = trimAfter(orr.geom, stops[stops.length - 1]);
-        dashed = pos0 ? trimFrom(pl, pos0) : pl;
-      } else {
-        dashed = pos0 ? [pos0, ...stops] : stops;
+        const pl = trimAfter(orr.geom, stops[stops.length - 1]);
+        if (!pos0 || havKm(pl[nearestIdx(pl, pos0)], pos0) <= 0.15) {
+          dashed = pos0 ? trimFrom(pl, pos0) : pl;
+        }
       }
+      if (!dashed && pos0) {
+        // курьер съехал с записанной дороги — остаток заново по дорогам
+        const key = `${cid}|${pos0[0].toFixed(3)},${pos0[1].toFixed(3)}|${oids}`;
+        const cached = osrmPl.current.get(key);
+        if (Array.isArray(cached)) {
+          dashed = cached;
+        } else if (!cached) {
+          if (osrmPl.current.size > 80) osrmPl.current.clear();
+          const wp = [pos0, ...stops].map(p => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join(";");
+          osrmPl.current.set(key, Promise.resolve(null));
+          fetch(`https://router.project-osrm.org/route/v1/driving/${wp}?overview=full&geometries=geojson`)
+            .then(rs => rs.json())
+            .then(j => {
+              const cs = j?.routes?.[0]?.geometry?.coordinates || [];
+              const pl2 = cs.map((c2: [number, number]) => [c2[1], c2[0]] as [number, number]);
+              if (pl2.length > 1) { osrmPl.current.set(key, pl2); setSelTick(t => t + 1); }
+              else osrmPl.current.delete(key);
+            })
+            .catch(() => { osrmPl.current.delete(key); });
+        }
+      }
+      if (!dashed) dashed = pos0 ? [pos0, ...stops] : stops;
       if (dashed.length > 1) {
         lines.push(new ym.Polyline(dashed, {},
           { strokeColor: color, strokeWidth: 5, strokeOpacity: .85, strokeStyle: "1 3", zIndex: 30 }));
