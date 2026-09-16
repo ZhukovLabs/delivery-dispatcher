@@ -254,8 +254,12 @@ def _suggest_v1(q, ll, spn):
                                 "ll": ll, "spn": spn, "print_address": 1},
                         headers=UA, timeout=3.0)
     resp.raise_for_status()
+    data = resp.json()
+    items = data.get("items") if isinstance(data, dict) else data
     res = []
-    for it in resp.json() or []:
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
         addr = (it.get("address") or {}).get("formatted_address") or ""
         if not addr:
             title = (it.get("title") or {}).get("text") or ""
