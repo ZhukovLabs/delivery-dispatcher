@@ -5,7 +5,7 @@ import { fmtAge, type AppState, type Plan, type Courier, type Order } from "@/li
 
 // = TG_GEO_AT_PLACE бэкенда: радиус, внутри которого курьеру зачтётся
 // простой «у адреса» (30 с — и бот спросит «доставлен?»)
-const GEO_AT_PLACE_M = 100;
+const GEO_AT_PLACE_M = 150;
 
 const havKm = (a: [number, number], b: [number, number]) => {
   const r = Math.PI / 180;
@@ -425,9 +425,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         content = p.popup;
       } else if (oCour) {
         const eta = outEta(o, oCour);
-        // курьер в 100 м от заказа — тот же радиус, что и зачёт простоя
+        // курьер в 150 м от заказа — тот же радиус, что и зачёт простоя
         const onSite = !!(oCour.pos && o.lat != null && o.lng != null &&
-          havKm([oCour.pos.lat, oCour.pos.lng], [o.lat, o.lng]) <= 0.1);
+          havKm([oCour.pos.lat, oCour.pos.lng], [o.lat, o.lng]) <= 0.15);
         content = popupHtml({ address: o.address, courier: oCour.name,
           eta: !onSite && eta ? clockIn(eta.min) : undefined,
           inMin: !onSite && eta ? Math.round(eta.min) : undefined,

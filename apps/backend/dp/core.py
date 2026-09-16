@@ -1488,7 +1488,7 @@ _BOT_ASK_AFTER_S = 30   # столько секунд курьер стоит у
 
 
 TG_GEO_FRESH = 600      # гео свежая для расчётов <= 10 мин
-TG_GEO_AT_PLACE = 0.10  # ближе 100 м = «на месте» (депо/заказ)
+TG_GEO_AT_PLACE = 0.15  # ближе 150 м = «на месте» (депо/заказ)
 _LOAD_DWELL_S = 120     # столько нужно простоя у точки, чтобы считать выдачу состоявшейся
 
 
@@ -1706,14 +1706,21 @@ def _courier_geo(c, depot, now=None):
     g["loaded"] = bool(load.get("loaded_at"))
     if has_out and not g["at_depot"]:
         g["delivering"] = True   # выданы и не у точки — значит, едет с заказами
-        # честный возврат: дорога до точки + развоз невыданных-недоставленных.
+        # честный возврат: сначала оставшиеся адреса (в порядке объезда
+        # из out_route.stops), затем депо; скорость — реальная курьера.
         # «доставленные» выводим по гео (долго стоял у адреса) — для расчёта
         # их считаем развезёнными; статус заказа не трогаем
         dst = STATE["tg_deliv"].get(chat) or {}
-        rem = sum(1 for o in out_orders
-                  if not dst.get(o["id"], {}).get("at"))
-        per = _courier_del_avg_min(c)
-        g["back_min"] = int(min(480, g["back_min"] + rem * per))
+        rem = [o for o in out_orders if not dst.get(o["id"], {}).get("at")]
+        stops_order = {s[2]: i for s in
+                       ((c.get("out_route") or {}).get("stops") or [])
+                       if len(s) > 2}
+        rem.sort(key=lambda o: stops_order.get(o["id"], 10 ** 9))
+        pts = [g] + [o for o in rem if o.get("lat") is not None] + [depot]
+        chain_km = sum(haversine_km(a, b) for a, b in zip(pts, pts[1:]))
+        per_stop = max(0, int(STATE["settings"].get("handover_min", 5)))
+        g["back_min"] = int(min(480, max(1, round(
+            chain_km * ROAD_FACTOR / kmh * 60 + per_stop * len(rem)))))
     if not has_out and not g["at_depot"]:
         # заказы ещё не в машине: честный ETA — сначала доехать до точки
         kmh2, _ = _courier_speed(c)
