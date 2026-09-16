@@ -459,10 +459,14 @@ def _speed_current_kmh(pos, now):
             continue
         if max(a.get("acc") or 0, b.get("acc") or 0) > _SPEED_MAX_ACC_M:
             continue
-        m = haversine_km(a, b) * ROAD_FACTOR * 1000.0
-        kmh = m / 1000.0 / (dt / 3600.0)
-        if kmh > 170.0:
-            continue  # GPS-прыжок
+        m_raw = haversine_km(a, b) * 1000.0
+        kmh_real = m_raw / 1000.0 / (dt / 3600.0)
+        if kmh_real > 170.0:
+            continue  # GPS-прыжок фильтруем по реальной скорости GPS;
+            # дорожный фактор применяем после, иначе быстрый курьер
+            # (150 × 1.3 = 195) весь улетает в фильтр и «едет» выглядит как «стоит»
+        m = m_raw * ROAD_FACTOR
+        kmh = kmh_real * ROAD_FACTOR
         if m < 15.0 and kmh < 5.0:
             t_sum += dt  # стоит на месте: время идёт, метры — нет
             continue
