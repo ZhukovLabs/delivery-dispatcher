@@ -1176,6 +1176,74 @@ def plan_move():
     return _payload()
 
 
+@r.post("/api/plan/unassign")
+@flaskish
+def plan_unassign():
+    """Снять заказ с маршрута (drag остановки наружу, не к другому курьеру).
+
+    Остановка убирается из заезда, pin заказа сбрасывается (иначе пересчёт
+    вернул бы его тому же курьеру), ETA оставшихся курьеров пересчитываются
+    от текущего момента. Заказ возвращается в очередь готовых.
+    """
+    data = _json()
+    oid = data.get("order_id")
+    order = next((o for o in STATE["orders"] if o["id"] == oid), None)
+    if not order:
+        return jsonify({"error": "Заказ не найден"}), 404
+    if _obj_point(order) != _my_point():
+        return jsonify({"error": "Заказ другого депо"}), 403
+    if (order.get("status") or "ready") != "ready":
+        return jsonify({"error": "Заказ уже в развозке — сначала верните его в очередь"}), 400
+    pid = _my_point()
+    plan = _plan_for(pid)
+    if not plan or not plan.get("routes"):
+        return jsonify({"error": "Сначала рассчитайте план"}), 400
+    src_id = None
+    for r in plan["routes"]:
+        for tr in r.get("trips", []):
+            hit = next((s for s in tr["stops"] if s["order_id"] == oid), None)
+            if hit:
+                tr["stops"].remove(hit)
+                src_id = r["courier_id"]
+        r["trips"] = [tr for tr in r.get("trips", []) if tr["stops"]]
+    if src_id is None:
+        return jsonify({"error": "Заказа нет в текущем плане"}), 400
+    plan["routes"] = [r for r in plan["routes"] if r.get("trips")]
+    order["pin"] = ""  # заказ снова свободен: без этого пересчёт вернул бы его
+    _persist_orders()
+    now = _now()
+    if not plan["routes"]:
+        # весь план состоял из этого заказа — пустой план не нужен
+        STATE["plans"].pop(pid, None)
+        _persist_meta()
+        _invalidate_plan(pid=pid)
+        _ev("disp", f"снял «{order.get('address') or oid}» с маршрута")
+        _bump()
+        return _payload()
+    try:
+        matrix, node, appr_home, home_of = _retiming_matrix(plan, pid,
+                                                            plan["routes"])
+        for r in plan["routes"]:
+            h = home_of[r["courier_id"]]
+            _retime_route(r, matrix, node, STATE["settings"], now,
+                          appr_home[h], h)
+        plan["anchored_at"] = now.isoformat(timespec="seconds")
+    except Exception:
+        log.warning("plan unassign retime failed, ETA оставлены как были")
+    all_etas = [s["eta_min"] for r in plan["routes"] for s in r["stops"]]
+    plan["last_delivery_min"] = max(all_etas, default=0)
+    plan["last_delivery_clock"] = ((now + timedelta(
+        minutes=plan["last_delivery_min"])).strftime("%H:%M") if all_etas else None)
+    plan["avg_delivery_min"] = round(sum(all_etas) / len(all_etas)) if all_etas else 0
+    plan["advice"] = None  # сценарии «ждать/не ждать» после снятия не актуальны
+    plan["moved"] = True
+    log.info("plan unassign: %s снят с маршрута %s", oid, src_id)
+    _persist_meta()
+    _ev("disp", f"снял «{order.get('address') or oid}» с маршрута")
+    _bump()
+    return _payload()
+
+
 def _retime_route(route, matrix, node, settings, now_dt, appr=None, home=0):
     """Пересчёт ETA всех заездов курьера от now_dt. Меняет route на месте."""
     now_hm = now_dt.hour * 60 + now_dt.minute

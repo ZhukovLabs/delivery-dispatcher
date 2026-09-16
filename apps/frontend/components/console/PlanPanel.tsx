@@ -1,13 +1,13 @@
 "use client";
 
-import { Check, ClipboardCopy, Clock, Gauge, Hand, Package, RefreshCw, Route as RouteIcon, Send, Timer, TriangleAlert, Zap } from "lucide-react";
+import { Check, ClipboardCopy, Clock, Gauge, Hand, Package, RefreshCw, Route as RouteIcon, Send, Timer, TriangleAlert, X, Zap } from "lucide-react";
 import type { AppState, Route } from "@/lib/api";
 import AdviceCard from "./AdviceCard";
 import { plural } from "./format";
 
 /* ---------- панель плана развозки: маршруты по курьерам, заезды, стопы ---------- */
 
-export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOverRoute, setDragOverRoute, onMoveStop, onPin }: {
+export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, onTg, dragOverRoute, setDragOverRoute, onMoveStop, onPin, onUnassign }: {
   st: AppState;
   clock: (m: number) => string;
   busyMode: boolean;
@@ -19,6 +19,7 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
   setDragOverRoute: (v: string | null) => void;
   onMoveStop: (oid: string, to: string) => Promise<void>;
   onPin: (oid: string, cid: string) => Promise<void>;
+  onUnassign: (oid: string) => Promise<void>;
 }) {
   const plan = st.plan!;
   const byRoads = plan.routing === "roads";
@@ -73,6 +74,7 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
             onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverRoute(null); }}
             onDrop={async e => {
               e.preventDefault();
+              e.stopPropagation(); // дальше секции плана — drop «наружу» не должен срабатывать
               setDragOverRoute(null);
               const raw = e.dataTransfer.getData("text/plain") || "";
               if (!raw || raw.startsWith("courier:")) return; // курьера обработает секция плана
@@ -137,6 +139,7 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                         title={`${s.address} · +${s.eta_min} мин от расчёта`}
                         onDragStart={e => {
                           e.dataTransfer.setData("text/plain", s.order_id + "|" + r.courier_id);
+                          e.dataTransfer.setData("application/x-dp-stop", s.order_id + "|" + r.courier_id);
                           e.dataTransfer.effectAllowed = "move";
                         }}
                       >
@@ -152,6 +155,10 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                           )}
                         </span>
                         <span className="s-t">{s.eta_clock || "?"}</span>
+                        <button className="s-x" title="Убрать заказ с маршрута — вернётся в очередь готовых (сам заказ не удаляется)"
+                          onClick={e => { e.stopPropagation(); void onUnassign(s.order_id); }}>
+                          <X size={11} />
+                        </button>
                       </li>
                     );
                   })}

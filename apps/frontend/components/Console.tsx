@@ -156,6 +156,7 @@ export default function Console() {
   const [busyMode, setBusyMode] = useState(false); // клик по сценарию совета
   const [dragOverCourier, setDragOverCourier] = useState<string | null>(null);
   const [dragOverRoute, setDragOverRoute] = useState<string | null>(null);
+  const [dropOut, setDropOut] = useState(false); // тащим стоп «наружу» из маршрута
   const [bindFor, setBindFor] = useState<Courier | null>(null); // привязка Telegram
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetTab, setSheetTab] = useState<"params" | "hist" | "prof" | "team">("prof");
@@ -219,6 +220,26 @@ export default function Console() {
       showToast("Заказ закреплён за курьером в плане (выдать — кнопкой в маршруте)");
     } finally { setPinning(null); }
   });
+
+  /* снять заказ с маршрута (крестик или drop наружу): вернётся в очередь готовых */
+  const unassignStop = async (oid: string) => {
+    if (!st || solving) return;
+    try {
+      setSt(await api<AppState>("/api/plan/unassign", "POST", { order_id: oid }));
+      showToast("Заказ убран с маршрута — снова в очереди готовых");
+    } catch (e) { showToast((e as Error).message, true); }
+  };
+  const isStopDrag = (e: React.DragEvent) =>
+    [...e.dataTransfer.types].includes("application/x-dp-stop");
+  const dropOutOver = (e: React.DragEvent) => {
+    if (isStopDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setDropOut(true); }
+  };
+  const dropOutDrop = async (e: React.DragEvent) => {
+    const raw = e.dataTransfer.getData("application/x-dp-stop") || "";
+    if (!raw) return;
+    e.preventDefault(); setDropOut(false);
+    await unassignStop(raw.split("|")[0]);
+  };
 
   /* перетаскивание курьера в план: свой депо — просто в план, чужой — через подтверждение */
   const courierToPlan = async (cid: string, routeEl: Element | null) => {
@@ -388,7 +409,11 @@ export default function Console() {
       {pickTarget && <PickBanner kind={pickTarget} onCancel={() => setPickTarget(null)} />}
 
       <main className="console">
-        <aside className="col-left">
+        <aside className={"col-left" + (dropOut ? " drop-out" : "")}
+          onDragOver={dropOutOver}
+          onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropOut(false); }}
+          onDrop={dropOutDrop}
+        >
           <PointsPanel
             st={st} open={openAcc === "points"}
             onToggle={() => setOpenAcc(a => a === "points" ? null : "points")}
@@ -423,7 +448,11 @@ export default function Console() {
           </div>
         </aside>
 
-        <section className="col-map">
+        <section className={"col-map" + (dropOut ? " drop-out" : "")}
+          onDragOver={dropOutOver}
+          onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropOut(false); }}
+          onDrop={dropOutDrop}
+        >
           <MapView
             state={st}
             pickMode={!!pickTarget}
@@ -444,6 +473,9 @@ export default function Console() {
             style={{ position: "absolute", right: 12, bottom: 12, zIndex: 800 }}
             onClick={() => setFitSignal(s => s + 1)}>⤢</button>
           <ActivityFeed events={st?.events || []} />
+          {dropOut && (
+            <div className="drop-out-hint" role="status">Отпустите здесь — заказ вернётся в очередь готовых</div>
+          )}
         </section>
 
         <section className="col-plan" id="planPanel"
@@ -453,11 +485,14 @@ export default function Console() {
             }
           }}
           onDrop={async e => {
-            const raw = e.dataTransfer.getData("text/plain") || "";
-            if (!raw.startsWith("courier:")) return;
-            e.preventDefault();
-            await courierToPlan(raw.slice(8), (e.target as HTMLElement).closest(".route"));
-          }}>
+             const raw = e.dataTransfer.getData("text/plain") || "";
+             if (raw.startsWith("courier:")) {
+               e.preventDefault();
+               await courierToPlan(raw.slice(8), (e.target as HTMLElement).closest(".route"));
+               return;
+             }
+             await dropOutDrop(e); // стоп, брошенный между маршрутами = «наружу»
+           }}>
           {!plan || !plan.routes || !plan.routes.length ? (
             <div className="plan-empty">
               {plan && plan.routes && !plan.routes.length
@@ -480,6 +515,7 @@ export default function Console() {
                 } catch (e) { showToast((e as Error).message, true); }
               }}
               onPin={pinOrder}
+              onUnassign={unassignStop}
             />
           )}
         </section>
