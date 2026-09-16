@@ -157,7 +157,6 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     routeFetch: "",                    // последний запрос дорогой геометрии
     routeGeom: null as { key: string; coords: [number, number][] } | null,
     routeIdx: 0,                       // докуда подрезали хвост линии (монотонно)
-    routeIsRoad: false,
     planGeom: new Map<string, [number, number][]>() as Map<string, [number, number][]>,
     orderCircle: null as any | null,   // радиус простоя у выбранного заказа
     orderCircleOid: null as string | null,
@@ -236,20 +235,12 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         if (cid === selCid.current) {
           const g = L.current.routeGeom as { key: string; coords: [number, number][] } | null;
           const line = L.current.routeLine as any;
-          const setCoords = line && line.geometry && typeof line.geometry.setCoordinates === "function";
-          if (setCoords) {
-            if (g && g.coords && g.coords.length > 1) {
-              const idx = nearestIdxFrom(g.coords, ip, L.current.routeIdx || 0);
-              if (idx > 0 && idx !== L.current.routeIdx) {
-                L.current.routeIdx = idx;
-                line.geometry.setCoordinates(g.coords.slice(idx));
-              }
-            } else if (L.current.routeIsRoad === false) {
-              const cs = line.geometry.getCoordinates() as [number, number][];
-              if (cs && cs.length > 1) {
-                cs[0] = ip;
-                line.geometry.setCoordinates(cs);
-              }
+          if (g && g.coords && g.coords.length > 1 && line && line.geometry
+              && typeof line.geometry.setCoordinates === "function") {
+            const idx = nearestIdxFrom(g.coords, ip, L.current.routeIdx || 0);
+            if (idx > 0 && idx !== L.current.routeIdx) {
+              L.current.routeIdx = idx;
+              line.geometry.setCoordinates(g.coords.slice(idx));
             }
           }
         }
@@ -362,11 +353,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     // линию по возможности НЕ пересоздаём, а обновляем координаты на месте:
     // remove+add на каждом гео-тике даёт заметное мигание полилинии
     const prevLine = L.current.routeLine as any;
-    const prevIsRoad = !!L.current.routeIsRoad;
     const dropLine = () => {
       if (L.current.routeLine) { map.geoObjects.remove(L.current.routeLine); }
       L.current.routeLine = null;
-      L.current.routeIsRoad = false;
       L.current.routeIdx = 0;
     };
     const cid = selCid.current;
@@ -408,7 +397,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
           // старт линии — от текущей позиции курьера (или начала кэша)
           const line = pos0 ? trimFrom(coords, pos0) : coords;
           if (line.length < 2) return false;
-          if (prevIsRoad && prevLine && prevLine.geometry
+          if (prevLine && prevLine.geometry
               && typeof prevLine.geometry.setCoordinates === "function") {
             prevLine.geometry.setCoordinates(line);      // та же дорога — на месте
             L.current.routeLine = prevLine;
@@ -418,7 +407,6 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
             L.current.routeLine = road;
             map.geoObjects.add(road);
           }
-          L.current.routeIsRoad = true;   // rAF-кадр подрезает хвост по кэшу
           L.current.routeIdx = 0;
           return true;
         };
@@ -431,19 +419,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
           L.current.routeGeom = null;
           L.current.routeFetch = "";
         }
-        if (!prevIsRoad && prevLine && prevLine.geometry
-            && typeof prevLine.geometry.setCoordinates === "function") {
-          prevLine.geometry.setCoordinates(rp);          // тот же прямой резерв
-          L.current.routeLine = prevLine;
-        } else {
-          if (prevLine) map.geoObjects.remove(prevLine);
-          const straight = new ym.Polyline(rp, {},
-            { strokeColor: color, strokeWidth: 5, strokeOpacity: .6, zIndex: 30 });
-          L.current.routeLine = straight;
-          map.geoObjects.add(straight);
-        }
-        L.current.routeIsRoad = false;  // ждём дорогу: хвост ведём первой точкой
-        L.current.routeIdx = 0;
+        // прямых у выбранного курьера не рисуем — только дороги; пока идёт
+        // запрос каскада, линии нет вообще (старую чужого набора убрали)
+        dropLine();
         if (L.current.routeFetch !== stopsKey) {
           L.current.routeFetch = stopsKey;
           const qs = encodeURIComponent(
@@ -458,46 +436,15 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
               drawRoad(g);   // сам сменит прямой резерв на дорогу без мигания
             })
             .catch(() => {
-              // каскад молчит: прямые остаются, повторим на следующем тике
+              // каскад молчит: линий не будет до успеха, повторим на тике
               if (L.current.routeFetch === stopsKey) L.current.routeFetch = "";
             });
         }
         return;
       }
     }
-    // страховка-фолбэк: точки без роутера — прямыми (порядок тот же)
-    dropLine();   // дороги/прямой резерв не подошли — сменяем целиком
-    L.current.routeIsRoad = false;
-    L.current.routeIdx = 0;
-    const lines: any[] = [];
-    if (orr && orr.stops?.length) {
-      const stops = (orr.stops || []).map(sp => [sp[0], sp[1]] as [number, number]);
-      const hp = orr.home || r?.home_point || curPts[0];
-      const pos0 = cur.pos ? [cur.pos.lat, cur.pos.lng] as [number, number]
-        : (hp ? [hp.lat, hp.lng] : null);
-      const pts = pos0 ? [pos0, ...stops] : stops;
-      if (pts.length > 1) {
-        lines.push(new ym.Polyline(pts, {},
-          { strokeColor: color, strokeWidth: 5, strokeOpacity: .85, strokeStyle: "1 3", zIndex: 30 }));
-      }
-    }
-    if (r && curPts.length && !lines.length) {
-      const hp = r.home_point || curPts[0];
-      const depot: [number, number] = [hp.lat, hp.lng];
-      const pts: [number, number][] = [depot];
-      (r.trips || []).forEach(tr => pts.push(...tripCoords(tr, depot)));
-      lines.push(new ym.Polyline(pts, {},
-        { strokeColor: r.color, strokeWidth: 6, strokeOpacity: 1, zIndex: 30 }));
-    }
-    if (!lines.length) return;
-    if (lines.length > 1) {
-      const col = new ym.Collection();
-      lines.forEach(l => col.add(l));
-      L.current.routeLine = col;
-    } else {
-      L.current.routeLine = lines[0];
-    }
-    map.geoObjects.add(L.current.routeLine);
+    // набор остановок не собрался (нет ни выданных, ни плана) — нечего рисовать
+    dropLine();
   };
   // свежая версия refreshSelRoute для хендлеров карты, живущих с первой инициализации
   const refreshRef = useRef(refreshSelRoute); refreshRef.current = refreshSelRoute;
