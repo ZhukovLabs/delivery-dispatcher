@@ -47,16 +47,6 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="dispatcher-api", docs_url=None, redoc_url=None,
               openapi_url=None, lifespan=lifespan)
-# REST в проде ходит с фронта (vercel.app) напрямую на API-хост (funnel),
-# в обход реврайтов облака: минус один сетевой хоп (~90 мс на клик).
-# WS (socket.io) имеет собственный cors_allowed_origins.
-_CORS_ORIGINS = [o.strip() for o in os.environ.get(
-    "CORS_ORIGINS",
-    "https://barak-dispatcher.vercel.app,http://localhost:3000,http://127.0.0.1:3000",
-).split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware, allow_origins=_CORS_ORIGINS, allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"])
 app.include_router(routes_auth.r)
 app.include_router(routes_dispatch.r)
 app.include_router(geocode.r)
@@ -123,6 +113,20 @@ async def flask_compat(request: Request, call_next):
 async def _unhandled(request: Request, exc: Exception):
     log.exception("unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse({"error": f"Внутренняя ошибка: {exc}"}, status_code=500)
+
+
+# CORS регистрируем ПОСЛЕДНИМ (в конец файла): Starlette ставит последний
+# добавленный middleware внешним. Он должен оборачивать flask_compat —
+# иначе guard-ответы (401) и префлайты уходят без Access-Control-Allow-*.
+# REST в проде ходит с фронта (vercel.app) напрямую на API-хост (funnel);
+# WS (socket.io) имеет собственный cors_allowed_origins.
+_CORS_ORIGINS = [o.strip() for o in os.environ.get(
+    "CORS_ORIGINS",
+    "https://barak-dispatcher.vercel.app,http://localhost:3000,http://127.0.0.1:3000",
+).split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware, allow_origins=_CORS_ORIGINS, allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"])
 
 
 def serve() -> None:
