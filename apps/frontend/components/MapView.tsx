@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { fmtAge, type AppState, type Plan, type Courier, type Order } from "@/lib/api";
+import { fetchApi } from "@/lib/api";
 
 // = TG_GEO_AT_PLACE бэкенда: радиус, внутри которого курьеру зачтётся
 // простой «у адреса» (30 с — и бот спросит «доставлен?»)
@@ -130,6 +131,7 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     lines: [] as any[],
     routeLine: null as any | null,
     routeSig: "",
+    routeFetch: "",                    // последний запрос дорогой геометрии
     orderCircle: null as any | null,   // радиус простоя у выбранного заказа
     orderCircleOid: null as string | null,
   });
@@ -317,11 +319,10 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
     if (!r && !orr) return;
     const curPts = pickPtsRef.current;
     const color = cur.color || r?.color || DEFAULT_COURIER_COLOR;
-    // маршрут выбранного курьера рисует сам Яндекс (multiRouter): мы даём
-    // только ПОРЯДОК точек (позиция курьера / база → остановки из плана
-    // или выданные) — дороги, вид и обводка его. Расчёт (кому что и ETA)
-    // остаётся серверным. Роутер Яндекса не ответил — прямыми через
-    // остановки (страховка), чтобы линия не пропадала.
+    // маршрут выбранного курьера: базовая линия прямыми (мгновенно), затем
+    // асинхронно подтягиваем дороговую геометрию из бека (тот же каскад
+    // OSRM, ~20 мс локально) и заменяем. Роутер Яндекса вернём, когда оживёт
+    // ключ (модуль 3.0), прямые остаются страховкой на любой сбой.
     {
       let rp: [number, number][] | null = null;
       if (orr && orr.stops?.length) {
@@ -338,24 +339,27 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       }
       if (rp && rp.length > 1) {
         const straight = new ym.Polyline(rp, {},
-          { strokeColor: color, strokeWidth: 4, strokeOpacity: .5, zIndex: 30 });
-        const mr = new ym.multiRouter.MultiRoute({
-          referencePoints: rp,
-          params: { routingMode: "auto", results: 1 },
-        }, {
-          wayPointVisible: false, pinVisible: false, balloonAutoPan: false,
-          routeStrokeColor: color + "44", routeStrokeWidth: 4,
-          routeActiveStrokeColor: color, routeActiveStrokeWidth: 6,
-        });
-        mr.events.add("multirouteerror", () => {
-          map.geoObjects.remove(mr);
-          if (L.current.routeLine === mr) {
-            L.current.routeLine = straight;
-            map.geoObjects.add(straight);
-          }
-        });
-        L.current.routeLine = mr;
-        map.geoObjects.add(mr);
+          { strokeColor: color, strokeWidth: 5, strokeOpacity: .6, zIndex: 30 });
+        L.current.routeLine = straight;
+        map.geoObjects.add(straight);
+        const key = cid + "|" + rp.map(p => `${p[0].toFixed(3)},${p[1].toFixed(3)}`).join(";");
+        if (L.current.routeFetch !== key) {
+          L.current.routeFetch = key;
+          const qs = rp.map(p => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join(";");
+          fetchApi(`/api/route?coords=${qs}`)
+            .then(res => (res.ok ? res.json() : Promise.reject(new Error("route api"))))
+            .then((j: { geometry?: [number, number][] }) => {
+              if (L.current.routeFetch !== key || selCid.current !== cid) return;
+              const g = j.geometry;
+              if (!g || g.length < 2) return;
+              if (L.current.routeLine) map.geoObjects.remove(L.current.routeLine);
+              const road = new ym.Polyline(g, {},
+                { strokeColor: color, strokeWidth: 5, strokeOpacity: .95, zIndex: 30 });
+              L.current.routeLine = road;
+              map.geoObjects.add(road);
+            })
+            .catch(() => { /* остаются прямые — уже нарисованы */ });
+        }
         return;
       }
     }

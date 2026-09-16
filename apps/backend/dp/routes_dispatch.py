@@ -20,7 +20,8 @@ from .core import (CFG, MAX_POINTS, PALETTE, STATE, STATUSES, _approach_map,
                    _my_point, _now, _obj_point, _payload, _persist_couriers,
                    _persist_meta, _persist_orders, _plan_for, _plural,
                    _tg_callback, _tg_handle_update, _tg_send, _valid_latlng,
-                   build_time_matrix, haversine_km, log, solve_plan)
+                    build_time_matrix, haversine_km, log, routing_geometry,
+                    solve_plan)
 from .geocode import reverse_geocode
 from .shims import _json, flaskish, jsonify, request, send_file, session
 
@@ -31,6 +32,28 @@ r = APIRouter()
 @flaskish
 def get_state():
     return _payload()
+
+
+@r.get("/api/route")
+@flaskish
+def get_route():
+    """Геометрия маршрута по дорогам для отрисовки на карте (клик по курьеру).
+    coords=lat,lng;lat,lng... — 2..50 точек. Каскад тот же, что у расчётов:
+    локальный OSRM → FOSSGIS → демо → ORS."""
+    coords = (request.args.get("coords") or "").strip()
+    pts = []
+    try:
+        for pair in coords.split(";"):
+            la, ln = pair.split(",")
+            pts.append({"lat": float(la), "lng": float(ln)})
+    except ValueError:
+        return jsonify({"error": "coords=lat,lng;lat,lng..."}), 400
+    if not 2 <= len(pts) <= 50 or not all(_valid_latlng(p["lat"], p["lng"]) for p in pts):
+        return jsonify({"error": "нужно 2..50 корректных точек"}), 400
+    geom = routing_geometry(pts)
+    if not geom:
+        return jsonify({"error": "роутер недоступен"}), 502
+    return jsonify({"geometry": geom})
 
 
 def _points_changed(persist_couriers=False):
