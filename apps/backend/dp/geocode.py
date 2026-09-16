@@ -6,6 +6,7 @@
 одновременности — более приоритетный. Пустой ответ — тоже промах: ждём
 следующего. Обратный геокодинг (клик по карте) идёт тем же каскадом.
 """
+import json
 import math
 import os
 import re
@@ -201,6 +202,42 @@ def search_photon(q, lat, lng):
 
 # ---------- обратный геокодинг тем же каскадом ----------
 
+def suggest_yandex(q):
+    """Подсказки Геосаджеста при печати: только тексты, координат нет —
+    их добирает геокодер, когда пользователь выбрал подсказку.
+    Формат ответа JSONP: suggest.apply([запрос, [[«maps», токены, адрес?], …]])"""
+    if not YANDEX_KEY:
+        raise RuntimeError("не задан YANDEX_GEOCODER_KEY")
+    resp = requests.get("https://suggest-maps.yandex.ru/v2/suggest",
+                        params={"apikey": YANDEX_KEY, "text": q, "lang": "ru_RU",
+                                "print_address": 1},
+                        headers=UA, timeout=3.0)
+    resp.raise_for_status()
+    raw = resp.text.strip()
+    pre = "suggest.apply("
+    if raw.startswith(pre) and raw.endswith(")"):
+        raw = raw[len(pre):-1]
+    data = json.loads(raw)
+
+    def _flat(tokens):
+        out = ""
+        for t in tokens or []:
+            if isinstance(t, str):
+                out += t
+            elif isinstance(t, (list, tuple)) and len(t) == 2 and isinstance(t[1], str):
+                out += t[1]  # ["hl", "Телег"] — подсвеченный кусок строки
+        return out.strip()
+
+    res = []
+    for it in (data[1] if isinstance(data, list) and len(data) > 1 else []):
+        if not isinstance(it, (list, tuple)) or len(it) < 2:
+            continue
+        title = _flat(it[1])
+        addr = it[2] if len(it) > 2 and isinstance(it[2], str) and it[2].strip() else title
+        if title:
+            res.append(addr)
+    return res
+
 def _reverse_yandex(lat, lng):
     if not YANDEX_KEY:
         raise RuntimeError("не задан YANDEX_GEOCODER_KEY")
@@ -305,6 +342,14 @@ def _tok(s):
     return [t.replace("ё", "е") for t in re.split(r"[^а-яёa-z0-9]+", (s or "").lower()) if len(t) >= 3]
 
 
+def _suggest_safe(q):
+    try:
+        return suggest_yandex(q)[:3]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("geosuggest: %s", exc)
+        return []
+
+
 @r.get("/api/geocode")
 @flaskish
 def geocode():
@@ -318,12 +363,16 @@ def geocode():
         return jsonify(hit[1])
     qnum = _extract_house(q)
     q_words = _tok(re.sub(r"\d+[а-яa-z]*", " ", q))  # слова запроса без номера дома
+    sugg_box = []  # подсказки саджеста гоняются параллельно каскаду геокодеров
+    th = threading.Thread(target=lambda: sugg_box.extend(_suggest_safe(q)), daemon=True)
+    th.start()
     try:
         items = _hedged([lambda: search_yandex(q, lat, lng),
                          lambda: search_nominatim(q, lat, lng),
                          lambda: search_photon(q, lat, lng)])
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": f"Геокодер недоступен: {e}"}), 502
+    th.join(timeout=2)
 
     def dist_of(it):
         return haversine_km({"lat": lat, "lng": lng}, {"lat": it["lat"], "lng": it["lng"]})
@@ -360,7 +409,15 @@ def geocode():
         survived = [x for x in scored if _hit_all(x)]
         if survived:
             scored = survived
-    payload = scored[:7]
+    # подсказки саджеста — первыми (координат нет: доберёт геокодер при выборе),
+    # затем адреса геокодеров; дублей по строке — не держим
+    payload = []
+    for lbl in sugg_box:
+        k = lbl.split("(")[0].strip().lower()
+        if k in seen_lbl or any(x["label"].split("(")[0].strip().lower() == k for x in payload):
+            continue
+        payload.append({"label": lbl})
+    payload += scored[:7 - len(payload)]
     if payload:  # пустой ответ не кэшируем
         _GEO_CACHE[gkey] = (time.time(), payload)
         _GEO_CACHE.move_to_end(gkey)

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
-export interface GeoItem { label: string; lat: number; lng: number; km?: number; }
+export interface GeoItem { label: string; lat?: number; lng?: number; km?: number; }
 
 interface GeoInputProps {
   placeholder: string;
@@ -71,10 +71,20 @@ export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpt
 
   const close = () => { setOpen(false); setActive(-1); };
 
-  const pick = (it: GeoItem) => {
+  const pick = async (it: GeoItem) => {
     setVal(it.label);
-    onPicked(it, it.label);
     close();
+    if (it.lat != null && it.lng != null) {   // адрес геокодера — точка уже есть
+      onPicked(it, it.label);
+      return;
+    }
+    // подсказка саджеста без координат: геокодируем полный текст выбранного
+    try {
+      const list = await api<GeoItem[]>("/api/geocode?q=" + encodeURIComponent(it.label), "GET");
+      const hit = (Array.isArray(list) ? list : []).find(x => x.lat != null && x.lng != null);
+      if (hit) { onPicked(hit, it.label); return; }
+    } catch { /* сеть моргнула — оставим просто текст */ }
+    onPicked(null, it.label);  // точку доделает клик по карте (реверс)
   };
 
   const onInput = (q: string) => {

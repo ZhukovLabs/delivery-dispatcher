@@ -122,8 +122,8 @@ export async function api<T = AppState>(path: string, method = "GET", body?: unk
   return data as T;
 }
 
-export const fmtCoords = (ll?: { lat: number; lng: number } | null) =>
-  ll ? ll.lat.toFixed(5) + ", " + ll.lng.toFixed(5) : "";
+export const fmtCoords = (ll?: { lat?: number; lng?: number } | null) =>
+  ll && ll.lat != null && ll.lng != null ? ll.lat.toFixed(5) + ", " + ll.lng.toFixed(5) : "";
 
 /** Возраст метки времени: «25 с», «3 мин», «2 ч 5 мин» (секунды — эпоха). */
 export const fmtAge = (ts: number) => {
