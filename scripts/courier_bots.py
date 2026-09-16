@@ -35,8 +35,8 @@ import time
 import requests
 
 DEG_PER_M = 1.0 / 111320.0
-STOP_TOL = 0.15      # км, «у адреса» — как TG_GEO_AT_PLACE бэкенда
-ARRIVE_TOL = 0.0013  # ~140 м, порог прибытия к точке/адресу для езды
+STOP_KM = 0.15        # км, «у адреса» — как TG_GEO_AT_PLACE бэкенда
+ARRIVE_TOL = 0.0013   # ~140 м, порог прибытия к точке/адресу для езды
 
 
 def log(msg):
@@ -45,6 +45,14 @@ def log(msg):
 
 def seg(a, b):
     return math.hypot(b[0] - a[0], b[1] - a[1])
+
+
+def hav_km(a, b):
+    """Расстояние по большим кругам, км — как haversine_km бэкенда."""
+    la1, lo1, la2, lo2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    h = math.sin((la2 - la1) / 2) ** 2 + \
+        math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 6371.0 * 2 * math.asin(math.sqrt(h))
 
 
 def advance(route, pos, dist_deg):
@@ -155,7 +163,7 @@ def walk(bot, step, stops_left):
     sub = max(1, int(step / (ARRIVE_TOL * 0.7)) + 1)
     for _ in range(sub):
         i, t, lat, lng, done = advance(bot.path, (i, t), step / sub)
-        if any(o and math.hypot(lat - s[0], lng - s[1]) <= STOP_TOL
+        if any(o and hav_km((lat, lng), s) <= STOP_KM
                for o, s in stops_left):
             done = False if any(o not in ("", None) for o, _ in stops_left) else done
             break
@@ -307,7 +315,7 @@ def main():
                     stops_left = [(oid, pt) for oid, pt in b.stops.items()
                                   if oid not in b.visited]
                     near = next((oid for oid, pt in stops_left
-                                 if math.hypot(lat - pt[0], lng - pt[1]) <= STOP_TOL),
+                                 if hav_km((lat, lng), pt) <= STOP_KM),
                                 None)
                     if near is not None:
                         if not b.dwell_stop:
@@ -345,7 +353,7 @@ def main():
                             b.cur = lat, lng = home
                             log(f"{b.name}: на базе, ждёт")
                 elif b.mode in ("stand", "init"):
-                    if math.hypot(lat - home[0], lng - home[1]) > STOP_TOL:
+                    if hav_km((lat, lng), home) > STOP_KM:
                         b.go_home(osrm)
                         walk(b, b.step_deg(args.speed, args.tick), [])
                         lat, lng = b.cur

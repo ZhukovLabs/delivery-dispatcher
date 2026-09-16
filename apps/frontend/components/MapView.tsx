@@ -1,7 +1,31 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { fmtAge, type AppState, type Plan, type Courier } from "@/lib/api";
+import { fmtAge, type AppState, type Plan, type Courier, type Order } from "@/lib/api";
+
+// = TG_GEO_AT_PLACE бэкенда: радиус, в котором курьеру зачтётся простой
+// «у адреса» (после 30 с — вопрос «доставлен?» в TG)
+const GEO_AT_PLACE_M = 150;
+
+const havKm = (a: [number, number], b: [number, number]) => {
+  const r = Math.PI / 180;
+  const h = Math.sin((b[0] - a[0]) * r / 2) ** 2 +
+    Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin((b[1] - a[1]) * r / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.sqrt(h));
+};
+
+const clockIn = (min: number) =>
+  new Date(Date.now() + Math.max(0, min) * 60000).toTimeString().slice(0, 5);
+
+// опоздание против дедлайна «ЧЧ:ММ» по ETA (мин) — или null, если успевает
+const lateByDeadline = (deadline: string | undefined, etaMin: number): number | null => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(deadline || "");
+  if (!m) return null;
+  const dl = +m[1] * 60 + +m[2];
+  const now = new Date();
+  const arr = now.getHours() * 60 + now.getMinutes() + etaMin;
+  return arr > dl ? Math.round(arr - dl) : null;
+};
 
 declare global {
   interface Window { ymaps?: any; }
@@ -171,6 +195,35 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
   const d = state.depot;
   const pickPts = state.points?.length ? state.points
     : d ? [{ id: "", name: "Основная", address: d.address, lat: d.lat, lng: d.lng }] : [];
+  /* содержимое балуна заказа: адрес → курьер → ETA → радиус простоя →
+     приоритет → дедлайн → опоздание (см. требование к точке доставки) */
+  const popupHtml = (p: { address: string; courier?: string; eta?: string;
+                          lateMin?: number; prio?: boolean; deadline?: string;
+                          note?: string }) =>
+    `<b>${esc(p.address)}</b>` +
+    (p.courier ? `<br>🛍 ${esc(p.courier)}` : "") +
+    (p.eta ? `<br>≈${esc(p.eta)}${p.lateMin ? ` · <span style="color:#b3261e">опоздание ~${p.lateMin} мин</span>` : ""}` : "") +
+    `<br><span style="color:#666">📍 простой зачтётся в ${GEO_AT_PLACE_M} м</span>` +
+    (p.prio ? "<br>⭐ приоритетный" : "") +
+    (p.deadline ? `<br>⏰ до ${esc(p.deadline)}` : "") +
+    (p.note ? `<br>${p.note}` : "");
+
+  // ETA выданного заказа: по остатку его маршрута из позиции курьера
+  // (примерно: расстояние по стопам / скорость × трафик + выдача до него)
+  const outEtaMin = (o: Order, cour: Courier): number | null => {
+    const stops = (cour.out_route?.stops || [])
+      .filter(sp => sp.length > 2) as [number, number, string][];
+    if (!cour.pos || !stops.length) return null;
+    const idx = stops.findIndex(sp => sp[2] === o.id);
+    if (idx < 0) return null;
+    const pts: [number, number][] = [[cour.pos.lat, cour.pos.lng],
+      ...stops.slice(0, idx + 1).map(sp => [sp[0], sp[1]] as [number, number])];
+    let km = 0;
+    for (let i = 0; i < pts.length - 1; i++) km += havKm(pts[i], pts[i + 1]);
+    return km / ((state.settings.speed_kmh || 60) / 60) * (state.settings.traffic || 1.25)
+      + (state.settings.handover_min ?? 5) * idx;
+  };
+
   const planMap: Record<string, { color: string; label: string; popup: string }> = {};
   const plan = state.plan as Plan | null;
   if (plan) {
@@ -188,7 +241,9 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
       planMap[s.order_id] = {
         color: r.color,
         label: `${tag(r.courier_name.toUpperCase())}${k}`,
-        popup: `<b>${esc(r.courier_name)}</b><br>${esc(s.address)}<br>≈${s.eta_clock || "?"}${s.late_min ? ` · <span style="color:#b3261e">опоздание ~${s.late_min} мин</span>` : ""}`,
+        popup: popupHtml({ address: s.address, courier: r.courier_name,
+                           eta: s.eta_clock, lateMin: s.late_min,
+                           prio: s.prio, deadline: s.deadline }),
       };
     }));
   }
@@ -347,9 +402,20 @@ export default function MapView({ state, pickMode, onPick, fitSignal, hoverOid, 
         : p ? p.color
         : (dupOids?.has(o.id) ? DUP_RED : ORDER_GRAY);
       const text = p ? p.label : "•";
-      const content = p ? p.popup
-        : oCour ? `<b>${esc(o.address)}</b><br>🛵 В развозке: ${esc(oCour.name)}`
-        : `<b>${esc(o.address)}</b><br>(ещё не рассчитано)${dupOids?.has(o.id) ? `<br><span style=\"color:${DUP_RED}\">дублирующийся адрес</span>` : ""}`;
+      let content: string;
+      if (p) {
+        content = p.popup;
+      } else if (oCour) {
+        const etaMin = outEtaMin(o, oCour);
+        content = popupHtml({ address: o.address, courier: oCour.name,
+          eta: etaMin != null ? clockIn(etaMin) : undefined,
+          lateMin: etaMin != null ? (lateByDeadline(o.deadline, etaMin) ?? undefined) : undefined,
+          prio: o.prio, deadline: o.deadline });
+      } else {
+        content = popupHtml({ address: o.address,
+          note: `(ещё не рассчитано)${dupOids?.has(o.id) ? ` · <span style="color:${DUP_RED}">дублирующийся адрес</span>` : ""}`,
+          prio: o.prio, deadline: o.deadline });
+      }
       const sig = `${text}|${color}`;
       let pm = L.current.orders.get(o.id);
       if (pm && L.current.orderSig.get(o.id) === sig) {
