@@ -81,7 +81,10 @@ def _points_changed(persist_couriers=False):
         _persist_couriers()
     else:
         _persist_meta()
-    _invalidate_plan(drop_plan=True)
+    # план не выбрасываем: времена/геометрия устарели — помечаем «устарел»,
+    # маршруты остаются на экране до пересчёта (раньше любая правка точки
+    # гасила все карточки курьеров)
+    _invalidate_plan()
 
 
 @r.post("/api/depot")
@@ -488,12 +491,18 @@ def del_order(oid):
                      else "отменил «") + (order.get("address") or oid) + "»")
     else:
         opid = None
+    # план не выбрасываем: убираем стоп из маршрутов хирургически, ПОКА заказ
+    # ещё в STATE — matrix_ctx плана остаётся полным, матрица берётся из кэша
+    # без похода в сеть; остальные курьеры остаются на экране с обновлёнными
+    # ETA (раньше отмена одного заказа гасила ВСЕ карточки развозки)
+    patched = _patch_plan_after_assign([oid])
     STATE["orders"] = [o for o in STATE["orders"] if o["id"] != oid]
     # доставлен последний заказ развозки — курьер едет домой по улицам
     if outcome == "delivered" and courier_id:
         _flip_return_route(courier_id)
     _persist_orders()
-    _invalidate_plan(drop_plan=True, pid=opid)
+    if not patched:
+        _invalidate_plan(pid=opid)
     # курьер нёс этот заказ — предупредить и пересобрать его TG-маршрут
     if order and courier_id and (order.get("status") or "ready") == "out":
         _tg_sync_route(courier_id, warn=(
@@ -886,7 +895,7 @@ def assign_orders():
         return jsonify({"error": "Заказы уже выданы или не найдены"}), 400
     _persist_orders()
     if not _patch_plan_after_assign(oids, cid=cid):
-        _invalidate_plan(drop_plan=True, pid=courier_pid)
+        _invalidate_plan(pid=courier_pid)
     log.info("assign: %d заказ(ов) -> %s", given, courier["name"])
     _ev("disp", f"выдал {given} заказ(ов) → {courier['name']}")
 
@@ -1050,7 +1059,9 @@ def set_settings():
     except (TypeError, ValueError):
         return jsonify({"error": "Параметры должны быть числами"}), 400
     _persist_meta()
-    _invalidate_plan(drop_plan=True)
+    # настройки влияют на будущие расчёты: показанный план помечаем
+    # «устарел», но не выбрасываем с экрана
+    _invalidate_plan()
     return _payload()
 
 
