@@ -266,6 +266,12 @@ STATUSES = {"base", "away", "off"}
 # ---------- персистентность (SQLite) ----------
 
 _db_lock = threading.Lock()
+
+# сериализует ВСЕ правки планов: две параллельные выдачи/возвраты otherwise
+# перетирают друг другу trips в одном плане (last-writer-wins воскрешал
+# уже выданные стопы). RLock: _patch_plan_after_assign держит его и зовёт
+# _invalidate_plan вложенно
+_plans_lock = threading.RLock()
 _db_path = CFG["db_path"]
 
 _DB_SCHEMA = """
@@ -1727,7 +1733,8 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
     if all_etas:
         plan["last_delivery_clock"] = (solved_dt + timedelta(
             minutes=plan["last_delivery_min"])).strftime("%H:%M")
-    STATE["plans"][point_id] = plan
+    with _plans_lock:  # установка плана атомарна с выдачами/возвратами
+        STATE["plans"][point_id] = plan
     if with_geometry:
         _attach_geometry(plan)
     return plan
@@ -2985,6 +2992,12 @@ def _points_ids():
 
 # ---------- инвалидация плана (используется и HTTP-ручками, и TG-ботом) ----------
 def _invalidate_plan(drop_plan=False, pid=None, courier_id=None, geo=False):
+    # под замком: параллельные выдачи/возвраты правят те же планы
+    with _plans_lock:
+        return _invalidate_plan_u(drop_plan, pid, courier_id, geo)
+
+
+def _invalidate_plan_u(drop_plan=False, pid=None, courier_id=None, geo=False):
     """╨ƒ╨╗╨░╨╜ ╨╜╨╡ ╨┐╨╡╤Ç╨╡╤ü╤ç╨╕╤é╤ï╨▓╨░╨╡╨╝ ╨▓ ╤ä╨╛╨╜╨╡ ΓÇö ╤é╨╛╨╗╤î╨║╨╛ ╨┐╨╛╨╝╨╡╤ç╨░╨╡╨╝/╤ü╨▒╤Ç╨░╤ü╤ï╨▓╨░╨╡╨╝.
 
     pid — депо, чей план инвалидируем (None = все депо: правка точек/настроек).

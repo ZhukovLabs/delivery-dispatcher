@@ -92,7 +92,13 @@ export function useDispatchState(
 
   const st = stData ?? null;
   const setSt = useCallback((s: AppState) => {
-    lastRev.current = Math.max(lastRev.current, s.rev ?? 0);
+    // две быстрые мутации (например, выдача двум курьерам подряд) летят
+    // параллельно: ответ первой может прийти ПОСЛЕ ответа второй —
+    // старый rev не откатывает UI (иначе выдача «пропадала» до следующего
+    // события сервера)
+    const r = s.rev ?? 0;
+    if (r < lastRev.current) return;
+    lastRev.current = r;
     qc.setQueryData(["state"], s);
   }, [qc]);
   const refresh = useCallback(async () => { await qc.invalidateQueries({ queryKey: ["state"] }); }, [qc]);

@@ -20,8 +20,9 @@ from .core import (CFG, MAX_POINTS, PALETTE, STATE, STATUSES, _approach_map,
                    _history_period, _courier_day_stats, _home_point, _HOURLY_TRAFFIC,
                    _invalidate_plan, _me,
                    _my_point, _now, _obj_point, _payload, _persist_couriers,
-                   _persist_meta, _persist_orders, _plan_for, _plural,
-                   _tg_callback, _tg_handle_update, _tg_send, _valid_latlng,
+                    _persist_meta, _persist_orders, _plan_for, _plural,
+                    _plans_lock,
+                    _tg_callback, _tg_handle_update, _tg_send, _valid_latlng,
                      build_time_matrix, haversine_km, log, routing_geometry,
                      solve_plan, _simplify_poly)
 from .geocode import reverse_geocode
@@ -889,18 +890,21 @@ def assign_orders():
                         "lat": o.get("lat"), "lng": o.get("lng")}
                        for o in STATE["orders"] if o["id"] in oid_set]
     given = 0
-    for o in STATE["orders"]:
-        if o["id"] in oids and (o.get("status") or "ready") == "ready":
-            o["status"] = "out"
-            o["assigned"] = cid
-            o["out_at"] = now
-            o["pin"] = ""  # выдан — закрепление больше не нужно
-            given += 1
-    if not given:
-        return jsonify({"error": "Заказы уже выданы или не найдены"}), 400
-    _persist_orders()
-    if not _patch_plan_after_assign(oids, cid=cid):
-        _invalidate_plan(pid=courier_pid)
+    # атомарно: две быстрые выдачи (например, двум курьерам подряд) иначе
+    # перетирают друг другу правки одного и того же плана
+    with _plans_lock:
+        for o in STATE["orders"]:
+            if o["id"] in oids and (o.get("status") or "ready") == "ready":
+                o["status"] = "out"
+                o["assigned"] = cid
+                o["out_at"] = now
+                o["pin"] = ""  # выдан — закрепление больше не нужно
+                given += 1
+        if not given:
+            return jsonify({"error": "Заказы уже выданы или не найдены"}), 400
+        _persist_orders()
+        if not _patch_plan_after_assign(oids, cid=cid):
+            _invalidate_plan(pid=courier_pid)
     log.info("assign: %d заказ(ов) -> %s", given, courier["name"])
     _ev("disp", f"выдал {given} заказ(ов) → {courier['name']}")
 
@@ -1026,19 +1030,20 @@ def courier_returned(cid):
         return jsonify({"error": "Курьер другого депо — управлять может "
                                  "только диспетчер его точки"}), 403
     delivered = 0
-    for o in STATE["orders"]:
-        if o.get("assigned") == cid and o.get("status") == "out":
-            _archive_order(o, "delivered", courier["name"], courier_id=cid)
-            delivered += 1
-    STATE["orders"] = [o for o in STATE["orders"]
-                       if not (o.get("assigned") == cid and o.get("status") == "out")]
-    courier["status"] = "base"
-    courier["back_min"] = 0
-    courier.pop("out_geom", None)  # развозка завершена — трассу больше не рисуем
-    courier.pop("ret_geom", None)
-    _persist_orders()
-    _persist_couriers()
-    _invalidate_plan(courier_id=cid)
+    with _plans_lock:  # атомарно с параллельными выдачами того же депо
+        for o in STATE["orders"]:
+            if o.get("assigned") == cid and o.get("status") == "out":
+                _archive_order(o, "delivered", courier["name"], courier_id=cid)
+                delivered += 1
+        STATE["orders"] = [o for o in STATE["orders"]
+                           if not (o.get("assigned") == cid and o.get("status") == "out")]
+        courier["status"] = "base"
+        courier["back_min"] = 0
+        courier.pop("out_geom", None)  # развозка завершена — трассу больше не рисуем
+        courier.pop("ret_geom", None)
+        _persist_orders()
+        _persist_couriers()
+        _invalidate_plan(courier_id=cid)
     log.info("courier returned: %s, доставлено %d", courier["name"], delivered)
     _ev("cour", f"{courier['name']} вернулся на базу" +
         (f" — доставлено {delivered}" if delivered else ""))
@@ -1171,7 +1176,8 @@ def _compute_plan(mode="auto", advice=True, force=None, point_id=None):
             mode if mode != "auto" else recommend]
         if chosen is plan_now:
             _attach_geometry(plan_now)
-        STATE["plans"][point_id] = chosen
+        with _plans_lock:  # установка сценарного плана атомарна с выдачами
+            STATE["plans"][point_id] = chosen
         if advice:
             advice_obj = {
                 "recommend": recommend, "mode": mode,
@@ -1296,108 +1302,109 @@ def plan_move():
                                  f"курьеру этой точки"}), 400
 
     stop, src_id = None, None
-    for r in plan["routes"]:
-        for tr in r.get("trips", []):
-            hit = next((s for s in tr["stops"] if s["order_id"] == oid), None)
-            if hit:
-                stop, src_id = hit, r["courier_id"]
-                tr["stops"].remove(hit)
-    if stop is None:
-        return jsonify({"error": "Заказа нет в текущем плане"}), 400
+    with _plans_lock:  # атомарно с выдачами: снятый стоп не теряется
+        for r in plan["routes"]:
+            for tr in r.get("trips", []):
+                hit = next((s for s in tr["stops"] if s["order_id"] == oid), None)
+                if hit:
+                    stop, src_id = hit, r["courier_id"]
+                    tr["stops"].remove(hit)
+        if stop is None:
+            return jsonify({"error": "Заказа нет в текущем плане"}), 400
 
-    touched_routes = [r for r in plan["routes"]
-                      if r["courier_id"] in {src_id, dst["courier_id"]}]
-    matrix, node, appr_home, home_of = _retiming_matrix(plan, _my_point(),
-                                                        touched_routes)
-    h_dst = home_of[dst["courier_id"]]
-    if oid not in node:
-        return jsonify({"error": "Заказа нет в наборе точек плана — "
-                                 "пересчитайте план"}), 400
-    g_x = node[oid]
+        touched_routes = [r for r in plan["routes"]
+                          if r["courier_id"] in {src_id, dst["courier_id"]}]
+        matrix, node, appr_home, home_of = _retiming_matrix(plan, _my_point(),
+                                                            touched_routes)
+        h_dst = home_of[dst["courier_id"]]
+        if oid not in node:
+            return jsonify({"error": "Заказа нет в наборе точек плана — "
+                                     "пересчитайте план"}), 400
+        g_x = node[oid]
 
-    best = None  # (удлинение, индекс заезда, позиция вставки)
-    now = _now()
-    hour_on = bool(int(STATE["settings"].get("hour_traffic", 1)))
-    base_traffic = max(1.0, float(STATE["settings"].get("traffic", 1.3)))
-    handover_s = max(0, int(STATE["settings"]["handover_min"])) * 60
-    n_homes = len(appr_home)
+        best = None  # (удлинение, индекс заезда, позиция вставки)
+        now = _now()
+        hour_on = bool(int(STATE["settings"].get("hour_traffic", 1)))
+        base_traffic = max(1.0, float(STATE["settings"].get("traffic", 1.3)))
+        handover_s = max(0, int(STATE["settings"]["handover_min"])) * 60
+        n_homes = len(appr_home)
 
-    def _travel(u, w, f):
-        """Дорожная часть дуги (сек) в масштабе часа f: базовый traffic
-        из матрицы заменяется коэффициентом часа подъезда — вставка в
-        разные позиции попадает в разные часы пик. Вручение/подъезд —
-        константа вставки, на РАНГ позиций не влияют, не добавляем."""
-        t = matrix[u][w]
-        if w >= n_homes:
-            t -= handover_s
-        return t / base_traffic * f
+        def _travel(u, w, f):
+            """Дорожная часть дуги (сек) в масштабе часа f: базовый traffic
+            из матрицы заменяется коэффициентом часа подъезда — вставка в
+            разные позиции попадает в разные часы пик. Вручение/подъезд —
+            константа вставки, на РАНГ позиций не влияют, не добавляем."""
+            t = matrix[u][w]
+            if w >= n_homes:
+                t -= handover_s
+            return t / base_traffic * f
 
-    for ti, tr in enumerate(dst.get("trips", [])):
-        # лимит max_orders соблюдает только решатель; ручной перенос из
-        # «Готовых адресов» разрешён и сверх лимита — диспетчер видит,
-        # что делает (ограничение вернётся при следующем пересчёте)
-        seq = [h_dst] + [node[s["order_id"]] for s in tr["stops"]] + [h_dst]
-        for pos in range(1, len(seq)):
-            a, b = seq[pos - 1], seq[pos]
-            if hour_on:
-                # час подъезда к месту вставки — по ETA предыдущей остановки;
-                # ETA плана привязаны к моменту своего последнего пересчёта
-                # (eta_at) — добавляем возраст, иначе час пик занижается
-                # на возраст плана
-                if pos == 1:
-                    t_prev = tr.get("start_delay_min") or 0
-                else:
-                    t_prev = tr["stops"][pos - 2].get("eta_min") or 0
-                try:
-                    eta_at = datetime.fromisoformat(
-                        tr.get("eta_at") or plan.get("anchored_at")
-                        or plan["solved_at"])
-                    age_min = (now - eta_at).total_seconds() / 60.0
-                except (ValueError, TypeError):
-                    age_min = 0.0
-                hour = (now + timedelta(minutes=t_prev + age_min)).hour
-                f = _HOURLY_TRAFFIC.get(hour, 1.0)
+        for ti, tr in enumerate(dst.get("trips", [])):
+            # лимит max_orders соблюдает только решатель; ручной перенос из
+            # «Готовых адресов» разрешён и сверх лимита — диспетчер видит,
+            # что делает (ограничение вернётся при следующем пересчёте)
+            seq = [h_dst] + [node[s["order_id"]] for s in tr["stops"]] + [h_dst]
+            for pos in range(1, len(seq)):
+                a, b = seq[pos - 1], seq[pos]
+                if hour_on:
+                    # час подъезда к месту вставки — по ETA предыдущей остановки;
+                    # ETA плана привязаны к моменту своего последнего пересчёта
+                    # (eta_at) — добавляем возраст, иначе час пик занижается
+                    # на возраст плана
+                    if pos == 1:
+                        t_prev = tr.get("start_delay_min") or 0
+                    else:
+                        t_prev = tr["stops"][pos - 2].get("eta_min") or 0
+                    try:
+                        eta_at = datetime.fromisoformat(
+                            tr.get("eta_at") or plan.get("anchored_at")
+                            or plan["solved_at"])
+                        age_min = (now - eta_at).total_seconds() / 60.0
+                    except (ValueError, TypeError):
+                        age_min = 0.0
+                    hour = (now + timedelta(minutes=t_prev + age_min)).hour
+                    f = _HOURLY_TRAFFIC.get(hour, 1.0)
             else:
                 f = 1.0
             delta = _travel(a, g_x, f) + _travel(g_x, b, f) - _travel(a, b, f)
             if best is None or delta < best[0]:
                 best = (delta, ti, pos - 1)
-    if best is None and not dst.get("trips"):
-        # у цели не было заездов — создаём первый
-        dst["trips"] = [{"stops": [], "total_min": 0, "start_delay_min": 0,
-                         "start_clock": "", "end_clock": "", "distance_km": None}]
-        best = (0, 0, 0)
-    if best is None:  # недостижимо: заезды без лимита всегда принимают вставку
-        return jsonify({"error": f"У «{dst['courier_name']}» нет заездов — "
-                                 "перенесите другому или пересчитайте план"}), 400
-    dst["trips"][best[1]]["stops"].insert(best[2], stop)
-    order["pin"] = target  # закрепляем и на будущие пересчёты плана
-    _persist_orders()  # pin — часть заказа, без этого перенос терялся бы
-                       # при рестарте (persist_meta хранит только планы)
+        if best is None and not dst.get("trips"):
+            # у цели не было заездов — создаём первый
+            dst["trips"] = [{"stops": [], "total_min": 0, "start_delay_min": 0,
+                             "start_clock": "", "end_clock": "", "distance_km": None}]
+            best = (0, 0, 0)
+        if best is None:  # недостижимо: заезды без лимита всегда принимают вставку
+            return jsonify({"error": f"У «{dst['courier_name']}» нет заездов — "
+                                     "перенесите другому или пересчитайте план"}), 400
+        dst["trips"][best[1]]["stops"].insert(best[2], stop)
+        order["pin"] = target  # закрепляем и на будущие пересчёты плана
+        _persist_orders()  # pin — часть заказа, без этого перенос терялся бы
+                           # при рестарте (persist_meta хранит только планы)
 
-    # пересчёт ETA затронутых курьеров от текущего момента
-    touched = {src_id, dst["courier_id"]}
-    try:
-        for r in touched_routes:
-            if r["courier_id"] in touched:
-                h = home_of[r["courier_id"]]
-                _retime_route(r, matrix, node, STATE["settings"], now,
-                              appr_home[h], h)
-    except Exception:
-        log.warning("plan move retime failed, ETA оставлены как были")
-    else:
-        plan["anchored_at"] = now.isoformat(timespec="seconds")
-    all_etas = [s["eta_min"] for r in plan["routes"] for s in r["stops"]]
-    plan["last_delivery_min"] = max(all_etas, default=0)
-    plan["last_delivery_clock"] = ((now + timedelta(
-        minutes=plan["last_delivery_min"])).strftime("%H:%M") if all_etas else None)
-    plan["avg_delivery_min"] = round(sum(all_etas) / len(all_etas)) if all_etas else 0
-    plan["advice"] = None  # сценарии «ждать/не ждать» после переноса не актуальны
-    plan["moved"] = True
-    log.info("plan move: %s -> %s (удлинение +%.0f мин)",
-             oid, dst["courier_name"], best[0] / 60)
-    _persist_meta()
-    _bump()
+        # пересчёт ETA затронутых курьеров от текущего момента
+        touched = {src_id, dst["courier_id"]}
+        try:
+            for r in touched_routes:
+                if r["courier_id"] in touched:
+                    h = home_of[r["courier_id"]]
+                    _retime_route(r, matrix, node, STATE["settings"], now,
+                                  appr_home[h], h)
+        except Exception:
+            log.warning("plan move retime failed, ETA оставлены как были")
+        else:
+            plan["anchored_at"] = now.isoformat(timespec="seconds")
+        all_etas = [s["eta_min"] for r in plan["routes"] for s in r["stops"]]
+        plan["last_delivery_min"] = max(all_etas, default=0)
+        plan["last_delivery_clock"] = ((now + timedelta(
+            minutes=plan["last_delivery_min"])).strftime("%H:%M") if all_etas else None)
+        plan["avg_delivery_min"] = round(sum(all_etas) / len(all_etas)) if all_etas else 0
+        plan["advice"] = None  # сценарии «ждать/не ждать» после переноса не актуальны
+        plan["moved"] = True
+        log.info("plan move: %s -> %s (удлинение +%.0f мин)",
+                 oid, dst["courier_name"], best[0] / 60)
+        _persist_meta()
+        _bump()
     return _payload()
 
 
@@ -1424,48 +1431,49 @@ def plan_unassign():
     if not plan or not plan.get("routes"):
         return jsonify({"error": "Сначала рассчитайте план"}), 400
     src_id = None
-    for r in plan["routes"]:
-        for tr in r.get("trips", []):
-            hit = next((s for s in tr["stops"] if s["order_id"] == oid), None)
-            if hit:
-                tr["stops"].remove(hit)
-                src_id = r["courier_id"]
-        r["trips"] = [tr for tr in r.get("trips", []) if tr["stops"]]
-    if src_id is None:
-        return jsonify({"error": "Заказа нет в текущем плане"}), 400
-    plan["routes"] = [r for r in plan["routes"] if r.get("trips")]
-    order["pin"] = ""  # заказ снова свободен: без этого пересчёт вернул бы его
-    _persist_orders()
-    now = _now()
-    if not plan["routes"]:
-        # весь план состоял из этого заказа — пустой план не нужен
-        STATE["plans"].pop(pid, None)
+    with _plans_lock:  # атомарно с выдачами: снятие не теряется
+        for r in plan["routes"]:
+            for tr in r.get("trips", []):
+                hit = next((s for s in tr["stops"] if s["order_id"] == oid), None)
+                if hit:
+                    tr["stops"].remove(hit)
+                    src_id = r["courier_id"]
+            r["trips"] = [tr for tr in r.get("trips", []) if tr["stops"]]
+        if src_id is None:
+            return jsonify({"error": "Заказа нет в текущем плане"}), 400
+        plan["routes"] = [r for r in plan["routes"] if r.get("trips")]
+        order["pin"] = ""  # заказ снова свободен: без этого пересчёт вернул бы его
+        _persist_orders()
+        now = _now()
+        if not plan["routes"]:
+            # весь план состоял из этого заказа — пустой план не нужен
+            STATE["plans"].pop(pid, None)
+            _persist_meta()
+            _invalidate_plan(pid=pid)
+            _ev("disp", f"снял «{order.get('address') or oid}» с маршрута")
+            _bump()
+            return _payload()
+        try:
+            matrix, node, appr_home, home_of = _retiming_matrix(plan, pid,
+                                                                plan["routes"])
+            for r in plan["routes"]:
+                h = home_of[r["courier_id"]]
+                _retime_route(r, matrix, node, STATE["settings"], now,
+                              appr_home[h], h)
+            plan["anchored_at"] = now.isoformat(timespec="seconds")
+        except Exception:
+            log.warning("plan unassign retime failed, ETA оставлены как были")
+        all_etas = [s["eta_min"] for r in plan["routes"] for s in r["stops"]]
+        plan["last_delivery_min"] = max(all_etas, default=0)
+        plan["last_delivery_clock"] = ((now + timedelta(
+            minutes=plan["last_delivery_min"])).strftime("%H:%M") if all_etas else None)
+        plan["avg_delivery_min"] = round(sum(all_etas) / len(all_etas)) if all_etas else 0
+        plan["advice"] = None  # сценарии «ждать/не ждать» после снятия не актуальны
+        plan["moved"] = True
+        log.info("plan unassign: %s снят с маршрута %s", oid, src_id)
         _persist_meta()
-        _invalidate_plan(pid=pid)
         _ev("disp", f"снял «{order.get('address') or oid}» с маршрута")
         _bump()
-        return _payload()
-    try:
-        matrix, node, appr_home, home_of = _retiming_matrix(plan, pid,
-                                                            plan["routes"])
-        for r in plan["routes"]:
-            h = home_of[r["courier_id"]]
-            _retime_route(r, matrix, node, STATE["settings"], now,
-                          appr_home[h], h)
-        plan["anchored_at"] = now.isoformat(timespec="seconds")
-    except Exception:
-        log.warning("plan unassign retime failed, ETA оставлены как были")
-    all_etas = [s["eta_min"] for r in plan["routes"] for s in r["stops"]]
-    plan["last_delivery_min"] = max(all_etas, default=0)
-    plan["last_delivery_clock"] = ((now + timedelta(
-        minutes=plan["last_delivery_min"])).strftime("%H:%M") if all_etas else None)
-    plan["avg_delivery_min"] = round(sum(all_etas) / len(all_etas)) if all_etas else 0
-    plan["advice"] = None  # сценарии «ждать/не ждать» после снятия не актуальны
-    plan["moved"] = True
-    log.info("plan unassign: %s снят с маршрута %s", oid, src_id)
-    _persist_meta()
-    _ev("disp", f"снял «{order.get('address') or oid}» с маршрута")
-    _bump()
     return _payload()
 
 
