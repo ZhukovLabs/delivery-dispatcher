@@ -17,7 +17,7 @@ from .core import (CFG, MAX_POINTS, PALETTE, STATE, STATUSES, _approach_map,
                    _archive_order, _attach_geometry, _bump, _courier_plan,
                    _courier_speed, _db, _db_path, _db_lock, _deadline_rel_min,
                    _check_user_contact, _depot_view, _esc, _eta_pass, _ev, _flip_return_route,
-                   _history_period, _home_point, _HOURLY_TRAFFIC,
+                   _history_period, _courier_day_stats, _home_point, _HOURLY_TRAFFIC,
                    _invalidate_plan, _me,
                    _my_point, _now, _obj_point, _payload, _persist_couriers,
                    _persist_meta, _persist_orders, _plan_for, _plural,
@@ -1637,6 +1637,14 @@ def stats_week():
                     "on_time": on_time, "on_time_total": on_time_total})
 
 
+@r.get("/api/stats/couriers")
+@flaskish
+def stats_couriers_day():
+    """Статистика за день по курьерам (своё депо): км, взятые/доставленные/
+    отказы, время на работе."""
+    return jsonify(_courier_day_stats(point_id=_my_point()))
+
+
 @r.get("/api/report/day")
 @flaskish
 def api_report_day():
@@ -1648,6 +1656,7 @@ def api_report_day():
               for r in (plan.get("routes") or [])]
     return jsonify({"rows": hist["rows"], "summary": hist.get("summary") or {},
                     "routes": routes,
+                    "courier_stats": _courier_day_stats(point_id=_my_point())["rows"],
                     "today": _now().strftime("%d.%m.%Y"),
                     "now": _now().strftime("%H:%M")})
 
