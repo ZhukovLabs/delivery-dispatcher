@@ -35,7 +35,8 @@ if [ "$(date +%u)" = "7" ]; then
 fi
 
 # --- копия за пределы дома: документ в Telegram ---
-TOKEN=$(sed -n 's/^tg_bot_token[[:space:]]*=[[:space:]]*//p' "$APP/config.ini" | head -1)
+# (tr -d '\r': config.ini наследует CRLF-концы строк от Windows-корней)
+TOKEN=$(sed -n 's/^tg_bot_token[[:space:]]*=[[:space:]]*//p' "$APP/config.ini" | head -1 | tr -d '\r')
 if [ -n "$TOKEN" ]; then
   if curl -s -m 90 -F "chat_id=$CHAT" \
        -F "caption=backup dispatcher.db $TS" \
