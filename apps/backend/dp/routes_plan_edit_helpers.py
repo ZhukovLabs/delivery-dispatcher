@@ -69,11 +69,11 @@ def _best_insert(plan, dst, matrix, node, appr_home, h_dst, oid, now, settings):
                     age_min = 0.0
                 hour = (now + timedelta(minutes=t_prev + age_min)).hour
                 f = _HOURLY_TRAFFIC.get(hour, 1.0)
-        else:
-            f = 1.0
-        delta = _travel(a, g_x, f) + _travel(g_x, b, f) - _travel(a, b, f)
-        if best is None or delta < best[0]:
-            best = (delta, ti, pos - 1)
+            else:
+                f = 1.0
+            delta = _travel(a, g_x, f) + _travel(g_x, b, f) - _travel(a, b, f)
+            if best is None or delta < best[0]:
+                best = (delta, ti, pos - 1)
     if best is None and not dst.get("trips"):
         # у цели не было заездов — создаём первый
         dst["trips"] = [{"stops": [], "total_min": 0, "start_delay_min": 0,

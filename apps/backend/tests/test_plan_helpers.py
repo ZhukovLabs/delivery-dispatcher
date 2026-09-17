@@ -87,14 +87,16 @@ def test_best_insert_traffic_and_handover_scales_delta():
     assert best == (-800.0, 0, 1)
 
 
-def test_best_insert_hour_traffic_keeps_flat_scale():
+def test_best_insert_hour_traffic_applies_scale(monkeypatch):
+    import dp.routes_plan_edit_helpers as mod
     m = {0: {0: 0, 1: 1000, 2: 100},
          1: {0: 1000, 1: 0, 2: 900},
          2: {0: 100, 1: 100, 2: 0}}
     dst = _route("c9", [_trip([_stop("a", 30)])])
+    monkeypatch.setattr(mod, "_HOURLY_TRAFFIC", {11: 2.0})
     best = _insert(dst, m, {"a": 1, "x": 2}, "x",
                    {"hour_traffic": 1, "traffic": 1.0, "handover_min": 0})
-    assert best == (0.0, 0, 1)
+    assert best == (-1600.0, 0, 0)
 
 
 def test_best_insert_picks_cheaper_trip():
@@ -107,7 +109,7 @@ def test_best_insert_picks_cheaper_trip():
                         _trip([_stop("b", 40), _stop("c", 50)])])
     best = _insert(dst, m, {"a": 1, "b": 2, "c": 3, "x": 4}, "x",
                    _flat_no_traffic())
-    assert best == (-700.0, 1, 2)
+    assert best == (-800.0, 1, 0)
 
 
 def test_recalc_plan_stats():
