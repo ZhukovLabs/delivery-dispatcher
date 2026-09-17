@@ -1,33 +1,16 @@
 """Ручные правки плана: перенос стопа другому курьеру, снятие, ретайминг."""
-import json
-import os
-import sqlite3
-import tempfile
 import threading
-import time
-import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-from datetime import datetime, timedelta
 
-import requests
 from fastapi import APIRouter
 
-from .core import (CFG, MAX_POINTS, PALETTE, STATE, STATUSES, _approach_map,
-                   _archive_order, _attach_geometry, _bump, _courier_plan,
-                   _courier_speed, _db, _db_path, _db_lock, _deadline_rel_min,
-                   _check_user_contact, _depot_view, _esc, _eta_pass, _ev,
-                   _flip_return_route, _history_period, _courier_day_stats,
-                   _home_point, _HOURLY_TRAFFIC, _invalidate_plan, _me,
-                   _my_point, _now, _obj_point, _payload, _persist_couriers,
-                   _persist_meta, _persist_orders, _plan_for, _plural,
-                   _plans_lock, _tg_callback, _tg_handle_update, _tg_send,
-                   _valid_latlng, build_time_matrix, haversine_km, log,
-                   routing_geometry, solve_plan, _simplify_poly)
-from .geocode import reverse_geocode
-from .shims import _json, flaskish, jsonify, request, send_file, session
+from .core import (STATE, _bump, _ev, _home_point, _invalidate_plan, log,
+                   _my_point, _now, _obj_point, _payload, _persist_meta,
+                   _persist_orders, _plan_for, _plans_lock)
+from .shims import _json, flaskish, jsonify
 from .routes_retiming import _retiming_matrix
 from .routes_plan_helpers import _retime_route
-from .routes_plan_edit_helpers import _best_insert, _pop_stop, _recalc_plan_stats
+from .routes_plan_edit_helpers import (_best_insert, _drop_order_stops,
+                                       _pop_stop, _recalc_plan_stats)
 
 r = APIRouter()
 _solving_lock = threading.Lock()
@@ -132,15 +115,8 @@ def plan_unassign():
     plan = _plan_for(pid)
     if not plan or not plan.get("routes"):
         return jsonify({"error": "Сначала рассчитайте план"}), 400
-    src_id = None
     with _plans_lock:  # атомарно с выдачами: снятие не теряется
-        for r in plan["routes"]:
-            for tr in r.get("trips", []):
-                hit = next((s for s in tr["stops"] if s["order_id"] == oid), None)
-                if hit:
-                    tr["stops"].remove(hit)
-                    src_id = r["courier_id"]
-            r["trips"] = [tr for tr in r.get("trips", []) if tr["stops"]]
+        src_id = _drop_order_stops(plan, oid)
         if src_id is None:
             return jsonify({"error": "Заказа нет в текущем плане"}), 400
         plan["routes"] = [r for r in plan["routes"] if r.get("trips")]

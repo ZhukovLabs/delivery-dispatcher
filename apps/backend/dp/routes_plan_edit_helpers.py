@@ -14,6 +14,18 @@ def _pop_stop(plan, oid):
     return stop, src_id
 
 
+def _drop_order_stops(plan, oid):
+    src_id = None
+    for r in plan["routes"]:
+        for tr in r.get("trips", []):
+            hit = next((s for s in tr["stops"] if s["order_id"] == oid), None)
+            if hit:
+                tr["stops"].remove(hit)
+                src_id = r["courier_id"]
+        r["trips"] = [tr for tr in r.get("trips", []) if tr["stops"]]
+    return src_id
+
+
 def _best_insert(plan, dst, matrix, node, appr_home, h_dst, oid, now, settings):
     g_x = node[oid]
     best = None  # (удлинение, индекс заезда, позиция вставки)
