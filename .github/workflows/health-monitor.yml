@@ -1,29 +1,44 @@
 name: health-monitor
-
-# Каждые 5 минут пингуем прод через Tailscale Funnel; если health не отвечает —
-# Telegram-алерт владельцу (секреты TG_ALERT_TOKEN / ALERT_CHAT в репозитории).
-# GitHub-крон по времени может плавать на минуту-другую — для наших целей ок.
-
+# Пинг прода раз в 30 минут (приватный репозиторий: ~1440 мин/место в месяц,
+# лимит бесплатных Actions 2000). При сбое — сообщение в Telegram.
+# Секрет TG_BOT_TOKEN = tg_bot_token из config.ini ноутбука (Settings →
+# Secrets and variables → Actions). Чат получителя — TG_TEST_REDIRECT.
 on:
   schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch: {}
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
 
-permissions: {}
+concurrency:
+  group: health-monitor
+  cancel-in-progress: true
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
-      - name: Check health
+      - name: Check /health (2 попытки)
+        id: chk
         run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 25 \
-            https://zhukovlabs.taila8c324.ts.net:8443/health || echo 000)
-          echo "health_code=$code"
-          if [ "$code" != "200" ]; then
-            msg="Диспетчерская недоступна: health ответил '$code'. Проверь ноут (192.168.0.161): питание, интернет, tailscaled (funnel), dispatcher.service."
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_ALERT_TOKEN }}/sendMessage" \
-              --data-urlencode "chat_id=${{ secrets.ALERT_CHAT }}" \
-              --data-urlencode "text=🔴 $msg" \
-              > /dev/null || true
-          fi
+          for i in 1 2; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 20 \
+              https://zhukovlabs.taila8c324.ts.net:8443/health || echo 000)
+            echo "попытка $i: HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 1
+        continue-on-error: true
+
+      - name: Telegram alert
+        if: steps.chk.outcome == 'failure'
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
+            --data-urlencode "chat_id=1160368886" \
+            --data-urlencode "text=🔴 Диспетчер недоступен: /health не отвечает (${{ steps.chk.outputs.code }}). $(date -u '+%d.%m %H:%M UTC')" \
+            | grep -q '"ok":true' && echo "alert sent" || { echo "ALERT SEND FAILED"; exit 1; }
+
+      - name: Fail job (видно в списке запусков)
+        if: steps.chk.outcome == 'failure'
+        run: exit 1
