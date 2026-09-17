@@ -26,7 +26,11 @@ const MapView = dynamic(() => import("./MapView"), {
 });
 
 export default function Console() {
-  const { st, stLoading, stateErr, setSt, refresh, tick, dark, applyTheme } = useDispatchState();
+  /* оптимистичные патчи летящих мутаций: хук прогоняет через них каждый
+     входящий WS-снимок, пока мутация в полёте — чужие события доходят,
+     а снимки «до мутации» не откатывают локальный UI */
+  const livePatches = useRef(new Map<string, (s: AppState) => AppState>());
+  const { st, stLoading, stateErr, setSt, refresh, tick, dark, applyTheme } = useDispatchState(livePatches);
 
   const [toast, setToast] = useState<ToastState | null>(null);
   const toastT = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -152,13 +156,13 @@ export default function Console() {
     if (inflight.current.has(key)) return;
     inflight.current.add(key);
     const opt = st ? optimisticFor(method, path, body as Record<string, any> | undefined) : undefined;
-    // оптимистичный патч поднимает локальный rev: WS-бродкасты «прошлого»
-    // (снимок до применения мутации) его не перезапишут; ответ сервера
-    // (setSt) применится всегда и вернёт rev к серверному
-    if (opt && st) setSt({ ...opt(st), rev: (st.rev ?? 0) + 1000 });
-    try { setSt(await api<AppState>(path, method, body)); }
+    if (opt) livePatches.current.set(key, opt);
+    try {
+      if (opt && st) setSt(opt(st)); // мгновенный отклик; rev остаётся серверным
+      setSt(await api<AppState>(path, method, body));
+    }
     catch (e) { showToast((e as Error).message, true); if (opt) void refresh(); }
-    finally { inflight.current.delete(key); }
+    finally { livePatches.current.delete(key); inflight.current.delete(key); }
   };
 
   /* ---------- действия ---------- */

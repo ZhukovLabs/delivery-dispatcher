@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, fetchApi, type AppState } from "@/lib/api";
 import { ensureWsToken, getSocket } from "@/lib/ws";
@@ -10,8 +10,14 @@ import { ensureWsToken, getSocket } from "@/lib/ws";
    админов, геолокации курьеров) — socket.io: сервер при любом изменении
    состояния пушит "state" с payload'ом депо подписчика (см. lib/ws.ts). */
 
-export function useDispatchState() {
+export function useDispatchState(
+  /* оптимистичные патчи летящих мутаций: входящий WS-снимок прокатываем
+     через них же — снимки «до мутации» не откатывают UI, а чужие события
+     (solving, другие админы) доставляются без потерь */
+  live?: { current: Map<string, (s: AppState) => AppState> },
+) {
   const qc = useQueryClient();
+  const lastRev = useRef(-1); // последний серверный rev (REST или WS)
   const { data: stData, error: stateErr, isPending: stLoading } = useQuery({
     queryKey: ["state"],
     // пока ответ летел, кэш мог уйти вперёд (WS-бродкаст): не откатываем —
@@ -26,6 +32,7 @@ export function useDispatchState() {
         }
         if ((s.rev ?? 0) < (cur.rev ?? 0)) return cur;
       }
+      lastRev.current = Math.max(lastRev.current, s.rev ?? 0);
       return s;
     },
     staleTime: 10000,
@@ -33,10 +40,9 @@ export function useDispatchState() {
     refetchOnWindowFocus: "always",
   });
 
-  // живые обновления: сервер пушит payload целиком. Применяем ТОЛЬКО более
-  // свежую версию (rev строго больше) — медленный REST-ответ или реплей
-  // старого бродкаста больше не может откатить состояние назад; пока летит
-  // оптимистичный патч (rev локально поднят), бродкасты его не затирают
+  // живые обновления: сервер пушит payload целиком. Рев сравниваем с
+  // последним СЕРВЕРНЫМ rev — реплей старого бродкаста не откатит состояние;
+  // снимки, прилетевшие во время летящей мутации, обогащаем её патчем
   useEffect(() => {
     let off: (() => void) | null = null;
     let cancelled = false;
@@ -47,9 +53,13 @@ export function useDispatchState() {
       // сессионные поля не затираем, иначе админские вкладки гаснут
       // на первом же живом обновлении
       const onState = (d: AppState) => {
+        const drev = d.rev ?? 0;
+        if (drev <= lastRev.current) return; // дубль или отставший снимок
+        lastRev.current = drev;
         qc.setQueryData<AppState>(["state"], (old) => {
-          if (old && (d.rev ?? 0) <= (old.rev ?? 0)) return old;
-          return { ...d, me: old?.me, users: old?.users, my_point: old?.my_point };
+          let base: AppState = d;
+          if (live?.current?.size) for (const p of live.current.values()) base = p(base);
+          return { ...base, me: old?.me, users: old?.users, my_point: old?.my_point };
         });
       };
       const onConnect = () => { void qc.invalidateQueries({ queryKey: ["state"] }); }; // подтянуть пропущенное за простой
@@ -59,10 +69,13 @@ export function useDispatchState() {
       off = () => { s.off("state", onState); s.off("connect", onConnect); };
     })();
     return () => { cancelled = true; off?.(); };
-  }, [qc]);
+  }, [qc, live]);
 
   const st = stData ?? null;
-  const setSt = useCallback((s: AppState) => { qc.setQueryData(["state"], s); }, [qc]);
+  const setSt = useCallback((s: AppState) => {
+    lastRev.current = Math.max(lastRev.current, s.rev ?? 0);
+    qc.setQueryData(["state"], s);
+  }, [qc]);
   const refresh = useCallback(async () => { await qc.invalidateQueries({ queryKey: ["state"] }); }, [qc]);
 
   const [tick, setTick] = useState(0); // ежеминутное обновление возраста/бейджей

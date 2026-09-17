@@ -74,7 +74,7 @@ html.dark .login-card input{background:#141c29;border-color:var(--line2);color:v
 .console{display:grid;grid-template-columns:308px minmax(0,1fr) 384px;gap:12px;padding:4px 12px 6px;height:calc(100vh - 48px)}
 .col-left{display:flex;flex-direction:column;gap:10px;min-height:0;overflow:hidden;padding-right:2px}
 .acc{display:flex;flex-direction:column;gap:8px;min-height:0;flex:1 1 auto}
-.acc-item{display:flex;flex-direction:column;min-height:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;transition:flex-grow .22s ease}
+.acc-item{display:flex;flex-direction:column;min-height:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
 .acc-item.open{flex:1 1 auto}
 .acc-item[data-acc="orders"].open{flex:7 1 0;min-height:190px}
 .acc-item[data-acc="couriers"].open{flex:3 1 0;min-height:150px}
@@ -86,7 +86,8 @@ html.dark .login-card input{background:#141c29;border-color:var(--line2);color:v
 .acc-item.open .acc-head .chev{transform:rotate(180deg)}
 .acc-body{display:grid;grid-template-rows:minmax(0,0fr);min-height:0;flex:0 1 auto;padding:0 10px;transition:grid-template-rows .22s ease}
 .acc-item.open .acc-body{grid-template-rows:minmax(0,1fr);flex:1 1 auto;overflow:hidden}
-.acc-inner{min-height:0;overflow:hidden;display:flex;flex-direction:column;padding-bottom:10px}
+.acc-inner{min-height:0;overflow:hidden;display:flex;flex-direction:column;padding-bottom:10px;visibility:hidden}
+.acc-item.open .acc-inner{visibility:visible}
 #orderList{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:2px 2px 10px}
 #courierList{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:2px 2px 10px}
 .col-map{border-radius:var(--r);overflow:hidden;border:1px solid var(--line);min-height:0;position:relative}
@@ -258,7 +259,8 @@ html.dark .spd-cur.go svg{color:#4cb786}
 .sacc.open .sacc-h .chev{transform:rotate(180deg)}
 .sacc-b{display:grid;grid-template-rows:minmax(0,0fr);transition:grid-template-rows .25s ease}
 .sacc.open .sacc-b{grid-template-rows:minmax(0,1fr)}
-.sacc-c{overflow:hidden;min-height:0}
+.sacc-c{overflow:hidden;min-height:0;visibility:hidden}
+.sacc.open .sacc-c{visibility:visible}
 .sheet .sacc .sacc-c{padding:2px 14px 14px}
 .sheet .sacc .btn{width:100%}
 .sheet .prof-col{gap:12px}
