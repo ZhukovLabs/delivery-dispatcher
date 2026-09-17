@@ -218,7 +218,7 @@ def upd_courier(cid):
     data = _json()
     for c in STATE["couriers"]:
         if c["id"] == cid:
-            if _home_point(c)["id"] != _my_point():
+            if _home_point(c)["id"] != _my_point() and not _me()["is_admin"]:
                 return jsonify({"error": "Курьер другого депо — управлять может "
                                          "только диспетчер его точки"}), 403
             if "name" in data and data["name"].strip():
@@ -260,7 +260,7 @@ def bind_courier(cid):
         return jsonify({"error": "ID Telegram должен быть числом"}), 400
     for c in STATE["couriers"]:
         if c["id"] == cid:
-            if _home_point(c)["id"] != _my_point():
+            if _home_point(c)["id"] != _my_point() and not _me()["is_admin"]:
                 return jsonify({"error": "Курьер другого депо — управлять может "
                                          "только диспетчер его точки"}), 403
             # гео не должна утекать к двум курьерам сразу
@@ -385,7 +385,8 @@ def sim_tgtext():
 @flaskish
 def del_courier(cid):
     courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
-    if courier and _home_point(courier)["id"] != _my_point():
+    if courier and _home_point(courier)["id"] != _my_point() \
+            and not _me()["is_admin"]:
         return jsonify({"error": "Курьер другого депо — управлять может "
                                  "только диспетчер его точки"}), 403
     # его развозимые заказы возвращаются в очередь, чтобы не зависли;
@@ -1019,7 +1020,7 @@ def courier_returned(cid):
     courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
     if not courier:
         return jsonify({"error": "Курьер не найден"}), 404
-    if _home_point(courier)["id"] != _my_point():
+    if _home_point(courier)["id"] != _my_point() and not _me()["is_admin"]:
         return jsonify({"error": "Курьер другого депо — управлять может "
                                  "только диспетчер его точки"}), 403
     delivered = 0
