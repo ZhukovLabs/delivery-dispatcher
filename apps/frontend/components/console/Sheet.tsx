@@ -307,7 +307,7 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
           </div>
           {courStats!.rows.map(c => (
             <div className="cs-row" role="row" key={c.courier}>
-              <span className="cs-name"><Bike size={13} />{c.courier}</span>
+              <span className="cs-name">{c.courier}</span>
               <span>{c.km ? c.km.toFixed(1) : "–"}</span>
               <span>{c.taken}</span>
               <span><b>{c.delivered}</b></span>

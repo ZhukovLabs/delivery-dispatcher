@@ -612,6 +612,7 @@ ol.stops li.dragging{opacity:.4}
 .cs-row{display:grid;grid-template-columns:minmax(110px,1.8fr) repeat(8,minmax(34px,1fr));align-items:center;padding:6px 10px;gap:4px 6px;font-variant-numeric:tabular-nums}
 .cs-row+.cs-row{border-top:1px solid var(--line)}
 .cs-row>span{min-width:0;overflow-wrap:anywhere;line-height:1.35}
+.cs-row>span:not(:first-child){text-align:center}
 .cs-row.cs-head span{white-space:nowrap}
 .cs-head{background:var(--panel2);color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em}
 .cs-name{display:inline-flex;align-items:center;gap:6px;font-weight:600;min-width:0;overflow-wrap:anywhere}
