@@ -351,13 +351,21 @@ def _db_connect():
 @contextmanager
 def _db():
     global _db_conn
+    if _db_conn is not None and not os.path.exists(_db_path):
+        # файл удалили на ходу (открытый fd на Linux продолжал бы писать в
+        # безымянный inode молча): закрываемся — следующий вызов пересоздаст
+        # файл и схему, как это делал executescript на каждый вызов раньше
+        try:
+            _db_conn.close()
+        finally:
+            _db_conn = None
     conn = _db_connect()
     try:
         yield conn
         conn.commit()
     except sqlite3.DatabaseError:
-        # файл удалили/сломали на ходу — закрываем, следующий вызов откроет
-        # заново и пересоздаст схему (как раньше это делал executescript)
+        # база сломалась — закрываем, следующий вызов откроет заново
+        # и пересоздаст схему
         try:
             conn.close()
         finally:
@@ -1038,14 +1046,25 @@ def _geom_key(points):
     return tuple((round(p["lat"], 5), round(p["lng"], 5)) for p in points)
 
 
+_SIMPLIFY_MAX_IN = 2048  # потолок входа _simplify_poly до Дугласа-Пекера
+
+
 def _simplify_poly(points, tol_m=10.0, max_pts=1200):
     """Дуглас-Пекер в метрах: трасса для карты в разы короче без визуальной
     разницы (на зуме города 10 м — доля пикселя). Концевые точки сохраняем
     всегда; если не влезли в лимит — ужимаем грубее (tol растёт в 2 раза).
+    Очень плотный вход (ORS бывает) сначала равномерно прореживается:
+    худший случай ДП — O(n²), на слабом CPU его надо ограничить заранее.
     """
     n = len(points)
     if n <= 16:
         return points
+    if n > _SIMPLIFY_MAX_IN:
+        step = (n - 1) / (_SIMPLIFY_MAX_IN - 1)
+        keep_idx = sorted({round(i * step) for i in range(_SIMPLIFY_MAX_IN)}
+                          | {0, n - 1})
+        points = [points[i] for i in keep_idx]
+        n = len(points)
     while True:
         kx = 111320.0 * max(0.2, math.cos(math.radians(points[0][0])))
         xs = [p[1] * kx for p in points]
@@ -2805,12 +2824,18 @@ def _geo_payload():
 
     Тик движения курьера каждую секунду тянет только позицию, скорость и
     гео-оценки возврата — заказы, планы и трассы приезжают с событиями.
+    По каждому ПРИВЯЗАННОМУ к боту курьеру айтем летит всегда, даже без
+    свежей позиции ({id}): клиент снимает устаревший маркер сам, не дожидаясь
+    полного снапшота. Непривязанные в срез не попадают — им нечего снимать.
     """
     now = time.time()
     out = []
-    for c in STATE["couriers"]:
-        pos = STATE["tg_pos"].get(c.get("tg_chat_id") or "")
+    for c in list(STATE["couriers"]):  # снапшот: TG-поток меняет список
+        chat = c.get("tg_chat_id") or ""
+        if not chat:
+            continue
         item = {"id": c["id"]}
+        pos = STATE["tg_pos"].get(chat)
         if pos and now - pos["ts"] < TG_POS_TTL:
             item["pos"] = {"lat": pos["lat"], "lng": pos["lng"],
                            "ts": pos["ts"], "live": bool(pos.get("live")),
@@ -2821,9 +2846,25 @@ def _geo_payload():
         geo = _courier_geo(c, _home_point(c), now)
         if geo:
             item["geo"] = geo
-        if len(item) > 1:
-            out.append(item)
+        out.append(item)
     return {"t": now, "couriers": out}
+
+
+def _points_with_admins(points):
+    """Точки с админами онлайн — НЕ кэшируется: ONLINE живёт своей жизнью
+    (логин/хартбит/логаут) и не меняет rev, по которому кэшируется база."""
+    now = time.time()
+    with _ONLINE_LOCK:
+        for sid in [s for s, r in ONLINE.items()
+                    if now - r["last"] > ONLINE_WINDOW * 4]:
+            ONLINE.pop(sid, None)  # подчистили давно ушедших
+        live = [r for r in ONLINE.values() if now - r["last"] < ONLINE_WINDOW]
+    by_point: dict = {}
+    for a in live:
+        by_point.setdefault(a["point_id"], []).append(a["email"])
+    return [dict(p, admins=list(dict.fromkeys(  # один человек в нескольких
+                by_point.get(p["id"], []))))       # сессиях = одна запись
+            for p in points]
 
 
 def _payload(me=None, myp=None):
@@ -2849,7 +2890,8 @@ def _payload(me=None, myp=None):
             if len(_payload_base_cache) > 6:
                 _payload_base_cache.clear()  # рев движется — старые не нужны
             _payload_base_cache[key] = base
-    return jsonify({**base, "me": me, "my_point": myp,
+    return jsonify({**base, "points": _points_with_admins(base["points"]),
+                    "me": me, "my_point": myp,
                     "users": _admin_users() if me and me["is_admin"] else []})
 
 
@@ -2862,7 +2904,8 @@ def _build_payload_base(myp):
         home = _home_point(c)
         pos = STATE["tg_pos"].get(c.get("tg_chat_id") or "")
         if pos and now - pos["ts"] < TG_POS_TTL:
-            cc["pos"] = {k: v for k, v in pos.items() if k != "hist"}
+            cc["pos"] = {"lat": pos["lat"], "lng": pos["lng"], "ts": pos["ts"],
+                         "live": bool(pos.get("live")), "acc": pos.get("acc") or 0}
         cur = _speed_current_kmh(pos, now)
         if cur is not None:
             cc["cur_kmh"] = cur
@@ -2902,18 +2945,12 @@ def _build_payload_base(myp):
           if k not in ("tg_seen", "tg_pos", "tg_offset", "tg_nagged", "tg_load",
                        "tg_deliv", "tg_away", "tg_pay", "plans", "advice_modes", "solving")}
     seen = sorted(STATE["tg_seen"].values(), key=lambda x: -x["ts"])[:20]
-    # живые счётчики по точкам: курьеры + админы онлайн
-    now2 = time.time()
-    with _ONLINE_LOCK:
-        for sid in [s for s, r in ONLINE.items() if now2 - r["last"] > ONLINE_WINDOW * 4]:
-            ONLINE.pop(sid, None)  # подчистили давно ушедших
-        live = [r for r in ONLINE.values() if now2 - r["last"] < ONLINE_WINDOW]
+    # живые счётчики по точкам: курьеры считаются здесь (меняются только
+    # с rev), а админы онлайн — в _payload при каждом вызове: ONLINE
+    # меняется без bump (логин/хартбит), кэш базы по rev их застевал бы
     st["points"] = [dict(p,
                          couriers=sum(1 for c in STATE["couriers"]
-                                      if _obj_point(c) == p["id"]),
-                         admins=list(dict.fromkeys(  # один человек в нескольких
-                             a["email"] for a in live  # сессиях = одна запись
-                             if a["point_id"] == p["id"])))
+                                      if _obj_point(c) == p["id"]))
                     for p in st.get("points") or []]
     # скоуп депо: свои заказы, свой план и своя история; чужие — только курьеры
     st["orders"] = [o for o in st.get("orders") or [] if _obj_point(o) == myp]
