@@ -2502,6 +2502,15 @@ def _tg_callback(cb):
             if order0 else None
         if c0 and c0.get("tg_chat_id"):
             chat = str(c0["tg_chat_id"])
+        else:
+            # заказ уже закрыт (стадии pay/pay_amount идут ПОСЛЕ закрытия —
+            # это нормальный флоу оплаты, а не «неактуально»): ищем чат
+            # курьера по самому диалогу — редирект-чат своих записей в
+            # tg_ask не имеет
+            for c_chat, dlg in STATE["tg_ask"].items():
+                if oid in dlg:
+                    chat = c_chat
+                    break
     pend = STATE["tg_ask"].get(chat, {}).get(oid)
     order = next((o for o in STATE["orders"] if o["id"] == oid), None)
     courier = next((c for c in STATE["couriers"]
