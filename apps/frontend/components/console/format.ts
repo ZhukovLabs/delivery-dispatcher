@@ -18,6 +18,13 @@ export type WeekStats = {
 export type HistRow = { closed_at?: string; address?: string; courier?: string; outcome?: string; cycle_min?: number | null; payment?: string; pay_amount?: number | null };
 export type HistData = { rows?: HistRow[]; summary?: Record<string, number | null> } | null;
 
+/** Статистика курьера за день из /api/stats/couriers. */
+export type CourierDayRow = {
+  courier: string; km: number; taken: number; delivered: number; cancelled: number;
+  pay_cash: number; pay_card: number; work_min: number | null;
+};
+export type CourierDayStats = { day: string; rows: CourierDayRow[] } | null;
+
 export interface UndoEntry { label: string; type: string; data: Record<string, unknown>; }
 export interface ToastState { msg: string; err?: boolean; act?: { label: string; fn: () => void }; }
 export interface AskState { text: string; ok: string; danger: boolean; resolve: (v: boolean) => void; }

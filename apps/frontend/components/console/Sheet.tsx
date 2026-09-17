@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Bike, ChartColumn, ChevronDown, CircleHelp, Download, FileSpreadsheet, FileText, Pencil, SlidersHorizontal, Trash2, User, Users } from "lucide-react";
 import { api, type AppState } from "@/lib/api";
-import { avaOf, initialsOf, type HistData, type WeekStats } from "./format";
+import { avaOf, initialsOf, type CourierDayStats, type HistData, type WeekStats } from "./format";
 
 /* ---------- «Ещё»: профиль / статистика / параметры расчёта / участники ---------- */
 
@@ -62,6 +62,7 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
   const [histDays, setHistDays] = useState("1");
   const [hist, setHist] = useState<HistData>(null);
   const [weekStats, setWeekStats] = useState<WeekStats | null>(null);
+  const [courStats, setCourStats] = useState<CourierDayStats>(null);
   const [pwOld, setPwOld] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [userEmail, setUserEmail] = useState("");
@@ -80,7 +81,11 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
     try { setWeekStats(await api<WeekStats>("/api/stats/week")); }
     catch { setWeekStats(null); }
   };
-  useEffect(() => { if (tab === "hist") { void loadHistory(histDays); void loadWeek(); } }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadCour = async () => {
+    try { setCourStats(await api<NonNullable<CourierDayStats>>("/api/stats/couriers")); }
+    catch { setCourStats(null); }
+  };
+  useEffect(() => { if (tab === "hist") { void loadHistory(histDays); void loadWeek(); void loadCour(); } }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab === "prof") { setProfName(st.me?.name || ""); setProfPhone(st.me?.phone || ""); } }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = async (patch: Record<string, number | boolean>) => {
@@ -289,6 +294,29 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
             </div>
           ))}
         </div>
+        </>)}
+
+        {(courStats?.rows?.length || 0) > 0 && (<>
+        <h4>Курьеры сегодня</h4>
+        <div className="cs-table" role="table" aria-label="Статистика курьеров за сегодня">
+          <div className="cs-row cs-head" role="row">
+            <span>Имя</span><span>км</span><span>взяли</span><span>доставили</span>
+            <span>отказы</span><span>наличные</span><span>карта</span><span>на работе</span>
+          </div>
+          {courStats!.rows.map(c => (
+            <div className="cs-row" role="row" key={c.courier}>
+              <span className="cs-name"><Bike size={13} />{c.courier}</span>
+              <span>{c.km ? c.km.toFixed(1) : "–"}</span>
+              <span>{c.taken}</span>
+              <span><b>{c.delivered}</b></span>
+              <span className={c.cancelled ? "cs-bad" : ""}>{c.cancelled}</span>
+              <span>{c.pay_cash || "–"}</span>
+              <span>{c.pay_card || "–"}</span>
+              <span>{c.work_min != null ? `${Math.floor(c.work_min / 60)} ч ${String(c.work_min % 60).padStart(2, "0")} мин` : "–"}</span>
+            </div>
+          ))}
+        </div>
+        <div className="cs-note">км — по живой геолокации; «на работе» — от первой выдачи до последнего закрытия (или сейчас, если развозка ещё идёт)</div>
         </>)}
 
         <h4>История заказов</h4>

@@ -608,6 +608,16 @@ ol.stops li.dragging{opacity:.4}
 .wk-cour-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .wk-cour-n{color:var(--ink);white-space:nowrap;font-variant-numeric:tabular-nums}
 .wk-cour-cyc{color:var(--mut);white-space:nowrap;font-variant-numeric:tabular-nums}
+.cs-table{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;font-size:12.5px}
+.cs-row{display:grid;grid-template-columns:minmax(90px,1.6fr) repeat(7,minmax(34px,1fr));align-items:center;padding:6px 10px;gap:4px;font-variant-numeric:tabular-nums}
+.cs-row+.cs-row{border-top:1px solid var(--line)}
+.cs-head{background:var(--panel2);color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+.cs-name{display:inline-flex;align-items:center;gap:6px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cs-name svg{color:var(--mut);flex-shrink:0}
+.cs-row.cs-head span:first-child{text-transform:none}
+.cs-bad{color:#b91c1c;font-weight:700}
+.cs-note{font-size:11px;color:var(--mut);margin-top:6px}
+html.dark .cs-bad{color:#f3b4b4}
 .hist-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px}
 .hist-links{display:flex;gap:8px}
 .hist-links .btn{font-size:12.5px}
