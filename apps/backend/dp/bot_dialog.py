@@ -10,8 +10,13 @@ from .adapters.telegram import (TG_TEST_REDIRECT, _tg_answer_cb, _tg_edit_msg,
 from .bot_dwell import _courier_out_orders
 from .bot_flow import (_CANCEL_REASONS, _bot_ask_kb, _bot_ask_text,
                        _bot_close_delivered, _bot_keep_rolling,
-                       _pay_method_label, _pay_set, _tg_step_kb)
+                       _pay_set, _tg_step_kb)
 from .domain.text import _esc
+from .bot_dialog_texts import (_kb_pay, _kb_reasons, _kb_skip, _txt_cancelled,
+                               _txt_close_failed, _txt_confirm_cancel,
+                               _txt_confirm_delivered, _txt_confirm_still,
+                               _txt_delivered_ask_pay, _txt_delivered_thanks,
+                               _txt_not_actual_closed, _txt_pay_amount, _txt_reason)
 
 def _tg_callback(cb):
     """Нажатие инлайн-кнопки курьером: «доставил?» → «точно?» → закрытие.
@@ -61,8 +66,7 @@ def _tg_callback(cb):
             or (not order and not paying)
             or (order and order.get("assigned") != courier.get("id"))):
         if pend:
-            _tg_edit_msg(chat, pend["msg"],
-                         "Этот вопрос уже неактуален — заказ закрыт диспетчером.")
+            _tg_edit_msg(chat, pend["msg"], _txt_not_actual_closed())
             STATE["tg_ask"].get(chat, {}).pop(oid, None)
             STATE["tg_pay"].pop(chat, None)
         _tg_answer_cb(cbid, "Уже неактуально")
@@ -70,17 +74,17 @@ def _tg_callback(cb):
     addr = _esc((order or {}).get("address") or pend.get("addr") or oid)
     if act == "y" and pend["stage"] == "ask":
         pend["stage"] = "confirm"
-        _tg_edit_msg(chat, pend["msg"], f"Точно доставлен? Заказ: <b>{addr}</b>",
+        _tg_edit_msg(chat, pend["msg"], _txt_confirm_delivered(addr),
                      _tg_step_kb(oid, "✅ Подтвердить", "ok"))
         _tg_answer_cb(cbid)
     elif act == "ref" and pend["stage"] == "ask":
         pend["stage"] = "refconfirm"
-        _tg_edit_msg(chat, pend["msg"], f"Точно отменяем? Заказ: <b>{addr}</b>",
+        _tg_edit_msg(chat, pend["msg"], _txt_confirm_cancel(addr),
                      _tg_step_kb(oid, "✅ Да, отменяем", "refyes"))
         _tg_answer_cb(cbid)
     elif act == "n" and pend["stage"] == "ask":
         pend["stage"] = "noconfirm"
-        _tg_edit_msg(chat, pend["msg"], f"Точно ещё нет? Заказ: <b>{addr}</b>",
+        _tg_edit_msg(chat, pend["msg"], _txt_confirm_still(addr),
                      _tg_step_kb(oid, "✅ Да, ещё везу", "nok"))
         _tg_answer_cb(cbid)
     elif act == "nok" and pend["stage"] == "noconfirm":
@@ -88,11 +92,7 @@ def _tg_callback(cb):
         _tg_answer_cb(cbid)
     elif act == "refyes" and pend["stage"] == "refconfirm":
         pend["stage"] = "reason"
-        _tg_edit_msg(chat, pend["msg"],
-                     f"Причина отмены: <b>{addr}</b>",
-                     [[{"text": t, "callback_data": f"dlv:{oid}:r:{i}"}]
-                      for i, t in enumerate(_CANCEL_REASONS)]
-                     + [[{"text": "↩️ Назад", "callback_data": f"dlv:{oid}:no"}]])
+        _tg_edit_msg(chat, pend["msg"], _txt_reason(addr), _kb_reasons(oid))
         _tg_answer_cb(cbid)
     elif act.startswith("r:") and pend["stage"] == "reason":
         try:
@@ -102,12 +102,10 @@ def _tg_callback(cb):
         ok, _ = _bot_close_delivered(oid, outcome="cancelled", reason=reason)
         STATE["tg_ask"].get(chat, {}).pop(oid, None)
         if ok:
-            _tg_edit_msg(chat, pend["msg"],
-                         f"🗑 Записано: <b>{addr}</b> — заказ отменён.\n"
-                         f"Причина: <b>{_esc(reason)}</b>")
+            _tg_edit_msg(chat, pend["msg"], _txt_cancelled(addr, reason))
             _tg_answer_cb(cbid, "Заказ отменён ✓")
         else:
-            _tg_edit_msg(chat, pend["msg"], "Не получилось закрыть — уже неактуален.")
+            _tg_edit_msg(chat, pend["msg"], _txt_close_failed())
             _tg_answer_cb(cbid, "Уже неактуально")
     elif act == "ok" and pend["stage"] == "confirm":
         pend["addr"] = order.get("address") or oid  # адрес для флоу оплаты
@@ -116,19 +114,11 @@ def _tg_callback(cb):
             # заказ закрыт тут же, как раньше; дальше — только аналитика:
             # как оплатил клиент и сколько
             pend["stage"] = "pay"
-            _tg_edit_msg(chat, pend["msg"],
-                         f"✅ Записано: <b>{addr}</b> доставлен.\n\n"
-                         "Как оплатил клиент?",
-                         [[{"text": "💵 Наличными",
-                            "callback_data": f"dlv:{oid}:pay:cash"}],
-                          [{"text": "💳 Картой",
-                            "callback_data": f"dlv:{oid}:pay:card"}],
-                          [{"text": "⏭ Без оплаты / не важно",
-                            "callback_data": f"dlv:{oid}:payskip"}]])
+            _tg_edit_msg(chat, pend["msg"], _txt_delivered_ask_pay(addr), _kb_pay(oid))
             _tg_answer_cb(cbid, "Заказ закрыт ✓")
         else:
             STATE["tg_ask"].get(chat, {}).pop(oid, None)
-            _tg_edit_msg(chat, pend["msg"], "Не получилось закрыть — уже неактуален.")
+            _tg_edit_msg(chat, pend["msg"], _txt_close_failed())
             _tg_answer_cb(cbid, "Уже неактуально")
     elif act.startswith("pay:") and pend["stage"] == "pay":
         method = act[4:]
@@ -140,18 +130,12 @@ def _tg_callback(cb):
                                  "msg": pend["msg"], "addr": pend.get("addr") or oid,
                                  "ts": time.time()}
         pend["stage"] = "pay_amount"
-        _tg_edit_msg(chat, pend["msg"],
-                     f"✅ <b>{addr}</b> доставлен. Оплата: <b>"
-                     f"{_pay_method_label(method)}</b>.\n\n"
-                     "Напишите сумму числом в чат — например: <b>24.50</b>",
-                     [[{"text": "⏭ Сумму не знаю",
-                        "callback_data": f"dlv:{oid}:payskip"}]])
+        _tg_edit_msg(chat, pend["msg"], _txt_pay_amount(addr, method), _kb_skip(oid))
         _tg_answer_cb(cbid)
     elif act == "payskip" and pend["stage"] in ("pay", "pay_amount"):
         STATE["tg_ask"].get(chat, {}).pop(oid, None)
         STATE["tg_pay"].pop(chat, None)
-        _tg_edit_msg(chat, pend["msg"],
-                     f"✅ Записано: <b>{addr}</b> доставлен. Спасибо!")
+        _tg_edit_msg(chat, pend["msg"], _txt_delivered_thanks(addr))
         _tg_answer_cb(cbid, "Заказ закрыт ✓")
     elif act == "no":
         # «Назад»: на шаг диалога назад, диалог не закрываем
@@ -160,7 +144,7 @@ def _tg_callback(cb):
             _tg_edit_msg(chat, pend["msg"], _bot_ask_text(order), _bot_ask_kb(oid))
         elif pend["stage"] == "reason":
             pend["stage"] = "refconfirm"
-            _tg_edit_msg(chat, pend["msg"], f"Точно отменяем? Заказ: <b>{addr}</b>",
+            _tg_edit_msg(chat, pend["msg"], _txt_confirm_cancel(addr),
                          _tg_step_kb(oid, "✅ Да, отменяем", "refyes"))
         _tg_answer_cb(cbid)
     else:
