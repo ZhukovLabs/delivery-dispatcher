@@ -26,6 +26,8 @@ jobs:
           cache-dependency-path: apps/backend/requirements.txt
       - run: pip install -r requirements.txt
       - run: find dp -name '*.py' -print0 | xargs -0 -n 20 python -m py_compile
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
       - run: python -c "import dp.core"
 
   frontend:
