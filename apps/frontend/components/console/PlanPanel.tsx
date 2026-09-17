@@ -23,6 +23,27 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
   const plan = st.plan!;
   const byRoads = plan.routing === "roads";
 
+  /* Маршрут строим от текущей геопозиции открывшего; если браузер не
+     дал геолокацию (запрет/таймаут) — от точки выдачи курьера. Окно
+     открываем синхронно с кликом (иначе поймает блокировщик попапов),
+     адрес подставляем, когда геолокация ответит. */
+  const openMap = (e: React.MouseEvent, r: Route, mk: (o: string | null) => string) => {
+    e.preventDefault(); e.stopPropagation();
+    const c = st.couriers.find(x => x.id === r.courier_id);
+    const dep = st.points?.find(p => p.id === (c?.point_id || "")) || st.points?.[0];
+    const fb = dep && dep.lat != null && dep.lng != null ? `${dep.lat},${dep.lng}` : null;
+    const w = window.open("", "_blank");
+    const go = (o: string | null) => {
+      const u = mk(o);
+      if (w) w.location.href = u; else window.location.href = u;
+    };
+    if (!("geolocation" in navigator)) { go(fb); return; }
+    navigator.geolocation.getCurrentPosition(
+      p => go(`${p.coords.latitude},${p.coords.longitude}`),
+      () => go(fb),
+      { timeout: 2500, maximumAge: 60000 });
+  };
+
   return (
     <>
       <div className="plan-top">
@@ -148,14 +169,14 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                           {so && so.lat != null && so.lng != null && (
                             <span className="s-mapw"> Маршрут:{" "}
                               <a className="s-map" target="_blank" rel="noreferrer"
-                                title="Маршрут до точки в Яндекс Картах — осталось нажать «Поехали»"
+                                title="Маршрут до точки в Яндекс Картах — от вашей геопозиции (или точки выдачи) до адреса"
                                 href={`https://yandex.ru/maps/?rtext=~${so.lat},${so.lng}&rtt=auto`}
-                                onClick={e => e.stopPropagation()}>Яндекс</a>
+                                onClick={e => openMap(e, r, o => `https://yandex.ru/maps/?rtext=${o || "~"}~${so.lat},${so.lng}&rtt=auto`)}>Яндекс</a>
                               {" | "}
                               <a className="s-map" target="_blank" rel="noreferrer"
-                                title="Маршрут до точки в Google Картах — осталось нажать «Начать»"
+                                title="Маршрут до точки в Google Картах — от вашей геопозиции (или точки выдачи) до адреса"
                                 href={`https://www.google.com/maps/dir/?api=1&destination=${so.lat},${so.lng}&travelmode=driving`}
-                                onClick={e => e.stopPropagation()}>Google</a>
+                                onClick={e => openMap(e, r, o => `https://www.google.com/maps/dir/?api=1${o ? `&origin=${o}` : ""}&destination=${so.lat},${so.lng}&travelmode=driving`)}>Google</a>
                             </span>
                           )} {s.deadline && <span className="s-dl" title="Обещанное время доставки"><Timer size={11} />{s.deadline}</span>}
                           {!!s.late_min && s.late_min > 0 && (
