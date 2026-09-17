@@ -352,19 +352,6 @@ export default function Console() {
     undoToast(`✓ Выдано ${r.courier_name}: ${ids.length} зак.`, `выдача маршрута ${r.courier_name}`, "assign", { order_ids: ids });
   };
 
-  const copyRoute = async (r: Route) => {
-    const clock = planClockFn();
-    const lines = [`🛵 Маршрут: ${r.courier_name} (${r.count} заказ.)`];
-    let k = 0;
-    r.trips.forEach((tr, ti) => {
-      if (r.trips.length > 1) lines.push(`Заезд ${ti + 1} (старт ≈${tr.start_clock || clock(tr.start_delay_min)})`);
-      tr.stops.forEach(s => { k += 1; lines.push(`${k}. ${s.address} · ≈${s.eta_clock || clock(s.eta_min)}`); });
-    });
-    lines.push(`Возврат на базу ≈${clock(r.total_min)}`);
-    try { await navigator.clipboard.writeText(lines.join("\n")); showToast("Маршрут скопирован, можно отправлять курьеру"); }
-    catch (err) { showToast("Не удалось скопировать: " + (err as Error).message, true); }
-  };
-
   /* ---------- производные ---------- */
   // дубли адресов: два диспетчера могут добавить один адрес одновременно (#3)
   // (хук обязан стоять до раннего return при !st — Rules of Hooks)
@@ -497,7 +484,6 @@ export default function Console() {
               st={st} clock={clock} busyMode={busyMode}
               onMode={m => void applyAdvice(m)}
               onGive={r => void giveRoute(r)}
-              onCopy={r => void copyRoute(r)}
               dragOverRoute={dragOverRoute}
               setDragOverRoute={setDragOverRoute}
               onMoveStop={async (oid, to) => {

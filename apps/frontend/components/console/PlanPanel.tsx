@@ -1,19 +1,18 @@
 "use client";
 
-import { Check, ClipboardCopy, Clock, Gauge, Hand, Package, RefreshCw, Route as RouteIcon, Timer, TriangleAlert, X, Zap } from "lucide-react";
+import { Check, Clock, Gauge, Hand, Package, RefreshCw, Route as RouteIcon, Timer, TriangleAlert, X, Zap } from "lucide-react";
 import type { AppState, Route } from "@/lib/api";
 import AdviceCard from "./AdviceCard";
 import { plural } from "./format";
 
 /* ---------- панель плана развозки: маршруты по курьерам, заезды, стопы ---------- */
 
-export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy, dragOverRoute, setDragOverRoute, onMoveStop, onPin, onUnassign }: {
+export default function PlanPanel({ st, clock, busyMode, onMode, onGive, dragOverRoute, setDragOverRoute, onMoveStop, onPin, onUnassign }: {
   st: AppState;
   clock: (m: number) => string;
   busyMode: boolean;
   onMode: (m: string) => void;
   onGive: (r: Route) => void;
-  onCopy: (r: Route) => void;
   dragOverRoute: string | null;
   setDragOverRoute: (v: string | null) => void;
   onMoveStop: (oid: string, to: string) => Promise<void>;
@@ -22,27 +21,6 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
 }) {
   const plan = st.plan!;
   const byRoads = plan.routing === "roads";
-
-  /* Маршрут строим от текущей геопозиции открывшего; если браузер не
-     дал геолокацию (запрет/таймаут) — от точки выдачи курьера. Окно
-     открываем синхронно с кликом (иначе поймает блокировщик попапов),
-     адрес подставляем, когда геолокация ответит. */
-  const openMap = (e: React.MouseEvent, r: Route, mk: (o: string | null) => string) => {
-    e.preventDefault(); e.stopPropagation();
-    const c = st.couriers.find(x => x.id === r.courier_id);
-    const dep = st.points?.find(p => p.id === (c?.point_id || "")) || st.points?.[0];
-    const fb = dep && dep.lat != null && dep.lng != null ? `${dep.lat},${dep.lng}` : null;
-    const w = window.open("", "_blank");
-    const go = (o: string | null) => {
-      const u = mk(o);
-      if (w) w.location.href = u; else window.location.href = u;
-    };
-    if (!("geolocation" in navigator)) { go(fb); return; }
-    navigator.geolocation.getCurrentPosition(
-      p => go(`${p.coords.latitude},${p.coords.longitude}`),
-      () => go(fb),
-      { timeout: 2500, maximumAge: 60000 });
-  };
 
   return (
     <>
@@ -107,9 +85,6 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
             <div className="r-head">
               <span className="r-dot" style={{ background: r.color }} />
               <b>{r.courier_name}</b>
-              <span className="r-acts">
-                <button className="r-copy" title="Скопировать маршрут текстом, чтобы отправить курьеру" onClick={() => onCopy(r)}><ClipboardCopy size={14} /></button>
-              </span>
               {giveIds.length > 0 && (
                 <button className="r-give" onClick={() => onGive(r)}
                   title={`Отметить выданным: ${giveIds.length} ${plural(giveIds.length, ["заказ уйдёт", "заказа уйдут", "заказов уйдут"])} в развозку, остальные маршруты останутся как есть`}>
@@ -151,7 +126,6 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                 <ol className="stops">
                   {tr.stops.map(s => {
                     stopNo += 1;
-                    const so = st.orders.find(x => x.id === s.order_id);
                     return (
                       <li key={s.order_id} draggable
                         title={`${s.address} · +${s.eta_min} мин от расчёта`}
@@ -166,19 +140,7 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, onCopy,
                           {!!s.prio && (
                             <span className="s-prio" title={`Приоритетный${s.auto ? ", поднялся сам по возрасту" : ""}`}><Zap size={11} /></span>
                           )} {s.address}
-                          {so && so.lat != null && so.lng != null && (
-                            <span className="s-mapw"> Маршрут:{" "}
-                              <a className="s-map" target="_blank" rel="noreferrer"
-                                title="Маршрут до точки в Яндекс Картах — от вашей геопозиции (или точки выдачи) до адреса"
-                                href={`https://yandex.ru/maps/?rtext=~${so.lat},${so.lng}&rtt=auto`}
-                                onClick={e => openMap(e, r, o => `https://yandex.ru/maps/?rtext=${o || "~"}~${so.lat},${so.lng}&rtt=auto`)}>Яндекс</a>
-                              {" | "}
-                              <a className="s-map" target="_blank" rel="noreferrer"
-                                title="Маршрут до точки в Google Картах — от вашей геопозиции (или точки выдачи) до адреса"
-                                href={`https://www.google.com/maps/dir/?api=1&destination=${so.lat},${so.lng}&travelmode=driving`}
-                                onClick={e => openMap(e, r, o => `https://www.google.com/maps/dir/?api=1${o ? `&origin=${o}` : ""}&destination=${so.lat},${so.lng}&travelmode=driving`)}>Google</a>
-                            </span>
-                          )} {s.deadline && <span className="s-dl" title="Обещанное время доставки"><Timer size={11} />{s.deadline}</span>}
+                          {s.deadline && <span className="s-dl" title="Обещанное время доставки"><Timer size={11} />{s.deadline}</span>}
                           {!!s.late_min && s.late_min > 0 && (
                             <span className="late-chip" title="Успеть к обещанному времени не получится">
                               опоздание ~{s.late_min} мин
