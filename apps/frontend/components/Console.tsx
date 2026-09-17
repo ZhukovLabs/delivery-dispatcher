@@ -144,10 +144,11 @@ export default function Console() {
 
   /* ---------- мутации с оптимистичным патчем ---------- */
   // даблклик не должен слать вторую мутацию того же действия: пока запрос
-  // в полёте, повтор по тому же method+path игнорируем
+  // в полёте, повтор по тому же method+path+body игнорируем. Тело — часть
+  // ключа: выдача второму курьеру — другое действие, её нельзя глотать
   const inflight = useRef(new Set<string>());
   const mutate = async (method: string, path: string, body?: Record<string, unknown>) => {
-    const key = method + " " + path;
+    const key = method + " " + path + (body === undefined ? "" : " " + JSON.stringify(body));
     if (inflight.current.has(key)) return;
     inflight.current.add(key);
     const opt = st ? optimisticFor(method, path, body as Record<string, any> | undefined) : undefined;
