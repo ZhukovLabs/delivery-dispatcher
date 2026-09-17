@@ -755,23 +755,39 @@ def plan_help():
         _bump()
 
 
-def _tg_route_message(courier_name, stops, me, origin=None):
+_PAY_GEO_FRESH_S = 15 * 60  # живая геопозиция старше 15 минут — уже не «текущая»
+
+
+def _tg_route_message(courier_name, stops, me, origin=None, pos=None):
     """Текст+клавиатура TG-сообщения о выдаче: адреса с ETA, у каждого —
     ссылки «Маршрут: Яндекс | Google» с новой строки, внизу — кнопки
-    «Весь маршрут» друг под другом. origin="lat,lng" — точка старта
-    (Google без origin спрашивает начальную точку сам и в браузере
-    внутри Telegram геолокации не имеет — поэтому ставим её сами).
-    Используется и при отправке (assign), и при редактировании (return)."""
+    «Весь маршрут» друг под другом.
+
+    Стартовая точка всех маршрутов — текущая геопозиция курьера (pos,
+    живая локация от бота, не старше 15 минут); если её нет — точка
+    выдачи origin. Явная точка надёжнее «моего местоположения» карты:
+    браузер внутри Telegram геолокацию не отдаёт. Используется и при
+    отправке (assign), и при редактировании (return)."""
+
+    start = None
+    if pos and pos.get("lat") is not None and \
+            time.time() - pos.get("ts", 0) <= _PAY_GEO_FRESH_S:
+        start = f"{pos['lat']},{pos['lng']}"
+    if not start:
+        start = origin or "~"
+
     def _ya_link(sp):
         if sp.get("lat") is None or sp.get("lng") is None:
             return None
-        return (f"https://yandex.ru/maps/?rtext=~{sp['lat']},{sp['lng']}"
+        return (f"https://yandex.ru/maps/?rtext={start}~{sp['lat']},{sp['lng']}"
                 "&rtt=auto")
+
     def _gg_link(sp):
         if sp.get("lat") is None or sp.get("lng") is None:
             return None
         return (f"https://www.google.com/maps/dir/?api=1"
-                f"&destination={sp['lat']},{sp['lng']}&travelmode=driving")
+                + (f"&origin={start}" if start != "~" else "")
+                + f"&destination={sp['lat']},{sp['lng']}&travelmode=driving")
     z_word = _plural(len(stops), ("заказ", "заказа", "заказов"))
     lines = [f"🛵 <b>{_esc(courier_name)}, в развозку</b>: {len(stops)} {z_word}"]
     for i, s in enumerate(stops, start=1):
@@ -791,13 +807,13 @@ def _tg_route_message(courier_name, stops, me, origin=None):
            if s.get("lat") is not None and s.get("lng") is not None]
     if len(pts) >= 2:  # маршрут строим минимум по двум точкам
         gg = ("https://www.google.com/maps/dir/?api=1"
-              + (f"&origin={origin}" if origin else "")
+              + (f"&origin={start}" if start != "~" else "")
               + "&destination=" + pts[min(len(pts), 10) - 1]
               + "&waypoints=" + "%7C".join(pts[:min(len(pts), 10) - 1])
               + "&travelmode=driving")
         kb = [[{"text": "Яндекс | Весь маршрут",
-                "url": "https://yandex.ru/maps/?rtext=~"
-                       + "~".join(pts[:10]) + "&rtt=auto"}],
+                "url": "https://yandex.ru/maps/?rtext="
+                       + "~".join([start] + pts[:10]) + "&rtt=auto"}],
               [{"text": "Google | Весь маршрут", "url": gg}]]
         payload["reply_markup"] = {"inline_keyboard": kb}
     return payload
@@ -874,9 +890,11 @@ def assign_orders():
         home = _home_point(courier)
 
         def _tg_assign():
-            payload = _tg_route_message(courier["name"], given_stops, me,
-                                        origin=f"{home['lat']},{home['lng']}"
-                                        if home.get("lat") is not None else None)
+            payload = _tg_route_message(
+                courier["name"], given_stops, me,
+                origin=f"{home['lat']},{home['lng']}"
+                if home.get("lat") is not None else None,
+                pos=STATE["tg_pos"].get(chat))
             payload["chat_id"] = chat
             try:
                 resp = requests.post(
@@ -933,7 +951,8 @@ def return_order(oid):
         def _tg_edit():
             if stops:
                 payload = _tg_route_message(courier["name"], stops, me,
-                                            origin=origin)
+                                            origin=origin,
+                                            pos=STATE["tg_pos"].get(ref["chat"]))
             else:
                 payload = {"text": f"📦 {_esc(courier['name'])}: все заказы"
                                    " сняты с развозки", "parse_mode": "HTML"}
