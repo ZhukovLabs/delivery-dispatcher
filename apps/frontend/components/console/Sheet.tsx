@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Bike, ChartColumn, ChevronDown, CircleHelp, Download, FileSpreadsheet, FileText, Pencil, SlidersHorizontal, Trash2, User, Users } from "lucide-react";
 import { api, type AppState } from "@/lib/api";
 import { avaOf, initialsOf, type CourierDayStats, type HistData, type WeekStats } from "./format";
+import { useBackdropClose } from "./useBackdropClose";
 
 /* ---------- «Ещё»: профиль / статистика / параметры расчёта / участники ---------- */
 
@@ -179,8 +180,9 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
     } catch (e) { showToast((e as Error).message, true); return false; }
   };
 
+  const bg = useBackdropClose(onClose);
   return (
-    <div className="sheet-bg" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="sheet-bg" {...bg}>
       <div className="sheet" aria-label={TITLES[tab]}>
         <button className="close" aria-label="Закрыть" onClick={onClose}>✕</button>
         <div className="sheet-tabs" role="tablist">

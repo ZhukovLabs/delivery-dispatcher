@@ -1,6 +1,7 @@
 "use client";
 
 import type { AskState, ToastState } from "./format";
+import { useBackdropClose } from "./useBackdropClose";
 
 /* ---------- мелкие оверлеи: баннер выбора точки, справка, подтверждение, тост ---------- */
 
@@ -14,8 +15,9 @@ export function PickBanner({ kind, onCancel }: { kind: "point" | "order"; onCanc
 }
 
 export function HelpOverlay({ onClose }: { onClose: () => void }) {
+  const bg = useBackdropClose(onClose);
   return (
-    <div className="help-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="help-overlay" {...bg}>
       <div className="help-card">
         <button className="close" style={{ float: "right", border: "none", background: "transparent", fontSize: 16, cursor: "pointer", color: "#6d7688" }}
           aria-label="Закрыть" onClick={onClose}>✕</button>
@@ -33,9 +35,9 @@ export function HelpOverlay({ onClose }: { onClose: () => void }) {
 }
 
 export function AskDialog({ ask, onResolve }: { ask: AskState; onResolve: (v: boolean) => void }) {
+  const bg = useBackdropClose(() => onResolve(false));
   return (
-    <div className="help-overlay" role="dialog" aria-modal="true"
-      onClick={e => { if (e.target === e.currentTarget) onResolve(false); }}>
+    <div className="help-overlay" role="dialog" aria-modal="true" {...bg}>
       <div className="help-card ask-card">
         <h3>{ask.text}</h3>
         <div className="ask-btns">

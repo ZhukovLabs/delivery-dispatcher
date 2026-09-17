@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ArrowRight, Check, Send, Unlink, X } from "lucide-react";
 import { api, fmtAge, type AppState, type Courier } from "@/lib/api";
+import { useBackdropClose } from "./useBackdropClose";
 
 /* ---------- модалка привязки Telegram: список видевших бота, ручной ID, сообщение/отвязка ---------- */
 
@@ -44,9 +45,9 @@ export default function BindModal({ courier, bot, seen, onDone, onClose }: {
     finally { setBusy(false); }
   };
 
+  const bg = useBackdropClose(onClose);
   return (
-    <div className="help-overlay" role="dialog" aria-modal="true"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="help-overlay" role="dialog" aria-modal="true" {...bg}>
       <div className="help-card bind-card">
         <button className="bind-close" aria-label="Закрыть" onClick={onClose}><X size={16} /></button>
         <div className="bind-head">
