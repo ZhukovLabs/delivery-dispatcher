@@ -340,7 +340,7 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
         <div className="hist-list">
           {hist?.rows?.length ? (<>
           <div className="hrow hhead">
-            <span>Время</span><span>Адрес</span><span>Курьер</span><span>Цикл</span>
+            <span>Время</span><span>Адрес</span><span>Курьер</span><span>Итог</span>
           </div>
           {hist.rows.map((r, i) => (
             <div className={"hrow " + (r.outcome === "delivered" ? "ok" : "no")} key={i}>

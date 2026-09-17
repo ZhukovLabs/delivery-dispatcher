@@ -489,18 +489,18 @@ html.dark .ptip:hover,html.dark .ptip:focus-visible{color:var(--ink);background:
 .hist-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
 .hist-links{display:flex;gap:8px;margin-left:auto}
 .hist-links .btn{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;font-size:12px;font-weight:600;white-space:nowrap}
-.hist-list{max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
-.hrow{display:grid;grid-template-columns:52px 1fr 116px 92px;gap:8px;align-items:center;padding:7px 12px;font-size:12.5px;border-bottom:1px solid #eef1f6;transition:background .1s}
+.hist-list{max-height:380px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.hrow{display:grid;grid-template-columns:56px minmax(0,1fr) 122px auto;gap:10px;align-items:center;padding:8px 14px;font-size:12.5px;border-bottom:1px solid #eef1f6;transition:background .1s}
 .hrow:not(.hhead):hover{background:#f8fafd}
 .hrow:last-child{border-bottom:none}
 .hrow.hhead{position:sticky;top:0;z-index:1;background:var(--panel);font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--mut);border-bottom:1px solid var(--line)}
 .hrow.hhead span:nth-child(3){text-align:center}
 .hrow.hhead span:nth-child(4){text-align:right}
-.h-res{display:flex;align-items:center;justify-content:flex-end;gap:7px}
+.h-res{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}
 .h-time{display:flex;flex-direction:column;line-height:1.25;font-variant-numeric:tabular-nums}
 .h-time b{font-weight:600;color:var(--ink);font-size:12.5px}
 .h-time small{color:var(--mut);font-size:10px}
-.h-addr{color:var(--ink);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.h-addr{color:var(--ink);font-weight:500;min-width:0;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .h-cour{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#f1f4f9;border-radius:999px;padding:2.5px 9px;font-size:11.5px;color:var(--ink);text-align:center}
 .h-badge{width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700}
 .hrow.ok .h-badge{background:#16a34a}
