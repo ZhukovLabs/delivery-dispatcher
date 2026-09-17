@@ -45,7 +45,7 @@ jobs:
         run: |
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_ALERT_TOKEN }}/sendMessage" \
             --data-urlencode "chat_id=${{ secrets.ALERT_CHAT }}" \
-            --data-urlencode "text=🔴 Диспетчер недоступен: /health не отвечает (${{ steps.chk.outputs.code }}). $(date -u '+%d.%m %H:%M UTC')" \
+            --data-urlencode "text=🔴 Диспетчер недоступен: /health не отвечает (${{ steps.chk.outputs.code }}). $(TZ='Europe/Minsk' date '+%d.%m %H:%M' )" \
             | grep -q '"ok":true' && echo "alert sent" || { echo "ALERT SEND FAILED"; exit 1; }
 
       - name: Fail job (видно в списке запусков)
