@@ -494,6 +494,13 @@ def del_order(oid):
         _flip_return_route(courier_id)
     _persist_orders()
     _invalidate_plan(drop_plan=True, pid=opid)
+    # курьер нёс этот заказ — предупредить и пересобрать его TG-маршрут
+    if order and courier_id and (order.get("status") or "ready") == "out":
+        _tg_sync_route(courier_id, warn=(
+            f"⚠️ Заказ <b>{_esc(order.get('address') or oid)}</b> "
+            + ("отменил диспетчер." if outcome == "cancelled"
+               else "отмечён доставленным диспетчером.")
+            + "\nМаршрут обновлён — откройте новый маршрут по той же кнопке."))
     return _payload()
 
 
@@ -915,6 +922,58 @@ def assign_orders():
     return _payload()
 
 
+def _tg_sync_route(cid, warn=None):
+    """Живое TG-сообщение курьера догоняет реальность: пересобрать маршрут
+    по оставшимся заказам (ссылки/кнопки обновятся) и предупредить курьера.
+
+    Фоном — запрос диспетчера сеть Telegram не ждёт. warn=None — только
+    правка сообщения (без отдельного предупреждения).
+    """
+    courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
+    chat = (courier or {}).get("tg_chat_id") or ""
+    if not (courier and chat and CFG["tg_bot_token"]):
+        return
+    ref = STATE.get("tg_assign", {}).get(cid)
+    if not warn and not ref:
+        return
+    me = _me()
+    home = _home_point(courier)
+    origin = (f"{home['lat']},{home['lng']}"
+              if home.get("lat") is not None else None)
+    pos = STATE["tg_pos"].get(chat)
+
+    def _job():
+        if warn:
+            _tg_send(chat, warn)
+        if not ref:
+            return
+        stops = [{"address": o["address"], "eta_clock": None,
+                  "lat": o.get("lat"), "lng": o.get("lng")}
+                 for o in STATE["orders"]
+                 if o.get("assigned") == cid and (o.get("status") or "ready") == "out"]
+        if stops:
+            payload = _tg_route_message(courier["name"], stops, me,
+                                        origin=origin, pos=pos)
+        else:
+            payload = {"text": f"📦 {_esc(courier['name'])}: все заказы"
+                               " сняты с развозки", "parse_mode": "HTML"}
+        payload.update({"chat_id": ref["chat"], "message_id": ref["mid"]})
+        try:
+            resp = requests.post(
+                f"https://api.telegram.org/bot{CFG['tg_bot_token']}"
+                "/editMessageText", json=payload, timeout=10)
+            desc = resp.json().get("description", "")
+            if "not modified" not in desc.lower() and not resp.json().get("ok"):
+                log.warning("tg sync: не отредактировано (%s): %s",
+                            courier["name"], desc[:200])
+            if "message to edit not found" in desc.lower():
+                STATE.get("tg_assign", {}).pop(cid, None)
+        except (requests.RequestException, ValueError) as e:
+            log.warning("tg sync: %s", e)
+
+    threading.Thread(target=_job, daemon=True).start()
+
+
 @r.post("/api/orders/{oid}/return")
 @flaskish
 def return_order(oid):
@@ -927,50 +986,18 @@ def return_order(oid):
     if (order.get("status") or "ready") != "out":
         return jsonify({"error": "Заказ не в развозке"}), 400
     cid = order.get("assigned") or ""
-    courier = next((c for c in STATE["couriers"] if c["id"] == cid), None)
+    addr = order.get("address") or oid
     order["status"] = "ready"
     order["assigned"] = ""
     order["out_at"] = ""
     _persist_orders()
     _invalidate_plan(pid=_obj_point(order))
-    _ev("disp", f"вернул «{order.get('address') or oid}» в очередь")
-
-    # TG-сообщение курьера должно жить вместе с планом: пересобираем его
-    # по оставшимся заказам и редактируем (ссылки и кнопки обновятся)
-    ref = STATE.get("tg_assign", {}).get(cid) if cid else None
-    if ref and courier and CFG["tg_bot_token"]:
-        stops = [{"address": o["address"], "eta_clock": None,
-                  "lat": o.get("lat"), "lng": o.get("lng")}
-                 for o in STATE["orders"]
-                 if o.get("assigned") == cid and (o.get("status") or "ready") == "out"]
-        me = _me()
-        home = _home_point(courier)
-        origin = (f"{home['lat']},{home['lng']}"
-                  if home.get("lat") is not None else None)
-
-        def _tg_edit():
-            if stops:
-                payload = _tg_route_message(courier["name"], stops, me,
-                                            origin=origin,
-                                            pos=STATE["tg_pos"].get(ref["chat"]))
-            else:
-                payload = {"text": f"📦 {_esc(courier['name'])}: все заказы"
-                                   " сняты с развозки", "parse_mode": "HTML"}
-            payload.update({"chat_id": ref["chat"], "message_id": ref["mid"]})
-            try:
-                resp = requests.post(
-                    f"https://api.telegram.org/bot{CFG['tg_bot_token']}"
-                    "/editMessageText", json=payload, timeout=10)
-                desc = resp.json().get("description", "")
-                if "not modified" not in desc.lower():
-                    if not resp.json().get("ok"):
-                        log.warning("return tg: не отредактировано (%s): %s",
-                                    courier["name"], desc[:200])
-                if "message to edit not found" in desc.lower():
-                    STATE.get("tg_assign", {}).pop(cid, None)
-            except (requests.RequestException, ValueError) as e:
-                log.warning("return tg: %s", e)
-        threading.Thread(target=_tg_edit, daemon=True).start()
+    _ev("disp", f"вернул «{addr}» в очередь")
+    # предупредить курьера и пересобрать сообщение с маршрутом
+    _tg_sync_route(cid, warn=(
+        f"⚠️ Заказ <b>{_esc(addr)}</b> вернули в очередь — он уйдёт"
+        " другому курьеру или новому расчёту.\n"
+        "Маршрут обновлён — откройте новый маршрут по той же кнопке."))
     return _payload()
 
 
