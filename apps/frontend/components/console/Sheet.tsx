@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Bike, ChartColumn, ChevronDown, CircleHelp, Download, FileSpreadsheet, FileText, Pencil, SlidersHorizontal, Trash2, User, Users } from "lucide-react";
-import { api, type AppState } from "@/lib/api";
+import { api, fetchApi, type AppState } from "@/lib/api";
 import { avaOf, initialsOf, type CourierDayStats, type HistData, type WeekStats } from "./format";
 import { useBackdropClose } from "./useBackdropClose";
 
@@ -73,6 +73,28 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
   const [profPhone, setProfPhone] = useState("");
   const [userPwd, setUserPwd] = useState("");
   const [userIsAdmin, setUserIsAdmin] = useState(false);
+
+  const [csvBusy, setCsvBusy] = useState(false);
+  const exportCsv = async () => {
+    if (csvBusy) return;
+    setCsvBusy(true);
+    try {
+      // качаем через fetch с Bearer-токеном: прямая ссылка <a> в браузере
+      // без куков (инкогнито, блок сторонних кук) ловила 401 «Требуется вход»
+      const res = await fetchApi("/api/history/export?days=" + histDays, { cache: "no-store" });
+      if (!res.ok) throw new Error("Выгрузка не удалась (" + res.status + ")");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "history-" + new Date().toISOString().slice(0, 10) + ".csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) { showToast((e as Error).message, true); }
+    finally { setCsvBusy(false); }
+  };
 
   const loadHistory = async (days: string) => {
     try { setHist(await api("/api/history?days=" + days)); }
@@ -333,8 +355,9 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
           <span className="hist-links">
             <a href="/report/day" target="_blank" rel="noopener" className="btn btn-primary"
               title="Отчёт дня для печати: Ctrl+P позволяет сохранить в PDF"><FileText size={14} />PDF</a>
-            <a href={"/api/history/export?days=" + histDays} className="btn"
-              title="Выгрузить историю в CSV (открывается в Excel)"><FileSpreadsheet size={14} />Excel</a>
+            <button type="button" className="btn" onClick={() => void exportCsv()} disabled={csvBusy}
+              title="Выгрузить историю в CSV (открывается в Excel)">
+              <FileSpreadsheet size={14} />{csvBusy ? "Готовлю…" : "Excel"}</button>
           </span>
         </div>
         <div className="hist-list">
