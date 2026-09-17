@@ -26,6 +26,7 @@ from .core import (CFG, MAX_POINTS, PALETTE, STATE, STATUSES, _approach_map,
 from .geocode import reverse_geocode
 from .shims import _json, flaskish, jsonify, request, send_file, session
 from .routes_retiming import _retiming_matrix
+from .routes_plan_helpers import _retime_route
 
 r = APIRouter()
 _solving_lock = threading.Lock()
@@ -236,44 +237,5 @@ def plan_unassign():
         _ev("disp", f"снял «{order.get('address') or oid}» с маршрута")
         _bump()
     return _payload()
-
-
-def _retime_route(route, matrix, node, settings, now_dt, appr=None, home=0):
-    """Пересчёт ETA всех заездов курьера от now_dt. Меняет route на месте."""
-    now_hm = now_dt.hour * 60 + now_dt.minute
-    courier = next((c for c in STATE["couriers"]
-                    if c["id"] == route.get("courier_id")), None)
-    default_kmh = max(5.0, float(settings.get("speed_kmh", 60)))
-    kmh, _src = _courier_speed(courier, settings) if courier else (default_kmh, "default")
-    spd_factor = max(0.25, min(4.0, default_kmh / kmh))
-    route["speed_kmh"] = round(kmh, 1)
-    route["speed_src"] = _src
-    reload_min = max(0, int(settings.get("reload_min", 10)))
-    prev_end = None  # конец предыдущего заезда: старт следующего цепочим
-    for tr in route.get("trips", []):
-        seq = [node[s["order_id"]] for s in tr["stops"]]
-        delay = tr["start_delay_min"] or 0
-        if prev_end is not None:
-            # цепочка как при сборке плана: после plan_move заезд могли
-            # удлинить — старый старт нарушал бы её и занижал ETA
-            delay = max(delay, prev_end + reload_min)
-        tr["start_delay_min"] = delay
-        etas, total = _eta_pass(seq, delay, matrix, settings,
-                                now_dt, appr, home, spd_factor=spd_factor)
-        for s, eta in zip(tr["stops"], etas):
-            s["eta_min"] = eta
-            s["eta_clock"] = (now_dt + timedelta(minutes=eta)).strftime("%H:%M")
-            rel = _deadline_rel_min(s.get("deadline"), now_hm)
-            s["late_min"] = max(0, eta - rel) if rel is not None else 0
-        tr["total_min"] = total
-        prev_end = total
-        tr["end_clock"] = (now_dt + timedelta(minutes=total)).strftime("%H:%M")
-        tr["start_clock"] = (now_dt + timedelta(
-            minutes=tr["start_delay_min"])).strftime("%H:%M")
-        tr["eta_at"] = now_dt.isoformat(timespec="seconds")  # якорь этих ETA
-    route["stops"] = [s for tr in route.get("trips", []) for s in tr["stops"]]
-    route["count"] = len(route["stops"])
-    if route["stops"]:
-        route["total_min"] = max(tr["total_min"] for tr in route["trips"])
 
 
