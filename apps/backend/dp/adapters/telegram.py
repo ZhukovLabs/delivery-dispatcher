@@ -3,9 +3,9 @@ import os
 
 import requests
 
-from .config import CFG, log
-from .state import STATE
-from .util import _esc, _plural
+from ..config import CFG, log
+from ..state import STATE
+from ..domain.text import _esc, _plural
 
 # --- Telegram: бот принимает геолокации курьеров ---------------------------------
 TG_POS_TTL = 30 * 60  # локация старше 30 минут считается устаревшей

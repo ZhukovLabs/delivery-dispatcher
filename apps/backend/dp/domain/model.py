@@ -2,8 +2,8 @@
 import re
 from datetime import timedelta
 
-from .state import STATE
-from .util import haversine_km
+from ..state import STATE
+from .geo import haversine_km
 
 # Источники: местные СМИ (BGmedia, сентябрь 2026), разборы проспекта Ленина.
 # Шкала консервативная: пик +35%, межпик -5..-10%.

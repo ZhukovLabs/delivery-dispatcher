@@ -8,7 +8,7 @@ import time
 import uuid
 
 from .config import CFG, _now, log
-from .db import _db, _db_lock
+from .adapters.sqlite_repo import _db, _db_lock
 from .shims import session
 from .state import STATE
 

@@ -3,7 +3,7 @@ import sqlite3
 import threading
 import time
 
-from .db import _persist_meta
+from .adapters.sqlite_repo import _persist_meta
 from .state import STATE
 
 # сериализует ВСЕ правки планов: две параллельные выдачи/возвраты otherwise

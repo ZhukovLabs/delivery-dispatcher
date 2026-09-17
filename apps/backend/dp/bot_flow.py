@@ -4,11 +4,11 @@ import time
 
 from .planstate import _bump, _invalidate_plan, _ev
 from .config import _now, log
-from .db import _archive_order, _db, _db_lock, _persist_orders
+from .adapters.sqlite_repo import _archive_order, _db, _db_lock, _persist_orders
 from .state import STATE, _obj_point
-from .tgapi import (_esc, _tg_answer_cb, _tg_edit_msg, _tg_send,
+from .adapters.telegram import (_esc, _tg_answer_cb, _tg_edit_msg, _tg_send,
                     _tg_send_kb)
-from .util import _plural
+from .domain.text import _plural
 
 def _flip_return_route(courier_id):
     """Все заказы развозки закрыты: разворачиваем трассу — курьер едет домой

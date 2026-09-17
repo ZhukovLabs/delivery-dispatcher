@@ -6,15 +6,15 @@ import time
 
 from .planstate import _bump, _ev
 from .config import CFG, _now, log
-from .db import _db, _db_lock, _speed_add
-from .speed import _speed_geo_sample
+from .adapters.sqlite_repo import _db, _db_lock, _speed_add
+from .adapters.speed import _speed_geo_sample
 from .state import STATE
-from .tgapi import TG_TEST_REDIRECT, _tg_edit_msg, _tg_send
+from .adapters.telegram import TG_TEST_REDIRECT, _tg_edit_msg, _tg_send
 from .bot_dialog import _tg_callback
 from .bot_dwell import _deliver_track, _load_track
 from .bot_flow import _pay_method_label, _pay_set
 from .bot_status import _auto_status_track
-from .util import _esc
+from .domain.text import _esc
 
 def _tg_handle_update(u):
     """Один апдейт от Telegram: текст (/start), геолокация или кнопка."""

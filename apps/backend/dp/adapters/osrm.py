@@ -5,8 +5,8 @@ import time
 
 import requests
 
-from .config import log
-from .util import hedged_first
+from ..config import log
+from .http_hedge import hedged_first
 
 OSRM_URLS = [
     "http://127.0.0.1:5000",                        # свой OSRM (docker, вся Беларусь)

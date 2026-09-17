@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from .config import CFG, log
+from ..config import CFG, log
 
 # OpenRouteService: основной источник матриц/геометрии (по ключу, бесплатный тариф).
 # Квота суток ограничена, поэтому: считаем запросы сами, при приближении

@@ -1,11 +1,10 @@
 """Матрица расстояний: кэш + каскад провайдеров ORS -> OSRM -> гаверсинус."""
 import time
 
-from .config import log
+from ..config import log
 from .ors import ORS_MAX_POINTS, ORS_STATE, _ors_available, ors_geometry, ors_matrix
-from .osrm import (OSRM_NAMES, OSRM_URLS, ROUTE_FINAL_S, ROUTE_HEDGE_S,
-                  _osrm_geometry_at, _osrm_matrix_at)
-from .util import hedged_first
+from .osrm import OSRM_NAMES, OSRM_URLS, ROUTE_FINAL_S, ROUTE_HEDGE_S, _osrm_geometry_at, _osrm_matrix_at
+from .http_hedge import hedged_first
 
 _MATRIX_CACHE = {}          # ключ(точки) -> (ts, durations, distances, provider)
 _MATRIX_TTL = 1800          # 30 минут: дорожная сеть не меняется так быстро

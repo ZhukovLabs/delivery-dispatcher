@@ -1,7 +1,7 @@
 """Рабочая матрица времени: дорожная + светофоры + часовые коэффициенты."""
 from .routing import routing_table
-from .state import ROAD_FACTOR
-from .util import haversine_km
+from ..state import ROAD_FACTOR
+from ..domain.geo import haversine_km
 
 def build_time_matrix(points, settings, k_homes=1):
     """Матрица времени в СЕКУНДАХ.

@@ -7,7 +7,7 @@ import uuid
 from itsdangerous import URLSafeTimedSerializer
 
 from .config import CFG, log
-from .db import _DB_SCHEMA, _db, _db_lock, _persist_meta
+from .adapters.sqlite_repo import _DB_SCHEMA, _db, _db_lock, _persist_meta
 from .state import STATE, _depot_view
 
 def load_state():

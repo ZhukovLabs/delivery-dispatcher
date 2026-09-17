@@ -5,8 +5,8 @@ from .planstate import _bump, _ev
 from .config import CFG, _now, log
 from .bot_flow import _bot_ask_kb, _bot_ask_text
 from .state import STATE, _home_point
-from .tgapi import _tg_answer_cb, _tg_edit_msg, _tg_send, _tg_send_kb
-from .util import haversine_km
+from .adapters.telegram import _tg_answer_cb, _tg_edit_msg, _tg_send, _tg_send_kb
+from .domain.geo import haversine_km
 
 _BOT_ASK_AFTER_S = 30   # столько секунд курьер стоит у адреса, прежде чем бот спросит
 

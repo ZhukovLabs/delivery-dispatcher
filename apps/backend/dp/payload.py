@@ -3,16 +3,15 @@ import threading
 import time
 
 from .config import CFG, _now
-from .db import _courier_day_stats, _history_today
-from .online import (ONLINE, ONLINE_WINDOW, _ONLINE_LOCK, _my_point,
-                     _plan_for)
-from .ors import ors_status
+from .adapters.sqlite_repo import _courier_day_stats, _history_today
+from .online import ONLINE, ONLINE_WINDOW, _ONLINE_LOCK, _my_point, _plan_for
+from .adapters.ors import ors_status
 from .bot_status import _courier_geo
 from .planstate import _bump, _ev
 from .shims import jsonify
-from .speed import _courier_speed, _speed_current_kmh
+from .adapters.speed import _courier_speed, _speed_current_kmh
 from .state import STATE, _home_point, _obj_point
-from .tgapi import TG_POS_TTL
+from .adapters.telegram import TG_POS_TTL
 from .users import _admin_users, _me
 
 # кэш базового пейлоада: (rev, myp) -> срез депо (без me/users)

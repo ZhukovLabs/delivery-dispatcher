@@ -8,7 +8,7 @@ import requests
 from .config import CFG, log
 from .bot_updates import _tg_handle_update
 from .state import STATE
-from .tgapi import _tg_api
+from .adapters.telegram import _tg_api
 
 def _tg_poll_loop():
     while True:

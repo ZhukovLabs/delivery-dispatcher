@@ -2,11 +2,12 @@
 import math
 import time
 
-from .config import log
+from ..config import log
 from .ors import ORS_STATE, _ors_available
 from .osrm import ROUTE_FINAL_S, ROUTE_HEDGE_S
 from .routing import _routing_providers
-from .util import haversine_km, hedged_first
+from ..domain.geo import haversine_km
+from .http_hedge import hedged_first
 
 _GEOM_CACHE = {}          # ключ(точки) -> (ts, geometry)
 _GEOM_TTL = 1800          # дороги за полчаса не меняются

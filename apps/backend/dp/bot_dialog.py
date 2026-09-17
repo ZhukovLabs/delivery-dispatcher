@@ -3,15 +3,15 @@ import time
 
 from .planstate import _invalidate_plan, _ev
 from .config import _now, log
-from .db import _persist_orders
+from .adapters.sqlite_repo import _persist_orders
 from .state import STATE
-from .tgapi import (TG_TEST_REDIRECT, _tg_answer_cb, _tg_edit_msg,
+from .adapters.telegram import (TG_TEST_REDIRECT, _tg_answer_cb, _tg_edit_msg,
                     _tg_send, _tg_send_kb)
 from .bot_dwell import _courier_out_orders
 from .bot_flow import (_CANCEL_REASONS, _bot_ask_kb, _bot_ask_text,
                        _bot_close_delivered, _bot_keep_rolling,
                        _pay_method_label, _pay_set, _tg_step_kb)
-from .util import _esc
+from .domain.text import _esc
 
 def _tg_callback(cb):
     """Нажатие инлайн-кнопки курьером: «доставил?» → «точно?» → закрытие.

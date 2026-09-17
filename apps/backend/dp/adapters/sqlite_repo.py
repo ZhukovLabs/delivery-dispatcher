@@ -6,8 +6,8 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
-from .config import CFG, _now, log
-from .state import STATE, _obj_point
+from ..config import CFG, _now, log
+from ..state import STATE, _obj_point
 
 # ---------- персистентность (SQLite) ----------
 

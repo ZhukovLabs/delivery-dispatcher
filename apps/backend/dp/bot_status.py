@@ -3,12 +3,12 @@ import time
 
 from .planstate import _bump, _invalidate_plan, _ev
 from .config import _now, log
-from .db import _persist_couriers
+from .adapters.sqlite_repo import _persist_couriers
 from .bot_dwell import (TG_GEO_AT_PLACE, TG_GEO_FRESH, _courier_out_orders)
-from .speed import _courier_speed, _speed_current_kmh
+from .adapters.speed import _courier_speed, _speed_current_kmh
 from .state import ROAD_FACTOR, STATE, _home_point
-from .tgapi import _tg_send
-from .util import haversine_km
+from .adapters.telegram import _tg_send
+from .domain.geo import haversine_km
 
 _AWAY_AUTO_KM = 0.5    # дальше этого от своей точки курьер «уехал» (без заказов)
 _AWAY_DWELL_S = 60     # непрерывно, столько секунд (глушит GPS-прыжок и «отошёл к машине»)

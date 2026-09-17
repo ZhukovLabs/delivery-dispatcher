@@ -1,8 +1,8 @@
 """Индивидуальная скорость курьера: замер по гео, фоллбек по доставкам."""
-from .config import _now
-from .db import _db, _db_lock, _speed_add
-from .state import ROAD_FACTOR, STATE
-from .util import haversine_km
+from ..config import _now
+from .sqlite_repo import _db, _db_lock, _speed_add
+from ..state import ROAD_FACTOR, STATE
+from ..domain.geo import haversine_km
 
 # ---------- индивидуальная скорость курьера ----------
 # Замер по гео: пары СГЛАЖЕННЫХ (медиана) точек live-локации с dt >= 15 c,

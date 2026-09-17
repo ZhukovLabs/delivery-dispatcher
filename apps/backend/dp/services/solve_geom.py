@@ -1,10 +1,10 @@
 """Прикрепление геометрии к готовому плану (для карты)."""
 from concurrent.futures import ThreadPoolExecutor
 
-from .config import log
-from .geometry import routing_geometry
-from .state import STATE
-from .util import haversine_km
+from ..config import log
+from ..adapters.geometry import routing_geometry
+from ..state import STATE
+from ..domain.geo import haversine_km
 
 def _attach_geometry(plan):
     """Геометрия маршрутов (для линий на карте), по точке выдачи курьера.

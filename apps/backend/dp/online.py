@@ -4,10 +4,10 @@ import time
 from datetime import datetime, timedelta
 
 from .config import _now
-from .db import _db, _db_lock
+from .adapters.sqlite_repo import _db, _db_lock
 from .shims import session
-from .solve_geom import _attach_geometry
-from .solve_model import _deadline_rel_min
+from .services.solve_geom import _attach_geometry
+from .domain.model import _deadline_rel_min
 from .bot_dwell import _courier_has_out
 from .bot_status import _courier_geo
 from .state import STATE, _home_point
