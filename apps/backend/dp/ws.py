@@ -62,10 +62,15 @@ def notify_changed(geo: bool = False) -> None:
     """
     global _dirty, _geo
     with _notify_lock:
+        # классификация накопленной грязи: hard-событие не понижается до
+        # гео-тика последним пришедшим (_geo = geo ронял флаг solving=false
+        # конца расчёта в лёгкий тик — UI зависал на «Идёт расчёт»).
+        # полный флеш будет только если ВСЁ накопленное — гео.
+        if not _dirty:
+            _geo = geo
+        else:
+            _geo = _geo and geo
         _dirty = True
-        # классификация «только гео» живёт до hard-события: оно снимает
-        # ограничение — предстоящая отправка и так понесёт всё состояние
-        _geo = geo
 
 
 async def _flusher() -> None:

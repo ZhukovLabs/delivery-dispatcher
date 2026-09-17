@@ -735,10 +735,13 @@ def plan_pin():
                                      "(лимит заказов/заездов исчерпан) — закрепление "
                                      "отменено"}), 400
         log.info("pin: %s -> %s", oid, courier["name"])
+        # флаг снят до сборки ответа: он несёт solving=false (см. /api/solve)
+        STATE["solving"][opid] = False
         return _payload()
     finally:
-        STATE["solving"][opid] = False
-        _bump()
+        if STATE["solving"].get(opid):
+            STATE["solving"][opid] = False
+            _bump()
 
 
 @r.post("/api/plan/help")
@@ -771,10 +774,13 @@ def plan_help():
         except (ValueError, RuntimeError) as e:
             return jsonify({"error": str(e)}), 400
         log.info("plan help: %s -> точка %s", courier["name"], point["name"])
+        # флаг снят до сборки ответа: он несёт solving=false (см. /api/solve)
+        STATE["solving"][pid] = False
         return _payload()
     finally:
-        STATE["solving"][pid] = False
-        _bump()
+        if STATE["solving"].get(pid):
+            STATE["solving"][pid] = False
+            _bump()
 
 
 _PAY_GEO_FRESH_S = 15 * 60  # живая геопозиция старше 15 минут — уже не «текущая»
@@ -1133,10 +1139,14 @@ def solve():
         counts = ", ".join(f'{r["courier_name"]}: {r["count"]}'
                            for r in plan["routes"]) or "нечего везти"
         _ev("disp", f"рассчитал развозку — {counts}")
+        # снимаем флаг ДО сборки ответа: он несёт solving=false и сам
+        # разблокирует UI запустившего расчёт (WS-бродкаст — резервный путь)
+        STATE["solving"][myp] = False
         return _payload()
     finally:
-        STATE["solving"][myp] = False
-        _bump()
+        if STATE["solving"].get(myp):
+            STATE["solving"][myp] = False
+            _bump()
 
 
 def _compute_plan(mode="auto", advice=True, force=None, point_id=None):
