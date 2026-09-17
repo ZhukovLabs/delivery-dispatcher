@@ -477,7 +477,7 @@ def _courier_day_stats(point_id=None, day=None):
     try:
         with _db_lock, _db() as c:
             rows = c.execute(
-                f"SELECT courier, outcome, closed_at, out_at, payment "
+                f"SELECT courier, outcome, closed_at, out_at, payment, pay_amount "
                 f"FROM history WHERE {where}", args).fetchall()
             km_by_cid = {r["courier_id"]: r["geo_m"] or 0 for r in c.execute(
                 "SELECT courier_id, geo_m FROM speed_day WHERE day = ?",
@@ -488,7 +488,7 @@ def _courier_day_stats(point_id=None, day=None):
 
     def rec(name):
         return st.setdefault(name, {"taken": 0, "delivered": 0, "cancelled": 0,
-                                    "pay_cash": 0, "pay_card": 0,
+                                    "pay_cash": 0, "pay_card": 0, "revenue": 0.0,
                                     "first_out": "", "last_close": ""})
 
     for r in rows:
@@ -505,6 +505,11 @@ def _courier_day_stats(point_id=None, day=None):
             d["pay_cash"] += 1
         elif r["payment"] == "card":
             d["pay_card"] += 1
+        if r["payment"] in ("cash", "card"):
+            try:
+                d["revenue"] += float(r["pay_amount"] or 0)
+            except (TypeError, ValueError):
+                pass
         if r["out_at"] and (not d["first_out"] or r["out_at"] < d["first_out"]):
             d["first_out"] = r["out_at"]
         if r["closed_at"] > d["last_close"]:
@@ -539,6 +544,7 @@ def _courier_day_stats(point_id=None, day=None):
                     "taken": d["taken"], "delivered": d["delivered"],
                     "cancelled": d["cancelled"],
                     "pay_cash": d["pay_cash"], "pay_card": d["pay_card"],
+                    "revenue": round(d["revenue"], 2),
                     "work_min": work_min})
     out.sort(key=lambda x: (-x["delivered"], -x["taken"], x["courier"]))
     return {"day": day, "rows": out}
