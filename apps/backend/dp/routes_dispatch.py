@@ -1159,8 +1159,6 @@ def _compute_plan(mode="auto", advice=True, force=None, point_id=None):
     if mode in ("now", "split"):
         STATE["advice_modes"][point_id] = mode
     mode = STATE["advice_modes"].get(point_id) or mode
-    plan_split = solve_plan(force=force, point_id=point_id)
-    advice_obj = None
     mine = [c for c in STATE["couriers"] if _obj_point(c) == point_id]
     away = [c for c in mine
             if c["status"] == "away" and int(c.get("back_min", 15) or 0) > 0]
@@ -1170,13 +1168,23 @@ def _compute_plan(mode="auto", advice=True, force=None, point_id=None):
     scenario = away and has_base and ready_n >= 2
     if not scenario:
         STATE["advice_modes"].pop(point_id, None)  # выбирать больше не из чего
+    advice_obj = None
     plan_now = None
     if (advice or mode == "now") and scenario:
+        # сценарии независимы — считаем параллельно (замер на прод-ноуте:
+        # 22 заказа, 3.0с → 1.5с; OR-Tools отпускает GIL)
+        with ThreadPoolExecutor(2) as ex:
+            f_split = ex.submit(solve_plan, force=force, point_id=point_id)
+            f_now = ex.submit(solve_plan, include_away=False,
+                              with_geometry=False, force=force,
+                              point_id=point_id)
+        plan_split = f_split.result()
         try:
-            plan_now = solve_plan(include_away=False, with_geometry=False,
-                                  force=force, point_id=point_id)
+            plan_now = f_now.result()
         except (ValueError, RuntimeError):
             plan_now = None
+    else:
+        plan_split = solve_plan(force=force, point_id=point_id)
     if plan_now is not None:
         g_last = plan_now["last_delivery_min"] - plan_split["last_delivery_min"]
         g_avg = plan_now["avg_delivery_min"] - plan_split["avg_delivery_min"]
