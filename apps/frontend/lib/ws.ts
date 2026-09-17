@@ -22,6 +22,7 @@ const WS_URL =
 
 let socket: Socket | null = null;
 let token: string | null = null;
+let offReconnect: (() => void) | null = null;
 
 /* Статус соединения для индикатора в шапке */
 export type WsConnState = "connecting" | "online" | "offline";
@@ -38,6 +39,21 @@ export function subscribeConn(fn: (s: WsConnState) => void): () => void {
 function setConn(s: WsConnState): void {
   connState = s;
   connListeners.forEach((fn) => fn(s));
+}
+
+let polling = false;
+const pollListeners = new Set<(on: boolean) => void>();
+
+export function subscribePolling(fn: (on: boolean) => void): () => void {
+  pollListeners.add(fn);
+  fn(polling);
+  return () => { pollListeners.delete(fn); };
+}
+
+function setPolling(on: boolean): void {
+  if (polling === on) return;
+  polling = on;
+  pollListeners.forEach((fn) => fn(on));
 }
 
 export function setWsToken(t: string | null): void {
@@ -67,14 +83,25 @@ export function getSocket(): Socket {
     auth: (cb) => cb(authPayload()),
     transports: ["websocket", "polling"],
     reconnection: true,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 30000,
+    randomizationFactor: 0.5,
   });
-  socket.on("connect", () => setConn("online"));
+  socket.on("connect", () => {
+    setPolling(false);
+    setConn("online");
+  });
   socket.on("disconnect", () => setConn("offline"));
   socket.on("connect_error", (err: Error & { message?: string }) => {
     setConn("offline");
     // протухший токен (сессия умерла, а cookie ещё жив?) — перевыпустим
     if (/unauthorized|token|auth/i.test(err.message || "")) token = null;
   });
+  const onAttempt = (attempt: number) => {
+    if (attempt >= 5 && typeof WebSocket === "undefined") setPolling(true);
+  };
+  socket.io.on("reconnect_attempt", onAttempt);
+  offReconnect = () => { socket?.io.off("reconnect_attempt", onAttempt); };
   return socket;
 }
 
@@ -83,9 +110,12 @@ export function joinDepot(pointId: string): void {
 }
 
 export function dropSocket(): void {
+  offReconnect?.();
+  offReconnect = null;
   socket?.removeAllListeners();
   socket?.disconnect();
   socket = null;
   token = null;
+  setPolling(false);
   setConn("connecting");
 }

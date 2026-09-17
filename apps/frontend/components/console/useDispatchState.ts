@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, fetchApi, type AppState, type CourierPos, type CourierGeo } from "@/lib/api";
-import { ensureWsToken, getSocket } from "@/lib/ws";
+import { dropSocket, ensureWsToken, getSocket, subscribePolling } from "@/lib/ws";
 
 /* ---------- данные консоли: кэш + живые обновления + тикер возраста + тема ----------
    План считается ТОЛЬКО по кнопке «Рассчитать». Живые обновления (несколько
@@ -87,7 +87,7 @@ export function useDispatchState(
       if (!s.connected) s.connect();
       off = () => { s.off("state", onState); s.off("geo", onGeo); s.off("connect", onConnect); };
     })();
-    return () => { cancelled = true; off?.(); };
+    return () => { cancelled = true; off?.(); dropSocket(); };
   }, [qc, live]);
 
   const st = stData ?? null;
@@ -102,6 +102,16 @@ export function useDispatchState(
     qc.setQueryData(["state"], s);
   }, [qc]);
   const refresh = useCallback(async () => { await qc.invalidateQueries({ queryKey: ["state"] }); }, [qc]);
+
+  useEffect(() => {
+    let iv: ReturnType<typeof setInterval> | null = null;
+    const stop = () => { if (iv) { clearInterval(iv); iv = null; } };
+    const off = subscribePolling((on) => {
+      if (on && !iv) iv = setInterval(() => { if (!document.hidden) void refresh(); }, 10_000);
+      else if (!on) stop();
+    });
+    return () => { off(); stop(); };
+  }, [refresh]);
 
   const [tick, setTick] = useState(0); // ежеминутное обновление возраста/бейджей
   const [dark, setDark] = useState(false);
