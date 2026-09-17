@@ -14,13 +14,29 @@ export function useDispatchState() {
   const qc = useQueryClient();
   const { data: stData, error: stateErr, isPending: stLoading } = useQuery({
     queryKey: ["state"],
-    queryFn: () => api<AppState>("/api/state"),
+    // пока ответ летел, кэш мог уйти вперёд (WS-бродкаст): не откатываем —
+    // дотягиваемся до актуальной версии парой повторов, иначе отдаём кэш
+    queryFn: async () => {
+      let s = await api<AppState>("/api/state");
+      const cur = qc.getQueryData<AppState>(["state"]);
+      if (cur?.rev != null && (s.rev ?? 0) < cur.rev) {
+        for (let i = 0; i < 2 && (s.rev ?? 0) < cur.rev; i++) {
+          await new Promise(r => setTimeout(r, 250));
+          s = await api<AppState>("/api/state");
+        }
+        if ((s.rev ?? 0) < (cur.rev ?? 0)) return cur;
+      }
+      return s;
+    },
     staleTime: 10000,
     retry: 1,
     refetchOnWindowFocus: "always",
   });
 
-  // живые обновления: сервер пушит payload целиком — кладём его в кэш напрямую
+  // живые обновления: сервер пушит payload целиком. Применяем ТОЛЬКО более
+  // свежую версию (rev строго больше) — медленный REST-ответ или реплей
+  // старого бродкаста больше не может откатить состояние назад; пока летит
+  // оптимистичный патч (rev локально поднят), бродкасты его не затирают
   useEffect(() => {
     let off: (() => void) | null = null;
     let cancelled = false;
@@ -31,8 +47,10 @@ export function useDispatchState() {
       // сессионные поля не затираем, иначе админские вкладки гаснут
       // на первом же живом обновлении
       const onState = (d: AppState) => {
-        qc.setQueryData<AppState>(["state"], (old) =>
-          old ? { ...d, me: old.me, users: old.users, my_point: old.my_point } : d);
+        qc.setQueryData<AppState>(["state"], (old) => {
+          if (old && (d.rev ?? 0) <= (old.rev ?? 0)) return old;
+          return { ...d, me: old?.me, users: old?.users, my_point: old?.my_point };
+        });
       };
       const onConnect = () => { void qc.invalidateQueries({ queryKey: ["state"] }); }; // подтянуть пропущенное за простой
       s.on("state", onState);

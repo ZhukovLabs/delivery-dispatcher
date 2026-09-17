@@ -143,11 +143,21 @@ export default function Console() {
   };
 
   /* ---------- мутации с оптимистичным патчем ---------- */
+  // даблклик не должен слать вторую мутацию того же действия: пока запрос
+  // в полёте, повтор по тому же method+path игнорируем
+  const inflight = useRef(new Set<string>());
   const mutate = async (method: string, path: string, body?: Record<string, unknown>) => {
+    const key = method + " " + path;
+    if (inflight.current.has(key)) return;
+    inflight.current.add(key);
     const opt = st ? optimisticFor(method, path, body as Record<string, any> | undefined) : undefined;
-    if (opt && st) setSt(opt(st));
+    // оптимистичный патч поднимает локальный rev: WS-бродкасты «прошлого»
+    // (снимок до применения мутации) его не перезапишут; ответ сервера
+    // (setSt) применится всегда и вернёт rev к серверному
+    if (opt && st) setSt({ ...opt(st), rev: (st.rev ?? 0) + 1000 });
     try { setSt(await api<AppState>(path, method, body)); }
     catch (e) { showToast((e as Error).message, true); if (opt) void refresh(); }
+    finally { inflight.current.delete(key); }
   };
 
   /* ---------- действия ---------- */
