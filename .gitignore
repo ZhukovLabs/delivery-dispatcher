@@ -9,3 +9,7 @@ houses_cache.json
 
 .vercel/
 apps/backend/dispatcher.db.bak-*
+
+apps/backend/dispatcher.db-shm
+apps/backend/dispatcher.db-wal
+.serena/
