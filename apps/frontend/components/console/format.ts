@@ -21,7 +21,7 @@ export type HistData = { rows?: HistRow[]; summary?: Record<string, number | nul
 /** Статистика курьера за день из /api/stats/couriers. */
 export type CourierDayRow = {
   courier: string; km: number; taken: number; delivered: number; cancelled: number;
-  pay_cash: number; pay_card: number; work_min: number | null;
+  revenue?: number; pay_cash: number; pay_card: number; work_min: number | null;
 };
 export type CourierDayStats = { day: string; rows: CourierDayRow[] } | null;
 

@@ -301,7 +301,7 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
         <div className="cs-table" role="table" aria-label="Статистика курьеров за сегодня">
           <div className="cs-row cs-head" role="row">
             <span>Имя</span><span>км</span><span>взяли</span><span>доставили</span>
-            <span>отказы</span><span>наличные</span><span>карта</span><span>на работе</span>
+            <span>отказы</span><span>выручка</span><span>наличные</span><span>карта</span><span>на работе</span>
           </div>
           {courStats!.rows.map(c => (
             <div className="cs-row" role="row" key={c.courier}>
@@ -310,6 +310,7 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
               <span>{c.taken}</span>
               <span><b>{c.delivered}</b></span>
               <span className={c.cancelled ? "cs-bad" : ""}>{c.cancelled}</span>
+              <span>{c.revenue ? c.revenue.toFixed(2) : "–"}</span>
               <span>{c.pay_cash || "–"}</span>
               <span>{c.pay_card || "–"}</span>
               <span>{c.work_min != null ? `${Math.floor(c.work_min / 60)} ч ${String(c.work_min % 60).padStart(2, "0")} мин` : "–"}</span>

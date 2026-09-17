@@ -14,7 +14,7 @@ type Row = {
   pay_amount?: number | null;
 };
 type Route = { courier_name: string; status: string; stops: string[] };
-type CourierStat = { courier: string; km: number; taken: number; delivered: number; cancelled: number; pay_cash: number; pay_card: number; work_min: number | null };
+type CourierStat = { courier: string; km: number; taken: number; delivered: number; cancelled: number; revenue?: number; pay_cash: number; pay_card: number; work_min: number | null };
 type Data = {
   rows: Row[];
   summary: { delivered: number; cancelled: number; avg_cycle_min: number | null;
@@ -104,7 +104,7 @@ export default function ReportDayPage() {
       {(d.courier_stats?.length || 0) > 0 ? (
         <table>
           <thead>
-            <tr><th>Имя</th><th>км</th><th>Взяли</th><th>Доставили</th><th>Отказы</th><th>Наличные</th><th>Картой</th><th>На работе</th></tr>
+            <tr><th>Имя</th><th>км</th><th>Взяли</th><th>Доставили</th><th>Отказы</th><th>Выручка</th><th>Наличные</th><th>Картой</th><th>На работе</th></tr>
           </thead>
           <tbody>
             {d.courier_stats!.map((c) => (
@@ -114,6 +114,7 @@ export default function ReportDayPage() {
                 <td>{c.taken}</td>
                 <td><b>{c.delivered}</b></td>
                 <td>{c.cancelled}</td>
+                <td>{c.revenue ? c.revenue.toFixed(2) : "–"}</td>
                 <td>{c.pay_cash || "–"}</td>
                 <td>{c.pay_card || "–"}</td>
                 <td>{c.work_min != null ? `${Math.floor(c.work_min / 60)} ч ${String(c.work_min % 60).padStart(2, "0")} мин` : "–"}</td>

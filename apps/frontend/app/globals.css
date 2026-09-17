@@ -609,10 +609,12 @@ ol.stops li.dragging{opacity:.4}
 .wk-cour-n{color:var(--ink);white-space:nowrap;font-variant-numeric:tabular-nums}
 .wk-cour-cyc{color:var(--mut);white-space:nowrap;font-variant-numeric:tabular-nums}
 .cs-table{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;font-size:12.5px}
-.cs-row{display:grid;grid-template-columns:minmax(90px,1.6fr) repeat(7,minmax(34px,1fr));align-items:center;padding:6px 10px;gap:4px;font-variant-numeric:tabular-nums}
+.cs-row{display:grid;grid-template-columns:minmax(110px,1.8fr) repeat(8,minmax(34px,1fr));align-items:center;padding:6px 10px;gap:4px 6px;font-variant-numeric:tabular-nums}
 .cs-row+.cs-row{border-top:1px solid var(--line)}
+.cs-row>span{min-width:0;overflow-wrap:anywhere;line-height:1.35}
+.cs-row.cs-head span{white-space:nowrap}
 .cs-head{background:var(--panel2);color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em}
-.cs-name{display:inline-flex;align-items:center;gap:6px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cs-name{display:inline-flex;align-items:center;gap:6px;font-weight:600;min-width:0;overflow-wrap:anywhere}
 .cs-name svg{color:var(--mut);flex-shrink:0}
 .cs-row.cs-head span:first-child{text-transform:none}
 .cs-bad{color:#b91c1c;font-weight:700}
