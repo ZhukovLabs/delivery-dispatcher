@@ -711,6 +711,7 @@ def plan_pin():
         order["pin"] = ""
         _persist_orders()
         return jsonify({"error": "Расчёт развозки уже идёт — подождите окончания"}), 409
+    _bump()  # остальные диспетчеры депо сразу видят «идёт расчёт»
     try:
         try:
             plan = solve_plan(point_id=opid)
@@ -759,6 +760,7 @@ def plan_help():
     helpers = {cid: pid} if _home_point(courier)["id"] != pid else {}
     if not _begin_solving(pid):
         return jsonify({"error": "Расчёт развозки уже идёт — подождите окончания"}), 409
+    _bump()  # остальные диспетчеры депо сразу видят «идёт расчёт»
     try:
         try:
             solve_plan(helpers=helpers, point_id=pid)
