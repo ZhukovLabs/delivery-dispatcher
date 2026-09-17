@@ -204,7 +204,8 @@ export default function Console() {
   const connRef = useRef<WsConnState>("connecting");
   useEffect(() => { connRef.current = conn; }, [conn]);
   const runSolving = async (fn: () => Promise<void>) => {
-    if (solving || !st) return;
+    // блокируем и по серверному флагу: расчёт запустил другой диспетчер депо
+    if (solving || !st || st.solving) return;
     setSolving(true);
     let keepOverlay = false;
     try {
@@ -431,8 +432,8 @@ export default function Console() {
           </div>
 
           <div className="solvebox">
-            <button className="solve" disabled={!!miss || solving} onClick={() => void solve()}>
-              {solving ? "⏳ Считаю…" : "⚡ Рассчитать развозку"}
+            <button className="solve" disabled={!!miss || solving || !!st?.solving} onClick={() => void solve()}>
+              {(solving || st?.solving) ? "⏳ Считаю…" : "⚡ Рассчитать развозку"}
             </button>
             <div className="solve-hint">{miss || ""}</div>
           </div>
