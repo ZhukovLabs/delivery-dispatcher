@@ -44,6 +44,8 @@ html.dark .login-card input{background:#141c29;border-color:var(--line2);color:v
 .wsdot.ws-wait .wsdot-dot{background:#e6b450;animation:wsPulse 1s ease-in-out infinite}
 .wsdot.ws-off{color:#e39a9a;border-color:#4d2f31}
 .wsdot.ws-off .wsdot-dot{background:#e8482b;animation:wsPulse 1s ease-in-out infinite}
+.wsdot.sync-chip{color:#e6d3a3;border-color:#4a4029}
+.wsdot.sync-chip .wsdot-dot{background:#e6b450}
 @keyframes wsPulse{50%{opacity:.35}}
 
 /* полноэкранная блокировка на время расчёта развозки */

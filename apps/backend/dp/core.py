@@ -316,23 +316,56 @@ _DB_MIGRATIONS = [
 ]
 
 
-@contextmanager
-def _db():
-    conn = sqlite3.connect(_db_path, timeout=10)
+_db_conn: sqlite3.Connection | None = None
+
+
+def _db_connect():
+    """Одно соединение на процесс: WAL + synchronous=NORMAL.
+
+    Раньше каждый вызов _db() открывал файл заново, прогонял 7 CREATE TABLE
+    и 19 PRAGMA и делал commit с полным fsync (journal=DELETE) — на слабом
+    CPU под вечерней нагрузкой это складывалось в секунды на мутацию.
+    WAL пишет без fsync на каждый коммит, а чтения больше не ждут писателей.
+    """
+    global _db_conn
+    if _db_conn is not None:
+        return _db_conn
+    conn = sqlite3.connect(_db_path, timeout=10, check_same_thread=False)
     try:
         conn.row_factory = sqlite3.Row
-        conn.executescript(_DB_SCHEMA)  # идемпотентно; переживает удаление файла на ходу
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.executescript(_DB_SCHEMA)  # идемпотентно
         for table, column, ddl in _DB_MIGRATIONS:
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
             if column not in cols:
                 conn.execute(ddl)
+        conn.commit()
+    except BaseException:
+        conn.close()
+        raise
+    _db_conn = conn
+    return conn
+
+
+@contextmanager
+def _db():
+    global _db_conn
+    conn = _db_connect()
+    try:
         yield conn
         conn.commit()
+    except sqlite3.DatabaseError:
+        # файл удалили/сломали на ходу — закрываем, следующий вызов откроет
+        # заново и пересоздаст схему (как раньше это делал executescript)
+        try:
+            conn.close()
+        finally:
+            _db_conn = None
+        raise
     except Exception:
         conn.rollback()
         raise
-    finally:
-        conn.close()
 
 
 def _persist_meta():
@@ -1005,11 +1038,55 @@ def _geom_key(points):
     return tuple((round(p["lat"], 5), round(p["lng"], 5)) for p in points)
 
 
+def _simplify_poly(points, tol_m=10.0, max_pts=1200):
+    """Дуглас-Пекер в метрах: трасса для карты в разы короче без визуальной
+    разницы (на зуме города 10 м — доля пикселя). Концевые точки сохраняем
+    всегда; если не влезли в лимит — ужимаем грубее (tol растёт в 2 раза).
+    """
+    n = len(points)
+    if n <= 16:
+        return points
+    while True:
+        kx = 111320.0 * max(0.2, math.cos(math.radians(points[0][0])))
+        xs = [p[1] * kx for p in points]
+        ys = [p[0] * 111320.0 for p in points]
+        keep = [False] * n
+        keep[0] = keep[n - 1] = True
+        stack = [(0, n - 1)]
+        while stack:
+            a, b = stack.pop()
+            if b <= a + 1:
+                continue
+            ax, ay = xs[a], ys[a]
+            dx, dy = xs[b] - ax, ys[b] - ay
+            seg = dx * dx + dy * dy
+            best, bi = -1.0, -1
+            for i in range(a + 1, b):
+                if seg <= 1e-9:
+                    d2 = (xs[i] - ax) ** 2 + (ys[i] - ay) ** 2
+                else:
+                    t = (((xs[i] - ax) * dx + (ys[i] - ay) * dy) / seg)
+                    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+                    d2 = (xs[i] - ax - t * dx) ** 2 + (ys[i] - ay - t * dy) ** 2
+                if d2 > best:
+                    best, bi = d2, i
+            if best > tol_m * tol_m:
+                keep[bi] = True
+                stack.append((a, bi))
+                stack.append((bi, b))
+        out = [p for p, k in zip(points, keep) if k]
+        if len(out) <= max_pts or tol_m > 400.0:
+            return out
+        tol_m *= 2.0
+
+
 def routing_geometry(points):
     """Геометрия маршрута тем же каскадом, что и матрицы. None при сбое всех.
 
     Успешные ответы кэшируются по набору точек (30 мин): повторный расчёт
     того же заезда и клики по курьеру на карте не ходят в сеть лишний раз.
+    Результат упрощается до ~10 м: трассы ORS бывают плотными, и копить их
+    в out_geom курьера (растёт с каждой выдачей) незачем.
     """
     key = _geom_key(points)
     hit = _GEOM_CACHE.get(key)
@@ -1017,7 +1094,7 @@ def routing_geometry(points):
         return hit[1]
     won = hedged_first(_routing_providers("geometry", points),
                        hedge_s=ROUTE_HEDGE_S, final_wait=ROUTE_FINAL_S)
-    geom = won[1] if won else None
+    geom = _simplify_poly(won[1]) if won and won[1] else None
     if geom:
         if len(_GEOM_CACHE) >= _GEOM_CACHE_MAX:  # простая вытесняющая чистка
             oldest = min(_GEOM_CACHE, key=lambda k: _GEOM_CACHE[k][0])
@@ -2719,18 +2796,66 @@ def _ev(actor, text):
     _bump()
 
 
+_payload_base_cache: dict = {}   # (rev, myp) -> базовый payload депо (без me/users)
+_payload_cache_lock = threading.Lock()
+
+
+def _geo_payload():
+    """Лёгкий срез движения (сотни байт вместо полного состояния).
+
+    Тик движения курьера каждую секунду тянет только позицию, скорость и
+    гео-оценки возврата — заказы, планы и трассы приезжают с событиями.
+    """
+    now = time.time()
+    out = []
+    for c in STATE["couriers"]:
+        pos = STATE["tg_pos"].get(c.get("tg_chat_id") or "")
+        item = {"id": c["id"]}
+        if pos and now - pos["ts"] < TG_POS_TTL:
+            item["pos"] = {"lat": pos["lat"], "lng": pos["lng"],
+                           "ts": pos["ts"], "live": bool(pos.get("live")),
+                           "acc": pos.get("acc") or 0}
+            cur = _speed_current_kmh(pos, now)
+            if cur is not None:
+                item["cur_kmh"] = cur
+        geo = _courier_geo(c, _home_point(c), now)
+        if geo:
+            item["geo"] = geo
+        if len(item) > 1:
+            out.append(item)
+    return {"t": now, "couriers": out}
+
+
 def _payload(me=None, myp=None):
     """Ответ после мутации: состояние + квота ORS + счётчики дня + текущий пользователь.
 
     me/myp задаются явно при WS-бродкасте (там нет сессии запроса):
-    payload конкретного депо для всех его подписчиков.
+    payload конкретного депо для всех его подписчиков. База payload'а
+    кэшируется по (rev, депо): мутация собирает её для ответа, а хаб через
+    дебаунс переиспользует для бродкаста — на слабом CPU двойная сборка
+    заметна.
     """
     me = _me() if me is None else me
-    now = time.time()
     if myp is None:
         myp = _my_point() if me else ""
     else:
         myp = myp or ""
+    key = (STATE.get("rev", 0), myp)
+    with _payload_cache_lock:
+        base = _payload_base_cache.get(key)
+    if base is None:
+        base = _build_payload_base(myp)
+        with _payload_cache_lock:
+            if len(_payload_base_cache) > 6:
+                _payload_base_cache.clear()  # рев движется — старые не нужны
+            _payload_base_cache[key] = base
+    return jsonify({**base, "me": me, "my_point": myp,
+                    "users": _admin_users() if me and me["is_admin"] else []})
+
+
+def _build_payload_base(myp):
+    """Состояние депо для ответов и бродкастов (без пользователя сессии)."""
+    now = time.time()
     couriers = []
     for c in STATE["couriers"]:
         cc = dict(c)
@@ -2799,9 +2924,7 @@ def _payload(me=None, myp=None):
     return jsonify({**st, "couriers": couriers,
                     "tg": {"bot": STATE["tg_bot"], "seen": seen},
                     "ors": ors_status(), "today": _history_today(point_id=myp),
-                    "cfg": {"tg": bool(CFG["tg_bot_token"])},
-                    "me": me, "my_point": myp,
-                    "users": _admin_users() if me and me["is_admin"] else []})
+                    "cfg": {"tg": bool(CFG["tg_bot_token"])}})
 
 
 # ---------- live-рассылка: WS-хаб (socket.io) вместо long-poll /api/rev ----------

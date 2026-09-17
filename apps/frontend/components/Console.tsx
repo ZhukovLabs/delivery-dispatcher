@@ -151,10 +151,12 @@ export default function Console() {
   // в полёте, повтор по тому же method+path+body игнорируем. Тело — часть
   // ключа: выдача второму курьеру — другое действие, её нельзя глотать
   const inflight = useRef(new Set<string>());
+  const [syncN, setSyncN] = useState(0); // летящие мутации — индикатор в шапке
   const mutate = async (method: string, path: string, body?: Record<string, unknown>) => {
     const key = method + " " + path + (body === undefined ? "" : " " + JSON.stringify(body));
     if (inflight.current.has(key)) return;
     inflight.current.add(key);
+    setSyncN(n => n + 1);
     const opt = st ? optimisticFor(method, path, body as Record<string, any> | undefined) : undefined;
     if (opt) livePatches.current.set(key, opt);
     try {
@@ -162,7 +164,7 @@ export default function Console() {
       setSt(await api<AppState>(path, method, body));
     }
     catch (e) { showToast((e as Error).message, true); if (opt) void refresh(); }
-    finally { livePatches.current.delete(key); inflight.current.delete(key); }
+    finally { livePatches.current.delete(key); inflight.current.delete(key); setSyncN(n => n - 1); }
   };
 
   /* ---------- действия ---------- */
@@ -397,7 +399,7 @@ export default function Console() {
       <TopBar
         st={st} workPoint={workPoint} firstPid={firstPid} onWorkPoint={onWorkPoint}
         undoLen={undoLen} lastLabel={lastLabel} onUndo={() => void doUndo()}
-        dark={dark} onTheme={applyTheme}
+        dark={dark} onTheme={applyTheme} syncing={syncN > 0}
         onHelp={() => setHelpOpen(true)}
         onProfile={() => { setSheetTab("prof"); setSheetOpen(true); }}
       />

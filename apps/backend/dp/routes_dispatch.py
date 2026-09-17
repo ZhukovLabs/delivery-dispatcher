@@ -22,8 +22,8 @@ from .core import (CFG, MAX_POINTS, PALETTE, STATE, STATUSES, _approach_map,
                    _my_point, _now, _obj_point, _payload, _persist_couriers,
                    _persist_meta, _persist_orders, _plan_for, _plural,
                    _tg_callback, _tg_handle_update, _tg_send, _valid_latlng,
-                    build_time_matrix, haversine_km, log, routing_geometry,
-                    solve_plan)
+                     build_time_matrix, haversine_km, log, routing_geometry,
+                     solve_plan, _simplify_poly)
 from .geocode import reverse_geocode
 from .shims import _json, flaskish, jsonify, request, send_file, session
 
@@ -631,7 +631,9 @@ def _patch_plan_after_assign(oids, cid=None):
                 if last_idx >= 0:
                     out_geom.extend(geom[:last_idx + 1])
     if out_geom:
-        courier["out_geom"] = (courier.get("out_geom") or []) + out_geom
+        # стыки упрощённых сегментов дают дубли точек — ужимаем слитую трассу
+        courier["out_geom"] = _simplify_poly(
+            (courier.get("out_geom") or []) + out_geom)
     for r in plan["routes"]:
         for tr in r.get("trips", []):
             before = len(tr["stops"])

@@ -17,23 +17,28 @@ import time
 
 import socketio
 
-from .core import STATE, _db, _db_lock, _payload, _points_ids
+from .core import STATE, _db, _db_lock, _geo_payload, _payload, _points_ids
 
 log = logging.getLogger("dispatcher")
 
-# in-memory broker: один процесс — STATE всё равно в памяти
-sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
+# in-memory broker: один процесс — STATE всё равно в памяти.
+# ping 15/60 (вместо дефолтных 25/20): сервер за Tailscale Funnel (релей),
+# короткие затыки сети не должны рвать сокет — восстанавливать дороже.
+sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*",
+                           ping_interval=15, ping_timeout=60)
 
 _loop: asyncio.AbstractEventLoop | None = None
 _notify_lock = threading.Lock()
 _dirty = False
 _geo = False  # грязь только от гео-тика движения (не событие)
 _last_flush = 0.0
+_last_full_flush = 0.0  # последнее ПОЛНОЕ состояние (гео-тики его не обновляют)
 _flusher_started = False
 _sessions: dict = {}  # sid → {"uid", "point"} — AsyncServer не хранит environ
 
 _DEBOUNCE_S = 0.15
 _GEO_MIN_INTERVAL_S = 1.0  # чистое движение шлём не чаще раза в секунду
+_GEO_FULL_RESYNC_S = 60.0  # …но раз в минуту движение догоняется полным состоянием
 _SESSION_RECHECK_S = 60.0   # раз в минуту сверяем пользователей открытых сокетов
 _next_recheck = 0.0
 
@@ -64,8 +69,15 @@ def notify_changed(geo: bool = False) -> None:
 
 
 async def _flusher() -> None:
-    """Коалесер: события — после дебаунса, чистое движение — не чаще 1/с."""
-    global _dirty, _geo, _last_flush, _next_recheck
+    """Коалесер: события — после дебаунса, чистое движение — не чаще 1/с.
+
+    Тик движения не собирает полное состояние (~100 КБ на депо каждую
+    секунду — тяжело и для ноутбука, и для релея Funnel): подписчикам летит
+    лёгкое событие «geo» (позиции/скорости/оценки), а раз в минуту
+    движение всё равно догоняется полным снапшотом — самовосстановление,
+    если лёгкий тик потерялся.
+    """
+    global _dirty, _geo, _last_flush, _last_full_flush, _next_recheck
     while True:
         await asyncio.sleep(_DEBOUNCE_S)
         now = time.monotonic()
@@ -78,13 +90,19 @@ async def _flusher() -> None:
         with _notify_lock:
             if not _dirty:
                 continue
-            if _geo and time.monotonic() - _last_flush < _GEO_MIN_INTERVAL_S:
+            geo_only = _geo
+            if geo_only and now - _last_flush < _GEO_MIN_INTERVAL_S:
                 continue  # движение уже отправляли менее секунды назад — ждём
             _dirty = False
             _geo = False
-            _last_flush = time.monotonic()
+            _last_flush = now
+            force_full = geo_only and now - _last_full_flush >= _GEO_FULL_RESYNC_S
         try:
-            await _broadcast()
+            if geo_only and not force_full:
+                await _broadcast_geo()
+            else:
+                _last_full_flush = time.monotonic()
+                await _broadcast()
         except Exception:  # noqa: BLE001 — хаб не должен умирать
             log.exception("ws hub broadcast failed")
 
@@ -97,6 +115,18 @@ async def _broadcast() -> None:
             continue  # в этом депо никого — не собираем payload зря
         payload = await asyncio.to_thread(_payload, None, pid)
         await sio.emit("state", payload, room=room)
+
+
+async def _broadcast_geo() -> None:
+    """Тик движения лёгким событием: позиция/скорость/оценки курьеров."""
+    rooms = sio.manager.rooms.get("/", {})
+    if not any(rooms.get(f"depot:{pid}") for pid in _points_ids()):
+        return
+    snap = await asyncio.to_thread(_geo_payload)
+    for pid in _points_ids():
+        room = f"depot:{pid}"
+        if rooms.get(room):
+            await sio.emit("geo", snap, room=room)
 
 
 def _verify_token(token: str) -> dict | None:

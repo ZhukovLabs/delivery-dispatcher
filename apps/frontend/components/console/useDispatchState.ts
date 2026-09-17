@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, fetchApi, type AppState } from "@/lib/api";
+import { api, fetchApi, type AppState, type CourierPos, type CourierGeo } from "@/lib/api";
 import { ensureWsToken, getSocket } from "@/lib/ws";
 
 /* ---------- данные консоли: кэш + живые обновления + тикер возраста + тема ----------
@@ -62,11 +62,30 @@ export function useDispatchState(
           return { ...base, me: old?.me, users: old?.users, my_point: old?.my_point };
         });
       };
+      // лёгкий тик движения (раз в секунду): патчим только позиции/скорости/
+      // оценки курьеров в текущем снимке — полный state за гео не гоняем
+      const onGeo = (d: { t: number; couriers: Array<{ id: string; pos?: CourierPos; cur_kmh?: number; geo?: CourierGeo }> }) => {
+        if (!Array.isArray(d?.couriers)) return;
+        const patch = new Map(d.couriers.map(c => [c.id, c]));
+        qc.setQueryData<AppState>(["state"], (old) => {
+          if (!old?.couriers) return old;
+          return { ...old, couriers: old.couriers.map(c => {
+            const g = patch.get(c.id);
+            if (!g) return c;
+            const nc = { ...c };
+            if (g.pos) nc.pos = g.pos; else delete nc.pos;
+            if (g.cur_kmh !== undefined) nc.cur_kmh = g.cur_kmh; else delete nc.cur_kmh;
+            if (g.geo) nc.geo = g.geo; else delete nc.geo;
+            return nc;
+          })};
+        });
+      };
       const onConnect = () => { void qc.invalidateQueries({ queryKey: ["state"] }); }; // подтянуть пропущенное за простой
       s.on("state", onState);
+      s.on("geo", onGeo);
       s.on("connect", onConnect);
       if (!s.connected) s.connect();
-      off = () => { s.off("state", onState); s.off("connect", onConnect); };
+      off = () => { s.off("state", onState); s.off("geo", onGeo); s.off("connect", onConnect); };
     })();
     return () => { cancelled = true; off?.(); };
   }, [qc, live]);

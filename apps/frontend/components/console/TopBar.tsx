@@ -8,7 +8,7 @@ import { dropSocket, subscribeConn, type WsConnState } from "@/lib/ws";
 /* ---------- шапка: бренд, выбор места работы, счётчики дня, отмена/тема/справка/профиль ---------- */
 
 export default function TopBar({ st, workPoint, firstPid, onWorkPoint,
-  undoLen, lastLabel, onUndo, dark, onTheme, onHelp, onProfile,
+  undoLen, lastLabel, onUndo, dark, onTheme, onHelp, onProfile, syncing,
 }: {
   st: AppState;
   workPoint: string;
@@ -21,6 +21,7 @@ export default function TopBar({ st, workPoint, firstPid, onWorkPoint,
   onTheme: (d: boolean) => void;
   onHelp: () => void;
   onProfile: () => void;
+  syncing?: boolean;
 }) {
   const me: NonNullable<AppState["me"]> = st.me || { id: "", email: "" };
   const today: NonNullable<AppState["today"]> = st.today || {};
@@ -42,6 +43,12 @@ export default function TopBar({ st, workPoint, firstPid, onWorkPoint,
         <span className="wsdot-dot" aria-hidden="true" />
         {cm.label}
       </span>
+      {syncing && (
+        <span className="wsdot ws-wait sync-chip" role="status" title="Изменение сохраняется на сервере…">
+          <span className="wsdot-dot" aria-hidden="true" />
+          синхронизация…
+        </span>
+      )}
       {(st.points?.length || 0) > 0 && (
         <label className="pp-hsel" title="Точка выдачи, в которой вы работаете: новые заказы попадают к курьерам этой точки">
           <MapPin size={13} />
