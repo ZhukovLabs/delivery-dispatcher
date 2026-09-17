@@ -18,9 +18,8 @@ import TopBar from "./console/TopBar";
 import LeftColumn from "./console/columns/LeftColumn";
 import MapColumn from "./console/columns/MapColumn";
 import PlanColumn from "./console/columns/PlanColumn";
-import BindModal from "./console/BindModal";
-import Sheet from "./console/Sheet";
-import { AskDialog, HelpOverlay, PickBanner, SolveOverlay, Toast } from "./console/Overlays";
+import { ConsoleOverlays } from "./console/ConsoleOverlays";
+import { PickBanner } from "./console/Overlays";
 
 export default function Console() {
   /* оптимистичные патчи летящих мутаций: хук прогоняет через них каждый
@@ -142,34 +141,15 @@ export default function Console() {
         />
       </main>
 
-      {sheetOpen && (
-        <Sheet
-          st={st} tab={sheetTab} setTab={setSheetTab} onClose={() => setSheetOpen(false)}
-          setSt={setSt} showToast={showToast} askConfirm={askConfirm}
-        />
-      )}
-
-      {((solving || !!st?.solving) && !solveHide) && <SolveOverlay offline={conn !== "online"} />}
-
-      {helpOpen && <HelpOverlay onClose={() => setHelpOpen(false)} />}
-
-      {bindFor && st && (
-        <BindModal
-          courier={bindFor}
-          bot={st.tg?.bot || ""}
-          seen={st.tg?.seen || []}
-          onDone={s => { setSt(s); setBindFor(null); }}
-          onClose={() => setBindFor(null)}
-        />
-      )}
-
-      {ask && (
-        <AskDialog ask={ask} onResolve={v => { setAsk(null); ask.resolve(v); }} />
-      )}
-
-      {toast && (
-        <Toast toast={toast} onClose={() => setToast(null)} />
-      )}
+      <ConsoleOverlays
+        st={st} conn={conn} solving={solving} solveHide={solveHide}
+        helpOpen={helpOpen} setHelpOpen={setHelpOpen}
+        bindFor={bindFor} setBindFor={setBindFor}
+        sheetOpen={sheetOpen} setSheetOpen={setSheetOpen}
+        sheetTab={sheetTab} setSheetTab={setSheetTab}
+        setSt={setSt} showToast={showToast} askConfirm={askConfirm}
+        ask={ask} setAsk={setAsk} toast={toast} setToast={setToast}
+      />
     </>
   );
 }

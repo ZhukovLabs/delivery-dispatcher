@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, MapPin, Pencil, ShieldCheck, Trash2, Users } from "lucide-react";
 import { fmtCoords, type AppState } from "@/lib/api";
-import GeoInput, { type GeoItem } from "../GeoInput";
+import { type GeoItem } from "../GeoInput";
+import { PointEditForm } from "./PointEditForm";
 
 /* ---------- аккордеон «Места выдачи»: список точек + форма добавления/правки ---------- */
 
@@ -18,9 +19,6 @@ export function AccHead({ icon, label, count, open, onClick }: {
     </button>
   );
 }
-
-/** Подпись адреса депо: подпись из GeoInput или ручной текст. */
-function orderLabelDepot(p: GeoItem) { return p.label; }
 
 type Mutate = (method: string, path: string, body?: Record<string, unknown>) => Promise<void>;
 type Confirm = (text: string, opts?: { ok?: string; danger?: boolean }) => Promise<boolean>;
@@ -69,41 +67,14 @@ export default function PointsPanel({ st, open, onToggle, mutate, showToast, ask
         count={(st.points || []).length} open={open} onClick={onToggle} />
       <div className="acc-body"><div className="acc-inner">
         {pointEdit !== null ? (
-          <div className="depot-edit">
-            <div className="pp-form-title">{pointEdit === "new" ? "Новое место выдачи" : "Изменить место выдачи"}</div>
-            <input
-              className="pp-name-input" type="text" name="point_name" placeholder="Название (например, ресторан)"
-              aria-label="Название места выдачи" value={pointName}
-              onChange={e => setPointName(e.target.value)} />
-            <div className="addrow">
-              <GeoInput
-                key={pointEdit}
-                initial={pointEdit === "new" ? "" : (st.points?.find(p => p.id === pointEdit)?.address || "")}
-                placeholder="Адрес точки (подсказки появятся)" ariaLabel="Адрес места выдачи"
-                onPicked={it => {
-                  pendingPoint.current = it;
-                  setPointNote(it ? `точка выбрана (${fmtCoords(it)})` : "");
-                }}
-              />
-              <button className={"iconbtn pick-btn" + (pickTarget === "point" ? " active" : "")}
-                title="Отметить точку кликом по карте" aria-label="Отметить точку по карте"
-                aria-pressed={pickTarget === "point"}
-                onClick={() => setPickTarget(pickTarget === "point" ? null : "point")}><MapPin size={15} /></button>
-            </div>
-            <div className={"addnote" + (pointNote ? " show" : "")} dangerouslySetInnerHTML={{ __html: pointNote }} />
-            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              <button className="btn btn-primary" onClick={async () => {
-                const p = pendingPoint.current;
-                if (!p) { showToast("Сначала выберите точку: подсказкой или 📍 по карте", true); return; }
-                const payload = { name: pointName.trim(), address: orderLabelDepot(p), lat: p.lat, lng: p.lng };
-                if (pointEdit === "new") await mutate("POST", "/api/points", payload);
-                else await mutate("POST", "/api/points/" + pointEdit, payload);
-                closeForm();
-                showToast("Место выдачи сохранено");
-              }}>Сохранить</button>
-              <button className="btn" onClick={closeForm}>Отмена</button>
-            </div>
-          </div>
+          <PointEditForm
+            st={st} pointEdit={pointEdit}
+            pointName={pointName} setPointName={setPointName}
+            pointNote={pointNote} setPointNote={setPointNote}
+            pendingPoint={pendingPoint}
+            pickTarget={pickTarget} setPickTarget={setPickTarget}
+            mutate={mutate} showToast={showToast} closeForm={closeForm}
+          />
         ) : (
           <div className="pts">
             {(st.points || []).map((p, i) => {
