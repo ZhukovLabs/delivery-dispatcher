@@ -2692,7 +2692,8 @@ def _tg_handle_update(u):
         _bump()
         return
     loc = msg.get("location")
-    log.info("tg upd: chat=%s %s%s bound=%s", chat_id,
+    # шум гео-тиков (2+ строки/сек при live-geo) — в debug, журнал читаем
+    log.debug("tg upd: chat=%s %s%s bound=%s", chat_id,
              "edit " if u.get("edited_message") else "msg ",
              ("live-geo" if loc.get("live_period") else
               "static-geo" if loc else "text"),
