@@ -10,11 +10,14 @@ type Row = {
   outcome: string;
   cycle_min: number | null;
   deadline: string;
+  payment?: string;
+  pay_amount?: number | null;
 };
 type Route = { courier_name: string; status: string; stops: string[] };
 type Data = {
   rows: Row[];
-  summary: { delivered: number; cancelled: number; avg_cycle_min: number | null };
+  summary: { delivered: number; cancelled: number; avg_cycle_min: number | null;
+    pay_cash?: number; pay_cash_sum?: number; pay_card?: number; pay_card_sum?: number };
   routes: Route[];
   today: string;
   now: string;
@@ -82,6 +85,17 @@ export default function ReportDayPage() {
           <b>{d.summary.avg_cycle_min != null ? d.summary.avg_cycle_min + " мин" : "–"}</b>
           <span>средний цикл заказа</span>
         </div>
+        {(!!d.summary.pay_cash || !!d.summary.pay_card) && (
+          <div className="kpi">
+            <b>{(d.summary.pay_cash_sum || 0) + (d.summary.pay_card_sum || 0)}</b>
+            <span>
+              оплат собрано: {d.summary.pay_cash || 0} наличными
+              {d.summary.pay_cash_sum ? ` (${d.summary.pay_cash_sum})` : ""}
+              {" · "}{d.summary.pay_card || 0} картой
+              {d.summary.pay_card_sum ? ` (${d.summary.pay_card_sum})` : ""}
+            </span>
+          </div>
+        )}
       </div>
 
       <h2>Курьеры</h2>
@@ -98,7 +112,7 @@ export default function ReportDayPage() {
       <h2>Заказы дня ({d.rows.length})</h2>
       <table>
         <thead>
-          <tr><th>Время</th><th>Адрес</th><th>Курьер</th><th>Дедлайн</th><th>Исход</th><th>Цикл</th></tr>
+          <tr><th>Время</th><th>Адрес</th><th>Курьер</th><th>Дедлайн</th><th>Исход</th><th>Цикл</th><th>Оплата</th></tr>
         </thead>
         <tbody>
           {d.rows.map((r, i) => (
@@ -111,9 +125,13 @@ export default function ReportDayPage() {
                 {r.outcome === "delivered" ? "выдан" : "отменён"}
               </td>
               <td className="num">{r.cycle_min != null ? r.cycle_min + " мин" : "–"}</td>
+              <td className="num">{r.payment
+                ? (r.payment === "cash" ? "наличные" : "карта") +
+                  (r.pay_amount != null ? ` · ${r.pay_amount}` : "")
+                : "–"}</td>
             </tr>
           ))}
-          {!d.rows.length && <tr><td colSpan={6} className="note">Нет записей.</td></tr>}
+          {!d.rows.length && <tr><td colSpan={7} className="note">Нет записей.</td></tr>}
         </tbody>
       </table>
 

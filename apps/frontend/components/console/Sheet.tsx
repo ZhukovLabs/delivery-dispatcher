@@ -251,6 +251,16 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
             <small>Вовремя · 7 дней</small>
             <b>{weekStats?.on_time_total ? weekStats.on_time + " из " + weekStats.on_time_total : "–"}</b>
           </div>
+          {(!!summ.pay_cash || !!summ.pay_card) && (
+            <div className="scard" title="Оплаты, собранные ботом у курьеров после подтверждения доставки">
+              <small>Оплаты · наличные / карта</small>
+              <b>
+                {summ.pay_cash || 0}{summ.pay_cash_sum ? <i title="Сумма наличными">{summ.pay_cash_sum}</i> : null}
+                <i className="sep" />
+                {summ.pay_card || 0}{summ.pay_card_sum ? <i title="Сумма картой">{summ.pay_card_sum}</i> : null}
+              </b>
+            </div>
+          )}
         </div>
 
         <h4>Выдачи за 7 дней</h4>
@@ -306,7 +316,7 @@ export default function Sheet({ st, tab, setTab, onClose, setSt, showToast, askC
               <span className="h-time"><b>{(r.closed_at || "").slice(11, 16)}</b><small>{(r.closed_at || "").slice(8, 10)}.{(r.closed_at || "").slice(5, 7)}</small></span>
               <span className="h-addr" title={r.address}>{r.address || ""}</span>
               <span className="h-cour">{r.courier || "–"}</span>
-              <span className="h-res"><span className="h-badge">{r.outcome === "delivered" ? "✓" : "✕"}</span>{r.cycle_min != null ? <span className="h-cyc">{r.cycle_min + " мин"}</span> : null}</span>
+              <span className="h-res"><span className="h-badge">{r.outcome === "delivered" ? "✓" : "✕"}</span>{r.cycle_min != null ? <span className="h-cyc">{r.cycle_min + " мин"}</span> : null}{r.payment ? <span className="h-pay" title={r.pay_amount != null ? `Оплата: ${r.payment === "cash" ? "наличные" : "карта"}, ${r.pay_amount}` : "Способ оплаты записан, сумма неизвестна"}>{r.payment === "cash" ? "💵" : "💳"}{r.pay_amount != null ? ` ${r.pay_amount}` : ""}</span> : null}</span>
             </div>
           ))}
           </>)

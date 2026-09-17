@@ -15,7 +15,7 @@ export type WeekStats = {
   on_time?: number; on_time_total?: number;
 };
 /** Строка истории заказов из /api/history. */
-export type HistRow = { closed_at?: string; address?: string; courier?: string; outcome?: string; cycle_min?: number | null };
+export type HistRow = { closed_at?: string; address?: string; courier?: string; outcome?: string; cycle_min?: number | null; payment?: string; pay_amount?: number | null };
 export type HistData = { rows?: HistRow[]; summary?: Record<string, number | null> } | null;
 
 export interface UndoEntry { label: string; type: string; data: Record<string, unknown>; }
