@@ -1,4 +1,4 @@
-from .bot_flow import _CANCEL_REASONS, _pay_method_label
+from .bot_flow import _CANCEL_REASONS, _pay_method_label, _tg_step_kb
 from .domain.text import _esc
 
 
@@ -64,3 +64,22 @@ def _kb_skip(oid):
 
 def _txt_delivered_thanks(addr):
     return f"✅ Записано: <b>{addr}</b> доставлен. Спасибо!"
+
+
+def _kb_confirm(oid):
+    return _tg_step_kb(oid, "✅ Подтвердить", "ok")
+
+
+def _kb_confirm_cancel(oid):
+    return _tg_step_kb(oid, "✅ Да, отменяем", "refyes")
+
+
+def _kb_confirm_still(oid):
+    return _tg_step_kb(oid, "✅ Да, ещё везу", "nok")
+
+
+def _cancel_reason(act):
+    try:
+        return _CANCEL_REASONS[int(act[2:])]
+    except (IndexError, ValueError):
+        return "Другое"

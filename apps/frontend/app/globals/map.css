@@ -1,0 +1,26 @@
+/* маркеры: корень нулевого размера в точке координаты, содержимое центрируется (#10) */
+.pin{position:relative;width:0;height:0}
+.pin span{position:absolute;left:0;top:0;display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50% 50% 50% 0;transform:translate(-50%,-50%) rotate(-45deg);color:#fff;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.pin span.wide{width:auto;min-width:26px;padding:0 5px;border-radius:13px 13px 13px 0}
+.pin span i{transform:rotate(45deg);font-style:normal}
+/* депо: крупный значок-склад, всегда поверх остальных маркеров (#9) */
+.pin.depot span{width:40px;height:40px;border-radius:12px;background:#141c2b;border:2.5px solid #fff;transform:translate(-50%,-50%);box-shadow:0 3px 10px rgba(0,0,0,.45)}
+.pin.depot span i{transform:none;display:flex;width:22px;height:22px}
+.pin.depot span i svg{width:22px;height:22px}
+
+/* курьер: GPS-бейдж с самокатом и именем; центрирован на координате, чуть меньше (#10/#12);
+   чужого депо — тусклый (#14), выбранный — подсвечен (#5) */
+.courier-marker{position:relative;width:0;height:0}
+.courier-marker > div{position:absolute;left:0;top:0;width:28px;height:28px;transform:translate(-50%,-50%)}
+.courier-marker .cm-body{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:50%;background:var(--c,#e8482b);border:2.5px solid #fff;box-shadow:0 0 0 2px rgba(15,23,42,.55),0 2px 8px rgba(0,0,0,.5)}
+.courier-marker .cm-body svg{width:15px;height:15px}
+.courier-marker .cm-glow{position:absolute;inset:-3px;border-radius:50%;background:var(--c,#e8482b);opacity:.3;filter:blur(5px)}
+.courier-marker .cm-pulse{position:absolute;inset:-2px;border-radius:50%;border:2px solid var(--c,#e8482b);opacity:.8;animation:cm-pulse 1.8s ease-out infinite}
+.courier-marker .cm-name{position:absolute;top:calc(100% + 5px);left:50%;transform:translateX(-50%);background:#fff;color:#0f172a;border:1.5px solid var(--c,#e8482b);font-size:10px;font-weight:700;line-height:1;padding:2.5px 6px;border-radius:8px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.courier-marker.foreign > div{opacity:.45;filter:grayscale(.6)}
+.courier-marker.sel .cm-body{box-shadow:0 0 0 3px #fff,0 0 0 5px var(--c,#e8482b),0 2px 10px rgba(0,0,0,.5)}
+.courier-marker.sel .cm-name{background:#141c2b;color:#fff}
+@keyframes cm-pulse{0%{transform:scale(.6);opacity:.9}70%{transform:scale(1.9);opacity:0}100%{transform:scale(1.9);opacity:0}}
+html.dark .courier-marker .cm-name{background:#1a2436;color:#e8eef7}
+html.dark .courier-marker.sel .cm-name{background:#141c2b;color:#fff}
+

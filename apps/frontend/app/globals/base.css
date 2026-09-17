@@ -1,0 +1,12 @@
+:root{
+  --bg:#f5f6f8; --panel:#fff; --line:#e5e8ee; --line2:#d5dae3;
+  --ink:#1a2233; --mut:#6d7688; --acc:#e8482b; --acc-d:#c93318;
+  --ok:#188a56; --warn:#b4690e;
+  --r:10px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font:13.5px/1.45 "Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--ink);overflow:hidden}
+/* режим выбора точки на карте: перекрываем курсоры внутренних слоёв Яндекса */
+.pick-cross,.pick-cross *{cursor:crosshair !important}
+

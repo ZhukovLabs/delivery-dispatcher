@@ -1,0 +1,13 @@
+@media (max-width:1240px){
+  body{overflow:auto}
+  .console{grid-template-columns:1fr;height:auto}
+  .col-map{height:380px;order:2}
+  .col-left{order:1;overflow:visible}
+  .col-plan{order:3;overflow:visible}
+  .solvebox{position:static}
+  .acc-item.open,.acc-item[data-acc="orders"].open,.acc-item[data-acc="couriers"].open{flex:0 0 auto}
+  .acc-item.open .acc-body{grid-template-rows:1fr;max-height:60vh;overflow:auto}
+}
+
+@media (prefers-reduced-motion: reduce){.acc-item,.acc-body{transition:none}}
+

@@ -5,18 +5,18 @@ from .planstate import _invalidate_plan, _ev
 from .config import _now, log
 from .adapters.sqlite_repo import _persist_orders
 from .state import STATE
-from .adapters.telegram import (TG_TEST_REDIRECT, _tg_answer_cb, _tg_edit_msg,
-                    _tg_send, _tg_send_kb)
+from .adapters.telegram import TG_TEST_REDIRECT, _tg_answer_cb, _tg_edit_msg
 from .bot_dwell import _courier_out_orders
-from .bot_flow import (_CANCEL_REASONS, _bot_ask_kb, _bot_ask_text,
-                       _bot_close_delivered, _bot_keep_rolling,
-                       _pay_set, _tg_step_kb)
+from .bot_flow import (_bot_ask_kb, _bot_ask_text, _bot_close_delivered,
+                       _bot_keep_rolling, _pay_set)
 from .domain.text import _esc
-from .bot_dialog_texts import (_kb_pay, _kb_reasons, _kb_skip, _txt_cancelled,
-                               _txt_close_failed, _txt_confirm_cancel,
-                               _txt_confirm_delivered, _txt_confirm_still,
-                               _txt_delivered_ask_pay, _txt_delivered_thanks,
-                               _txt_not_actual_closed, _txt_pay_amount, _txt_reason)
+from .bot_dialog_texts import (_cancel_reason, _kb_confirm, _kb_confirm_cancel,
+                               _kb_confirm_still, _kb_pay, _kb_reasons,
+                               _kb_skip, _txt_cancelled, _txt_close_failed,
+                               _txt_confirm_cancel, _txt_confirm_delivered,
+                               _txt_confirm_still, _txt_delivered_ask_pay,
+                               _txt_delivered_thanks, _txt_not_actual_closed,
+                               _txt_pay_amount, _txt_reason)
 
 def _tg_callback(cb):
     """Нажатие инлайн-кнопки курьером: «доставил?» → «точно?» → закрытие.
@@ -74,18 +74,16 @@ def _tg_callback(cb):
     addr = _esc((order or {}).get("address") or pend.get("addr") or oid)
     if act == "y" and pend["stage"] == "ask":
         pend["stage"] = "confirm"
-        _tg_edit_msg(chat, pend["msg"], _txt_confirm_delivered(addr),
-                     _tg_step_kb(oid, "✅ Подтвердить", "ok"))
+        _tg_edit_msg(chat, pend["msg"], _txt_confirm_delivered(addr), _kb_confirm(oid))
         _tg_answer_cb(cbid)
     elif act == "ref" and pend["stage"] == "ask":
         pend["stage"] = "refconfirm"
         _tg_edit_msg(chat, pend["msg"], _txt_confirm_cancel(addr),
-                     _tg_step_kb(oid, "✅ Да, отменяем", "refyes"))
+                     _kb_confirm_cancel(oid))
         _tg_answer_cb(cbid)
     elif act == "n" and pend["stage"] == "ask":
         pend["stage"] = "noconfirm"
-        _tg_edit_msg(chat, pend["msg"], _txt_confirm_still(addr),
-                     _tg_step_kb(oid, "✅ Да, ещё везу", "nok"))
+        _tg_edit_msg(chat, pend["msg"], _txt_confirm_still(addr), _kb_confirm_still(oid))
         _tg_answer_cb(cbid)
     elif act == "nok" and pend["stage"] == "noconfirm":
         _bot_keep_rolling(chat, pend, oid, order, courier)
@@ -95,10 +93,7 @@ def _tg_callback(cb):
         _tg_edit_msg(chat, pend["msg"], _txt_reason(addr), _kb_reasons(oid))
         _tg_answer_cb(cbid)
     elif act.startswith("r:") and pend["stage"] == "reason":
-        try:
-            reason = _CANCEL_REASONS[int(act[2:])]
-        except (IndexError, ValueError):
-            reason = "Другое"
+        reason = _cancel_reason(act)
         ok, _ = _bot_close_delivered(oid, outcome="cancelled", reason=reason)
         STATE["tg_ask"].get(chat, {}).pop(oid, None)
         if ok:
@@ -145,7 +140,7 @@ def _tg_callback(cb):
         elif pend["stage"] == "reason":
             pend["stage"] = "refconfirm"
             _tg_edit_msg(chat, pend["msg"], _txt_confirm_cancel(addr),
-                         _tg_step_kb(oid, "✅ Да, отменяем", "refyes"))
+                         _kb_confirm_cancel(oid))
         _tg_answer_cb(cbid)
     else:
         # неизвестная кнопка или нажатие вне своей стадии (старый экран) —

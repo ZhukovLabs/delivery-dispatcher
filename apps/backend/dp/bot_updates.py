@@ -12,9 +12,10 @@ from .state import STATE
 from .adapters.telegram import TG_TEST_REDIRECT, _tg_edit_msg, _tg_send
 from .bot_dialog import _tg_callback
 from .bot_dwell import _deliver_track, _load_track
-from .bot_flow import _pay_method_label, _pay_set
+from .bot_flow import _pay_set
 from .bot_status import _auto_status_track
-from .domain.text import _esc
+from .bot_updates_helpers import (_txt_not_linked, _txt_pay_event,
+                                  _txt_pay_recorded, _txt_pay_unclear, _txt_start)
 
 def _tg_handle_update(u):
     """Один апдейт от Telegram: текст (/start), геолокация или кнопка."""
@@ -61,9 +62,7 @@ def _tg_handle_update(u):
         # «50.12»/«5»/«1,23» — кривой ввод просим повторить целиком
         m = re.search(r"(?<![-\d.,])\d+(?:[.,]\d{1,2})?(?![\d.,])", text)
         if not m:
-            _tg_send(chat_id,
-                     "Не понял сумму — напишите числом, например: "
-                     "<b>24.50</b> (или нажмите «Сумму не знаю»)")
+            _tg_send(chat_id, _txt_pay_unclear())
             return
         amount = round(float(m.group(0).replace(",", ".")), 2)
         if not 0 < amount <= 1_000_000:
@@ -74,13 +73,9 @@ def _tg_handle_update(u):
         if pend:
             STATE["tg_ask"].get(pay_chat, {}).pop(pay["oid"], None)
         STATE["tg_pay"].pop(pay_chat, None)
-        _tg_edit_msg(pay_chat, pay["msg"],
-                     f"✅ Записано: <b>{_esc(pay.get('addr') or pay['oid'])}</b>"
-                     f" доставлен. Оплата: <b>{_pay_method_label(pay['method'])}</b>, "
-                     f"<b>{amount:g}</b>.")
+        _tg_edit_msg(pay_chat, pay["msg"], _txt_pay_recorded(pay, amount))
         who = courier["name"] if courier else pay_chat
-        _ev("bot", f"оплата: {_pay_method_label(pay['method']).lower()} "
-                   f"{amount:g} — «{pay.get('addr') or pay['oid']}» ({who})")
+        _ev("bot", _txt_pay_event(pay, amount, who))
         log.info("bot pay: заказ %s — %s %s", pay["oid"], pay["method"], amount)
         _bump()
         return
@@ -145,16 +140,7 @@ def _tg_handle_update(u):
             now_ts = time.time()
             if now_ts - STATE["tg_nagged"].get(chat_id, 0) > 1800:
                 STATE["tg_nagged"][chat_id] = now_ts
-                _tg_send(chat_id,
-                          f"Похоже, вас ещё не привязали к курьеру. Отправьте этот ID "
-                          f"администратору: <code>{chat_id}</code>")
+                _tg_send(chat_id, _txt_not_linked(chat_id))
     elif (msg.get("text") or "").strip().startswith("/start"):
-        _tg_send(chat_id,
-                 "Привет! Это бот развозки.\n\n"
-                 "Нужна <b>живая геолокация</b>:\n"
-                 "скрепка → «Геолокация» → «Поделиться моей геолокацией» → "
-                 "время <b>«Пока не отключу»</b>.\n\n"
-                 "Тогда диспетчер видит вас на карте всю смену.\n\n"
-                 f"Ваш ID: <code>{chat_id}</code>\n"
-                 "Скажите его администратору, и вас подключат к курьеру.")
+        _tg_send(chat_id, _txt_start(chat_id))
 

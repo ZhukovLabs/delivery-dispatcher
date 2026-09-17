@@ -1,0 +1,28 @@
+/* ---------- каркас: 3 колонки ---------- */
+.console{display:grid;grid-template-columns:308px minmax(0,1fr) 384px;gap:12px;padding:4px 12px 6px;height:calc(100vh - 48px)}
+.col-left{display:flex;flex-direction:column;gap:10px;min-height:0;overflow:hidden;padding-right:2px}
+.acc{display:flex;flex-direction:column;gap:8px;min-height:0;flex:1 1 auto}
+.acc-item{display:flex;flex-direction:column;min-height:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.acc-item.open{flex:1 1 auto}
+.acc-item[data-acc="orders"].open{flex:7 1 0;min-height:190px}
+.acc-item[data-acc="couriers"].open{flex:3 1 0;min-height:150px}
+.acc-head{display:flex;align-items:center;gap:8px;width:100%;border:none;background:none;padding:12px;font:600 13px/1 inherit;color:var(--ink);cursor:pointer;text-align:left}
+.acc-head:hover{color:var(--acc)}
+.acc-head .acc-ico{color:var(--mut);flex-shrink:0}
+.acc-head:hover .acc-ico{color:var(--acc)}
+.acc-head .chev{margin-left:auto;color:var(--mut);display:inline-flex;transition:transform .18s}
+.acc-item.open .acc-head .chev{transform:rotate(180deg)}
+.acc-body{display:grid;grid-template-rows:minmax(0,0fr);min-height:0;flex:0 1 auto;padding:0 10px;transition:grid-template-rows .22s ease}
+.acc-item.open .acc-body{grid-template-rows:minmax(0,1fr);flex:1 1 auto;overflow:hidden}
+.acc-inner{min-height:0;overflow:hidden;display:flex;flex-direction:column;padding-bottom:10px;visibility:hidden}
+.acc-item.open .acc-inner{visibility:visible}
+#orderList{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:2px 2px 10px}
+#courierList{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:2px 2px 10px}
+.col-map{border-radius:var(--r);overflow:hidden;border:1px solid var(--line);min-height:0;position:relative}
+.fit-btn{position:absolute;right:12px;bottom:12px;z-index:800;width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--ink);font-size:16px;cursor:pointer;box-shadow:0 2px 8px rgba(15,23,42,.18);transition:.15s}
+.fit-btn:hover{background:#f2f5fa}
+html.dark .fit-btn{background:#1e293b;border-color:#334155;color:#e2e8f0}
+html.dark .fit-btn:hover{background:#283548}
+#map{height:100%}
+.col-plan{min-height:0;overflow:auto;display:flex;flex-direction:column;gap:10px;padding-right:2px}
+

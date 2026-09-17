@@ -1,0 +1,62 @@
+/* ---------- вход ---------- */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#141c2b 0%,#2a3648 100%)}
+.login-card{background:#fff;border-radius:14px;padding:26px 26px 22px;width:340px;box-shadow:0 24px 60px rgba(10,18,35,.4)}
+.login-card h1{margin:0 0 4px;font-size:17px;display:flex;gap:8px;align-items:center}
+.login-card .sub{color:var(--mut);font-size:12.5px;margin-bottom:16px}
+.login-card label{display:block;font-size:11.5px;color:var(--mut);margin:10px 0 4px}
+.login-card input{width:100%;border:1px solid var(--line2);border-radius:8px;padding:9px 11px;font-size:13.5px}
+.login-card input:focus{outline:none;border-color:var(--acc)}
+.login-card button{width:100%;margin-top:16px;border:none;background:var(--acc);color:#fff;font-size:14px;font-weight:600;border-radius:9px;padding:10px;cursor:pointer}
+.login-card button:hover{background:var(--acc-d)}
+.login-card .err{background:#fde8e8;color:#b3261e;border-radius:8px;padding:8px 10px;font-size:12.5px;margin-top:12px}
+html.dark .login-card{background:#1a2230;color:var(--ink)}
+html.dark .login-card input{background:#141c29;border-color:var(--line2);color:var(--ink)}
+
+/* ---------- шапка ---------- */
+.topbar{height:48px;display:flex;align-items:center;gap:12px;padding:0 16px;background:#141c2b;color:#fff;position:relative;z-index:1100}
+.topbar .brand{display:flex;align-items:center;gap:9px;white-space:nowrap}
+.topbar .brand-mark{display:grid;place-items:center;width:27px;height:27px;border-radius:8px;background:var(--acc);color:#fff;flex-shrink:0;box-shadow:0 2px 8px rgba(232,72,43,.35)}
+.topbar .brand-name{font-size:15px;font-weight:700;letter-spacing:.3px}
+.daystats{display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap}
+.dchip{display:inline-flex;align-items:center;gap:4px;color:#9aa7bc;font-size:11.5px;background:#1d2839;border:1px solid #293649;border-radius:99px;padding:2.5px 9px;line-height:1.4}
+.dchip svg{opacity:.8}
+.dchip.ok{color:#8fceaa;border-color:#2b4636}
+.dchip.no{color:#e39a9a;border-color:#4d2f31}
+.topbar .spacer{flex:1}
+
+/* индикатор живой связи (WS) в шапке */
+.wsdot{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;line-height:1;border-radius:99px;padding:4px 10px;background:#1d2839;border:1px solid #293649;color:#9aa7bc;white-space:nowrap}
+.wsdot-dot{width:8px;height:8px;border-radius:50%;background:#566582;flex-shrink:0}
+.wsdot.ws-on{color:#8fceaa;border-color:#2b4636}
+.wsdot.ws-on .wsdot-dot{background:#38c172;box-shadow:0 0 6px rgba(56,193,114,.7)}
+.wsdot.ws-wait .wsdot-dot{background:#e6b450;animation:wsPulse 1s ease-in-out infinite}
+.wsdot.ws-off{color:#e39a9a;border-color:#4d2f31}
+.wsdot.ws-off .wsdot-dot{background:#e8482b;animation:wsPulse 1s ease-in-out infinite}
+.wsdot.sync-chip{color:#e6d3a3;border-color:#4a4029}
+.wsdot.sync-chip .wsdot-dot{background:#e6b450}
+@keyframes wsPulse{50%{opacity:.35}}
+
+/* полноэкранная блокировка на время расчёта развозки */
+.solve-ov{position:fixed;inset:0;z-index:4000;display:grid;place-items:center;background:rgba(10,14,22,.55);backdrop-filter:blur(3px)}
+.solve-ov-box{display:flex;flex-direction:column;align-items:center;gap:10px;background:var(--panel,#fff);border-radius:16px;padding:34px 44px;box-shadow:0 18px 60px rgba(0,0,0,.35);text-align:center;max-width:min(420px,88vw)}
+.solve-ov-box h3{margin:0;font-size:19px}
+.solve-ov-box p{margin:0;font-size:13px;opacity:.7}
+.solve-ov-spin{width:38px;height:38px;border-radius:50%;border:4px solid rgba(232,72,43,.25);border-top-color:var(--acc,#e8482b);animation:solveSpin .9s linear infinite}
+.solve-ov-spin.warn{border-color:rgba(230,180,80,.25);border-top-color:#e6b450}
+@keyframes solveSpin{to{transform:rotate(360deg)}}
+.iconbtn{border:none;background:transparent;color:#aab6c9;cursor:pointer;font-size:14px;padding:6px;border-radius:8px;line-height:0;display:inline-flex;align-items:center;justify-content:center}
+.iconbtn:hover{background:#222d42;color:#fff}
+.iconbtn:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.iconbtn.gear:hover{color:#ffb9aa}
+.topbar .vdiv{width:1px;height:20px;background:#2c3a52;flex-shrink:0}
+.pp-hsel{display:inline-flex;align-items:center;gap:6px;background:#1a2536;border:1px solid #2c3a52;border-radius:8px;padding:4px 8px;color:#c7d2e2;font-size:12.5px;line-height:1;white-space:nowrap;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)}
+.pp-hsel svg{color:#8b97ab;flex-shrink:0}
+.pp-hsel-cap{color:#8b97ab;font-weight:500}
+.pp-hsel select{border:none;background:transparent;color:#e6ecf5;font-size:12.5px;font-weight:600;font-family:inherit;padding:0 2px;cursor:pointer;max-width:150px}
+.pp-hsel select:focus{outline:none}
+.pp-hsel:hover{border-color:#3a4a66}
+.pp-hsel select option{background:#1a2536;color:#e6ecf5}
+.me{display:inline-flex;align-items:center;gap:6px;color:#8b97ab;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+#logoutLink{color:#aab6c9;font-size:12.5px;text-decoration:none;border:none;padding:6px;border-radius:8px;white-space:nowrap;background:transparent;cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center}
+#logoutLink:hover{background:#3a2126;color:#ff9d93}
+

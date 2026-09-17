@@ -1,0 +1,81 @@
+/* дедлайны, возраст, заезды */
+.dl-chip{display:inline-flex;align-items:center;gap:3px;background:#e8f0fe;color:#1d4ed8;font-size:10.5px;font-weight:700;border-radius:6px;padding:1px 6px;margin-left:4px;white-space:nowrap;vertical-align:1px}
+.opt-tag{display:inline-block;background:#eef1f6;color:#5c6678;font-size:10.5px;font-weight:600;border-radius:6px;padding:1px 6px;margin-left:4px;white-space:nowrap;vertical-align:1px}
+html.dark .opt-tag{background:#232d3f;color:#9aa7bd}
+.dl-chip.over{background:#fde8e8;color:#b3261e}
+.age-tag{display:inline-flex;align-items:center;gap:3px;background:#fdeec5;color:#8a6116;font-size:10.5px;font-weight:700;border-radius:6px;padding:1px 6px;margin-left:4px;white-space:nowrap;vertical-align:1px}
+.dl-pop{margin:7px 0 3px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:8px;box-shadow:0 4px 14px rgba(15,23,42,.12)}
+.dl-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dl-row+.dl-row{margin-top:7px}
+.dl-q{border:1px solid var(--line);background:#f5f7fb;border-radius:8px;padding:5px 9px;font-size:12.5px;cursor:pointer;color:var(--ink)}
+.dl-q:hover{background:#e8edf5}
+.dl-tbtn{width:32px;height:30px;border:1px solid var(--line);background:#f5f7fb;border-radius:8px;cursor:pointer;font-size:12.5px;color:var(--ink)}
+.dl-tbtn:hover{background:#e8edf5}
+.dl-hh,.dl-mm{width:34px;height:30px;text-align:center;font-size:15px;font-weight:700;border:1px solid var(--line2);border-radius:8px;background:var(--panel);color:var(--ink)}
+.dl-colon{font-weight:700;font-size:15px}
+.dl-flex{flex:1}
+.dl-ok{width:36px;height:30px;background:#059669;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px}
+.dl-x{width:30px;height:30px;background:#fee2e2;color:#b91c1c;border:none;border-radius:8px;cursor:pointer;font-size:13px}
+.dl-x:hover{background:#fecaca}
+.dl-ql{font-size:11.5px;color:var(--mut)}
+.trip-head{display:flex;gap:6px;align-items:baseline;color:var(--mut);font-size:11.5px;font-weight:600;margin:7px 0 1px}
+.trip-head:first-child{margin-top:0}
+.late-chip{color:#b3261e;font-weight:700;font-size:11px;white-space:nowrap}
+.s-dl{color:#3b66c4;font-size:11.5px;white-space:nowrap}
+
+/* ручной перенос остановок */
+ol.stops li[draggable=true]{cursor:grab}
+ol.stops li.dragging{opacity:.4}
+.route.dragover{outline:2px dashed var(--acc);outline-offset:2px}
+.pt-sub small{font-weight:400}
+
+/* поле Telegram у курьера */
+.r-tg{display:inline-flex;border:none;background:transparent;cursor:pointer;color:var(--mut);padding:3px 6px;border-radius:6px;line-height:0}
+.r-tg:hover{background:#eef0f4;color:var(--ink)}
+
+/* неделя в «Ещё» */
+.stat-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:4px}
+.scard{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.scard small{font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scard b{font-size:19px;line-height:1.1;font-weight:700;font-variant-numeric:tabular-nums}
+.scard b i{font-style:normal;font-size:11px;font-weight:500;color:var(--mut);margin-left:3px}
+.wk-chart{display:flex;align-items:stretch;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 12px 9px}
+.wk-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0}
+.wk-num{font-size:11px;font-weight:600;color:var(--ink);min-height:13px;font-variant-numeric:tabular-nums}
+.wk-bar{width:100%;max-width:36px;height:66px;display:flex;align-items:flex-end}
+.wk-bar i{display:block;width:100%;height:3px;border-radius:4px 4px 2px 2px;background:var(--line2)}
+.wk-col:not(.z) .wk-bar i{background:var(--acc)}
+.wk-day{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.3px}
+.wk-date{font-size:9.5px;color:var(--mut);opacity:.7;font-variant-numeric:tabular-nums}
+.wk-cour{display:flex;flex-direction:column;gap:6px}
+.wk-cour-row{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:7px 10px;font-size:12.5px}
+.wk-cour-row svg{color:var(--mut);flex-shrink:0}
+.wk-cour-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.wk-cour-n{color:var(--ink);white-space:nowrap;font-variant-numeric:tabular-nums}
+.wk-cour-cyc{color:var(--mut);white-space:nowrap;font-variant-numeric:tabular-nums}
+.cs-table{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;font-size:12.5px}
+.cs-row{display:grid;grid-template-columns:minmax(110px,1.8fr) repeat(8,minmax(34px,1fr));align-items:center;padding:6px 10px;gap:4px 6px;font-variant-numeric:tabular-nums}
+.cs-row+.cs-row{border-top:1px solid var(--line)}
+.cs-row>span{min-width:0;overflow-wrap:anywhere;line-height:1.35}
+.cs-row>span:not(:first-child){text-align:center}
+.cs-row.cs-head span{white-space:nowrap}
+.cs-head{background:var(--panel2);color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+.cs-name{display:inline-flex;align-items:center;gap:6px;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.cs-name svg{color:var(--mut);flex-shrink:0}
+.cs-row.cs-head span:first-child{text-transform:none}
+.cs-bad{color:#b91c1c;font-weight:700}
+.cs-note{font-size:11px;color:var(--mut);margin-top:6px}
+html.dark .cs-bad{color:#f3b4b4}
+.hist-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.hist-links{display:flex;gap:8px}
+.hist-links .btn{font-size:12.5px}
+.pseg{display:flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--panel)}
+.pseg button{border:0;background:transparent;padding:6px 12px;font-size:12px;line-height:1;cursor:pointer;color:var(--mut);font-family:inherit;transition:.12s;white-space:nowrap}
+.pseg button + button{border-left:1px solid var(--line2)}
+.pseg button:hover{color:var(--ink)}
+.pseg button.on{background:#e9f7ef;color:#197547;font-weight:600}
+
+/* подсветка hover список-карта */
+.ocard.hl{border-color:var(--acc);box-shadow:0 0 0 2px rgba(232,72,43,.18)}
+.pin.hl span{box-shadow:0 0 0 4px rgba(232,72,43,.35),0 1px 4px rgba(0,0,0,.35)}
+
