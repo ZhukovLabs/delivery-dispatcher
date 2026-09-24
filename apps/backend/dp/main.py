@@ -146,9 +146,11 @@ _CORS_ORIGINS = [o.strip() for o in os.environ.get(
     "CORS_ORIGINS",
     "https://barak-dispatcher.vercel.app,http://localhost:3000,http://127.0.0.1:3000",
 ).split(",") if o.strip()]
+# все поддомены *.vercel.app: у каждого деплой-алиаса проекта своё имя
+_CORS_RE = os.environ.get("CORS_ORIGIN_REGEX", r"^https://[a-z0-9-]+\.vercel\.app$")
 app.add_middleware(
     CORSMiddleware, allow_origins=_CORS_ORIGINS, allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"])
+    allow_origin_regex=_CORS_RE, allow_methods=["*"], allow_headers=["*"])
 
 
 def serve() -> None:
