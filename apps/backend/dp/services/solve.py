@@ -34,7 +34,8 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
     helpers: {courier_id: point_id} — разовая «помощь»: курьер в этом
     расчёте стартует с чужой точки выдачи и берёт максимум один заказ.
     force — id курьеров, перетащенных в план вручную (первый заезд
-    обязан взять заказ). Полная документация модели — в solve_ctx.
+    обязан взять заказ; если везти нечего — ограничения нет, иначе
+    модель несовместима). Полная документация модели — в solve_ctx.
     """
     ctx = _build_context(include_away=include_away, helpers=helpers,
                          force=force, point_id=point_id)
