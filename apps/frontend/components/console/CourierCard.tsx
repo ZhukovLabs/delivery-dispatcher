@@ -81,19 +81,23 @@ export function CourierCard({ c, n, st, dragOverCourier, setDragOverCourier, mut
         )}
       </div>
       {(st.points || []).length > 0 && !foreign && (
-        <div className="c-row2 pt-row" title="Место, откуда курьер забирает заказы (маршрут начинается отсюда)">
+        <div className="c-row2 pt-row" title="Место, откуда курьер забирает заказы (маршрут начинается отсюда). Переводить курьеров между точками может только администратор">
           <MapPin size={11} className="pp-ico" />
-          <select className="pp-sel" value={c.point_id || st.points?.[0]?.id || ""}
-            aria-label="Место выдачи курьера"
-            onChange={e => {
-              const np = e.target.value;
-              if (np && np !== c.point_id)
-                void mutate("POST", `/api/couriers/${c.id}/point`, { point_id: np });
-            }}>
-            {st.points!.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+          {!!st.me?.is_admin ? (
+            <select className="pp-sel" value={c.point_id || st.points?.[0]?.id || ""}
+              aria-label="Место выдачи курьера"
+              onChange={e => {
+                const np = e.target.value;
+                if (np && np !== c.point_id)
+                  void mutate("POST", `/api/couriers/${c.id}/point`, { point_id: np });
+              }}>
+              {st.points!.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          ) : (
+            <span className="pt-sub small">{st.points!.find(p => p.id === c.point_id)?.name || st.points![0]?.name}</span>
+          )}
         </div>
       )}
       <CourierGeoRows c={c} st={st} foreign={foreign} mutate={mutate} setBindFor={setBindFor} />
