@@ -11,6 +11,7 @@ def _persist_meta():
             ("depot", json.dumps(STATE["depot"], ensure_ascii=False)),
             ("settings", json.dumps(STATE["settings"], ensure_ascii=False)),
             ("color_seq", str(STATE["color_seq"])),
+            ("rev", str(STATE.get("rev") or 0)),
             ("plans", json.dumps(STATE["plans"], ensure_ascii=False)
              if STATE.get("plans") else ""),
             ("tg_ask", json.dumps(STATE["tg_ask"], ensure_ascii=False)
