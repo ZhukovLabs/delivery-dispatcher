@@ -79,7 +79,11 @@ def _deliver_track(c, pos, now=None):
     for k in list(st):  # закрытые диспетчером записи чистим
         if k not in alive:
             st.pop(k, None)
-            STATE["tg_ask"].get(chat, {}).pop(k, None)
+            pend = STATE["tg_ask"].get(chat, {}).get(k)
+            # флоу оплаты (pay/pay_amount) живёт ПОСЛЕ закрытия заказа —
+            # это аналитика: заказ закрыт, ждём способ и сумму
+            if not (pend and pend.get("stage") in ("pay", "pay_amount")):
+                STATE["tg_ask"].get(chat, {}).pop(k, None)
     if not out_orders:
         STATE["tg_deliv"].pop(chat, None)
         return
@@ -108,10 +112,13 @@ def _deliver_track(c, pos, now=None):
                 _bump()
         else:
             # выехал из радиуса — заезд закрыт: снимаем простой и закрываем
-            # висящий вопрос, чтобы следующий заезд спросил заново
+            # висящий вопрос, чтобы следующий заезд спросил заново.
+            # Флоу оплаты не трогаем: заказ закрыт, ждём способ и сумму
             rec.pop("since", None)
             rec.pop("asked", None)
-            pend = STATE["tg_ask"].get(chat, {}).pop(o["id"], None)
-            if pend and pend.get("msg"):
-                _tg_edit_msg(chat, pend["msg"],
-                             "Курьер отъехал от адреса — спрошу при следующем заезде.")
+            pend = STATE["tg_ask"].get(chat, {}).get(o["id"])
+            if pend and pend.get("stage") not in ("pay", "pay_amount"):
+                STATE["tg_ask"].get(chat, {}).pop(o["id"], None)
+                if pend.get("msg"):
+                    _tg_edit_msg(chat, pend["msg"],
+                                 "Курьер отъехал от адреса — спрошу при следующем заезде.")

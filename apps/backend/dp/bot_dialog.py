@@ -18,6 +18,15 @@ from .bot_dialog_texts import (_cancel_reason, _kb_confirm, _kb_confirm_cancel,
                                _txt_delivered_thanks, _txt_not_actual_closed,
                                _txt_pay_amount, _txt_reason)
 
+
+def _tg_pay_drop(chat, oid):
+    """Убрать запись оплаты заказа из очереди чата (без следа в истории)."""
+    q = [p for p in (STATE["tg_pay"].get(chat) or []) if p.get("oid") != oid]
+    if q:
+        STATE["tg_pay"][chat] = q
+    else:
+        STATE["tg_pay"].pop(chat, None)
+
 def _tg_callback(cb):
     """Нажатие инлайн-кнопки курьером: «доставил?» → «точно?» → закрытие.
 
@@ -68,7 +77,7 @@ def _tg_callback(cb):
         if pend:
             _tg_edit_msg(chat, pend["msg"], _txt_not_actual_closed())
             STATE["tg_ask"].get(chat, {}).pop(oid, None)
-            STATE["tg_pay"].pop(chat, None)
+            _tg_pay_drop(chat, oid)
         _tg_answer_cb(cbid, "Уже неактуально")
         return
     addr = _esc((order or {}).get("address") or pend.get("addr") or oid)
@@ -121,15 +130,20 @@ def _tg_callback(cb):
             _tg_answer_cb(cbid, "Кнопка не распознана")
             return
         _pay_set(oid, method=method)
-        STATE["tg_pay"][chat] = {"oid": oid, "method": method,
-                                 "msg": pend["msg"], "addr": pend.get("addr") or oid,
-                                 "ts": time.time()}
+        # очередь оплат: рядом бывают 2+ доставленных заказа — курьер
+        # выбирает способ для каждого, суммы вводятся по очереди
+        # (первым — самый старый диалог)
+        recs = STATE["tg_pay"].setdefault(chat, [])
+        recs[:] = [p for p in recs if p.get("oid") != oid]
+        recs.append({"oid": oid, "method": method,
+                     "msg": pend["msg"], "addr": pend.get("addr") or oid,
+                     "ts": time.time()})
         pend["stage"] = "pay_amount"
         _tg_edit_msg(chat, pend["msg"], _txt_pay_amount(addr, method), _kb_skip(oid))
         _tg_answer_cb(cbid)
     elif act == "payskip" and pend["stage"] in ("pay", "pay_amount"):
         STATE["tg_ask"].get(chat, {}).pop(oid, None)
-        STATE["tg_pay"].pop(chat, None)
+        _tg_pay_drop(chat, oid)
         _tg_edit_msg(chat, pend["msg"], _txt_delivered_thanks(addr))
         _tg_answer_cb(cbid, "Заказ закрыт ✓")
     elif act == "no":

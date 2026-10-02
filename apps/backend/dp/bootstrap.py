@@ -72,6 +72,11 @@ def load_state():
                     STATE[key].update(saved)
             except ValueError:
                 pass
+    # tg_pay — очередь (chat -> [записи]): рядом бывают 2+ доставленных
+    # заказа. Старый формат (одна запись словарём) оборачиваем в список
+    for _chat, _v in list((STATE["tg_pay"] or {}).items()):
+        if isinstance(_v, dict):
+            STATE["tg_pay"][_chat] = [_v]
     # сверка: если бот уже спросил (asked), а диалог не восстановился —
     # сбрасываем asked, чтобы переспросил заново свежим сообщением
     for _chat, _recs in (STATE["tg_deliv"] or {}).items():

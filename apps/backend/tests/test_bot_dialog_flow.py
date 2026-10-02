@@ -111,15 +111,87 @@ def test_pay_dialog_ignores_geo_ticks(dialog_state):
     _tg_handle_update(_cb("o1", "y"))
     _tg_handle_update(_cb("o1", "ok"))
     _tg_handle_update(_cb("o1", "pay:cash"))
-    assert STATE["tg_pay"]["777"]["oid"] == "o1"
+    assert STATE["tg_pay"]["777"][0]["oid"] == "o1"
 
     _tg_handle_update({"edited_message": {
         "chat": {"id": 777}, "from": {"username": "ivan"},
         "location": {"latitude": 52.4, "longitude": 31.0,
                      "live_period": 3600}}})
     assert cap["sends"] == []                      # спама «не понял сумму» нет
-    assert STATE["tg_pay"]["777"]["oid"] == "o1"   # диалог жив
+    assert STATE["tg_pay"]["777"][0]["oid"] == "o1"  # диалог жив
     assert STATE["tg_pos"]["777"]["lat"] == 52.4   # гео обработано
 
     _tg_handle_update({"message": {"chat": {"id": 777}, "text": "24.50"}})
     assert ("o1", None, 24.5) in cap["pays"]       # сумма по-прежнему принята
+
+
+def test_two_orders_full_flow(dialog_state):
+    """Две доставки рядом: оба диалога проходят до конца независимо,
+    суммы вводятся по очереди (регрессия 03.10: «рядом 2 заказа —
+    первый уже неактуален, суммы не работают»)."""
+    cap = dialog_state
+    STATE["orders"].append({"id": "o2", "address": "ул. Телегина, 7",
+                            "lat": 52.4001, "lng": 31.0001, "point_id": "p1",
+                            "assigned": "c1", "status": "out",
+                            "created_at": "2026-10-03T01:00:01"})
+    STATE["tg_ask"]["777"]["o2"] = {"msg": 43, "stage": "ask"}
+
+    # закрываем и выбираем оплату для ОБОИХ заказов
+    for oid in ("o1", "o2"):
+        _tg_handle_update(_cb(oid, "y"))
+        _tg_handle_update(_cb(oid, "ok"))
+        _tg_handle_update(_cb(oid, "pay:cash"))
+    assert STATE["orders"] == []
+    queue = [p["oid"] for p in STATE["tg_pay"]["777"]]
+    assert queue == ["o1", "o2"]                   # очередь, не один слот
+
+    # первая сумма — старшему диалогу, бот подсказывает следующий
+    _tg_handle_update({"message": {"chat": {"id": 777}, "text": "10"}})
+    assert ("o1", None, 10.0) in cap["pays"]
+    assert any("Следующий" in s and "Телегина" in s for s in cap["sends"])
+    assert [p["oid"] for p in STATE["tg_pay"]["777"]] == ["o2"]
+
+    # вторая сумма — оставшемуся
+    _tg_handle_update({"message": {"chat": {"id": 777}, "text": "15.5"}})
+    assert ("o2", None, 15.5) in cap["pays"]
+    assert STATE["tg_pay"] == {}                   # очередь пуста
+
+
+def test_payskip_removes_only_own_record(dialog_state):
+    """«Сумму не знаю» у одного заказа не рвёт очередь другого."""
+    cap = dialog_state
+    STATE["orders"].append({"id": "o2", "address": "ул. Телегина, 7",
+                            "lat": 52.4001, "lng": 31.0001, "point_id": "p1",
+                            "assigned": "c1", "status": "out",
+                            "created_at": "2026-10-03T01:00:01"})
+    STATE["tg_ask"]["777"]["o2"] = {"msg": 43, "stage": "ask"}
+    for oid in ("o1", "o2"):
+        _tg_handle_update(_cb(oid, "y"))
+        _tg_handle_update(_cb(oid, "ok"))
+        _tg_handle_update(_cb(oid, "pay:cash"))
+
+    _tg_handle_update(_cb("o1", "payskip"))        # «Сумму не знаю» у первого
+    assert [p["oid"] for p in STATE["tg_pay"]["777"]] == ["o2"]
+    _tg_handle_update({"message": {"chat": {"id": 777}, "text": "7"}})
+    assert cap["pays"][-1] == ("o2", None, 7.0)    # сумма уцелевшему
+
+
+def test_deliver_track_keeps_pay_stage(dialog_state, monkeypatch):
+    """Гео-трекер не рвёт флоу оплаты: после закрытия заказа его
+    запись пропадает из развозки, но диалог суммы должен жить."""
+    from dp.bot_dwell import _deliver_track
+
+    monkeypatch.setattr("dp.bot_dwell._tg_edit_msg",
+                        lambda *a, **k: None)
+    monkeypatch.setattr("dp.bot_dwell._bump", lambda *a, **k: None)
+    monkeypatch.setattr("dp.bot_dwell._ev", lambda *a, **k: None)
+    _tg_handle_update(_cb("o1", "y"))
+    _tg_handle_update(_cb("o1", "ok"))
+    assert STATE["orders"] == []                   # заказ закрыт
+    STATE["tg_deliv"]["777"] = {"o1": {"asked": True}}  # запись трекера жива
+
+    courier = STATE["couriers"][0]
+    _deliver_track(courier, {"lat": 52.45, "lng": 31.05, "ts": 1.0}, 1.0)
+
+    assert "o1" in STATE["tg_ask"]["777"]          # диалог оплаты жив
+    assert "o1" not in STATE["tg_deliv"].get("777", {})  # трекер убран

@@ -15,7 +15,8 @@ from .bot_dwell import _deliver_track, _load_track
 from .bot_flow import _pay_set
 from .bot_status import _auto_status_track
 from .bot_updates_helpers import (_txt_not_linked, _txt_pay_event,
-                                  _txt_pay_recorded, _txt_pay_unclear, _txt_start)
+                                  _txt_pay_next, _txt_pay_recorded,
+                                  _txt_pay_unclear, _txt_start)
 
 def _tg_handle_update(u):
     """Один апдейт от Telegram: текст (/start), геолокация или кнопка."""
@@ -47,15 +48,18 @@ def _tg_handle_update(u):
         for cand in STATE.get("tg_pay", {}):
             pay_chat = cand
             break
-    pay = STATE.get("tg_pay", {}).get(pay_chat)
+    # очередь оплат: рядом бывают 2+ доставленных заказа, курьер вводит
+    # суммы по очереди (первым — самый старый диалог)
+    pays = [p for p in (STATE.get("tg_pay", {}).get(pay_chat) or [])
+            if p.get("method") and time.time() - p.get("ts", 0) <= 1800]
+    if pays:
+        STATE["tg_pay"][pay_chat] = pays
+    else:
+        STATE["tg_pay"].pop(pay_chat, None)
+    pay = pays[0] if pays else None
     if pay and not courier and pay_chat != chat_id:
         courier = next((c for c in STATE["couriers"]
                         if (c.get("tg_chat_id") or "") == pay_chat), None)
-    if pay and (not pay.get("method")
-                or time.time() - pay.get("ts", 0) > 1800):
-        # зависший диалог (рестарт/полчаса тишины) — не мешаем остальному
-        STATE["tg_pay"].pop(pay_chat, None)
-        pay = None
     if pay and msg.get("text") is not None:
         # сумму ждём только из текстовых сообщений: live-geo тики
         # (edited_message с location) не должны спамить «не понял сумму» —
@@ -75,8 +79,15 @@ def _tg_handle_update(u):
         pend = STATE.get("tg_ask", {}).get(pay_chat, {}).get(pay["oid"])
         if pend:
             STATE["tg_ask"].get(pay_chat, {}).pop(pay["oid"], None)
-        STATE["tg_pay"].pop(pay_chat, None)
+        pays.pop(0)
+        if not pays:
+            STATE["tg_pay"].pop(pay_chat, None)
         _tg_edit_msg(pay_chat, pay["msg"], _txt_pay_recorded(pay, amount))
+        nxt = pays[0] if pays else None
+        if nxt:
+            # в очереди ещё оплата — сразу подсказываем следующий адрес,
+            # чтобы введённое число не ушло «в никуда»
+            _tg_send(chat_id, _txt_pay_next(nxt.get("addr") or nxt["oid"]))
         who = courier["name"] if courier else pay_chat
         _ev("bot", _txt_pay_event(pay, amount, who))
         log.info("bot pay: заказ %s — %s %s", pay["oid"], pay["method"], amount)

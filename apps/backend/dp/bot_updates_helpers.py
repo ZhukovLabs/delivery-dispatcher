@@ -7,6 +7,12 @@ def _txt_pay_unclear():
             "<b>24.50</b> (или нажмите «Сумму не знаю»)")
 
 
+def _txt_pay_next(addr):
+    """Подсказка: в очереди ещё один заказ, ждём его сумму."""
+    return (f"Следующий: <b>{_esc(addr)}</b> — напишите сумму числом "
+            "или нажмите «Сумму не знаю» в его диалоге")
+
+
 def _txt_pay_recorded(pay, amount):
     return (f"✅ Записано: <b>{_esc(pay.get('addr') or pay['oid'])}</b>"
             f" доставлен. Оплата: <b>{_pay_method_label(pay['method'])}</b>, "
