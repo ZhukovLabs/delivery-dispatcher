@@ -14,5 +14,5 @@ from .hub import (_DEBOUNCE_S, _GEO_FULL_RESYNC_S, _GEO_MIN_INTERVAL_S,
                   _notify_lock, _sessions, log, notify_changed, sio,
                   socketio_app, start)
 from .broadcast import _broadcast, _broadcast_geo
-from .sessions import (_alive_uids, _recheck_sessions, _verify_token,
+from .sessions import (_alive_users, _recheck_sessions, _verify_token,
                        connect, disconnect, workpoint)
