@@ -41,6 +41,21 @@ def test_start_delay_min_fallback(clean_state):
     assert _start_delay_min({"back_min": -3}) == 0
 
 
+def test_start_delay_min_at_depot_adds_reload(clean_state, monkeypatch):
+    """Живая гео «у точки без развозки»: старт включает погрузку партии
+    (раньше третья ветка возвращала голый back_min без reload_min)."""
+    reload_min = max(0, int(STATE["settings"].get("reload_min", 10)))
+    monkeypatch.setattr("dp.online_helpers._courier_geo",
+                        lambda c, d: {"back_min": 0})
+    assert _start_delay_min(STATE["couriers"][0]) == reload_min
+    monkeypatch.setattr("dp.online_helpers._courier_geo",
+                        lambda c, d: {"back_min": 25})
+    assert _start_delay_min(STATE["couriers"][0]) == 25 + reload_min
+    monkeypatch.setattr("dp.online_helpers._courier_geo",
+                        lambda c, d: {"back_min": 600})
+    assert _start_delay_min(STATE["couriers"][0]) == 480  # потолок 8 часов
+
+
 def test_refresh_plan_delays_away_courier(clean_state):
     """away без гео: старт = back_min, цепочка заездов сдвигается с reload_min."""
     tr0, tr1 = _trip("o1", 60, 5, 90), _trip("o2", 130, 20, 150)

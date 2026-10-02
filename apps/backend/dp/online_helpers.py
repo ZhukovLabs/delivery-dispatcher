@@ -23,7 +23,9 @@ def _start_delay_min(c):
         if g.get("to_point_min") is not None:
             # заказы прежней партии ещё не забраны: доехать + погрузиться
             return min(480, g["to_point_min"] + reload_min)
-        return g["back_min"]
+        # у точки без развозки: вернуться (обычно уже на месте) и
+        # погрузить новую партию — как и соседние ветки, с reload_min
+        return min(480, g["back_min"] + reload_min)
     return max(0, int(c.get("back_min", 15)))
 
 
