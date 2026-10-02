@@ -22,6 +22,22 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, dragOve
   const plan = st.plan!;
   const byRoads = plan.routing === "roads";
 
+  // маршрут, замыкающий «последнюю доставку»: его ожидание старта (возврат
+  // курьера на базу) уже входит в метрику — поясняем это, если ожидание большое
+  const lastRoute = plan.routes.reduce((a, r) => {
+    const eta = (x: Route) => x.trips[x.trips.length - 1]?.stops.slice(-1)[0]?.eta_min ?? -1;
+    return !a || eta(r) > eta(a) ? r : a;
+  }, null as Route | null);
+  const waitMin = lastRoute?.start_delay_min ?? 0;
+  const fmtWait = (m: number) => m >= 60
+    ? `${Math.floor(m / 60)} ч${m % 60 ? " " + (m % 60) + " м" : ""}`.trim()
+    : `${m} мин`;
+  // есть ли курьеры соседних точек — кандидаты в разовую помощь при переполнении
+  const firstPid = st.points?.[0]?.id || "";
+  const myp = st.my_point || firstPid;
+  const hasForeign = !!plan.unassigned
+    && st.couriers.some(c => (c.point_id || firstPid) !== myp);
+
   return (
     <>
       <div className="plan-top">
@@ -47,9 +63,19 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, dragOve
               <Hand size={11} /> правка вручную
             </span>
           )}
+          {waitMin >= 30 && lastRoute && (
+            <span className="pm-chip" title={`«${lastRoute.courier_name}» сейчас вне базы — время до его возврата (${fmtWait(waitMin)}) уже учтено в последней доставке`}>
+              <Clock size={11} /> включая ожидание «{lastRoute.courier_name}» +{fmtWait(waitMin)}
+            </span>
+          )}
           {!!plan.unassigned && (
             <span className="pm-chip warn" title="Заказы, не поместившиеся ни в один маршрут (лимит заказов на курьера)">
               <TriangleAlert size={11} /> без маршрута: {plan.unassigned}
+            </span>
+          )}
+          {hasForeign && (
+            <span className="pm-chip warn" title="Перетащите курьера соседней точки на маршрут: он возьмёт один заказ, его точка не изменится">
+              <Hand size={11} /> можно позвать курьера с другой точки
             </span>
           )}
         </div>
