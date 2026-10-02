@@ -50,11 +50,19 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
     # альтернативы (solution_limit) дают менее предсказуемое от размера
     # задачи качество.
     big = len(ctx.orders) > 12
+    # DP_TIME_MS — override бюджета прохода (тесты/диагностика/слабое железо):
+    # одно число — бюджет для любого размера, два через запятую — «малый,большой»
+    # (до 12 заказов / свыше). Мусорное значение молча игнорируется.
     try:
-        budget_ms = int(os.environ.get("DP_TIME_MS", ""))
+        _ov = [int(x) for x in
+               os.environ.get("DP_TIME_MS", "").replace(";", ",").split(",") if x.strip()]
     except ValueError:
-        budget_ms = 0
-    per_pass_ms = budget_ms or (5000 if big else 1500)
+        _ov = []
+    if big:
+        per_pass_ms = (_ov[1] if len(_ov) > 1 else _ov[0]) if _ov else 0
+        per_pass_ms = per_pass_ms or 5000
+    else:
+        per_pass_ms = (_ov[0] if _ov else 0) or 1500
 
     solution, routing, manager, time_dim = _solve_once(ctx, per_pass_ms)
     plan, start_s = _make_plan(ctx, solution, routing, manager, time_dim)
