@@ -25,9 +25,9 @@ def two_points(monkeypatch):
          "lng": 31.1, "pos": 1},
     ]
     STATE["couriers"] = []
-    for name in ("_persist_couriers", "_persist_meta", "_invalidate_plan",
-                 "_payload"):
+    for name in ("_persist_couriers", "_persist_meta", "_invalidate_plan"):
         monkeypatch.setattr(crud, name, lambda *a, **k: None)
+    monkeypatch.setattr(crud, "_payload", lambda *a, **k: {"ok": True})
     yield
     STATE.clear()
     STATE.update(snap)
@@ -60,3 +60,30 @@ def test_empty_name_rejected(two_points):
     resp = _add_courier("   ", {})
     assert STATE["couriers"] == []
     assert resp.status_code == 400
+
+
+def _set_point(cid, pid, is_admin, monkeypatch):
+    req = SimpleNamespace(query_params={}, url=SimpleNamespace(
+        path="/api/couriers/x/point"), method="POST", client=None)
+    monkeypatch.setattr(crud, "_me",
+                        lambda: {"id": "u1", "is_admin": is_admin})
+    tok = set_request_ctx(req, {"point_id": pid}, {})
+    try:
+        return crud.set_courier_point(cid)
+    finally:
+        reset_request_ctx(tok)
+
+
+def test_move_courier_admin_only(two_points, monkeypatch):
+    """Перевод курьера между точками — только администратор, независимо
+    от «места работы» (регрессия 03.10: рядовой диспетчер мог двигать)."""
+    _add_courier("иван", {"point": "p1"})
+    cid = STATE["couriers"][0]["id"]
+
+    resp = _set_point(cid, "p2", 0, monkeypatch)   # диспетчер — нельзя
+    assert resp.status_code == 403
+    assert STATE["couriers"][0]["point_id"] == "p1"
+
+    resp = _set_point(cid, "p2", 1, monkeypatch)   # админ — любое место работы
+    assert resp == {"ok": True}                    # dict => HTTP 200
+    assert STATE["couriers"][0]["point_id"] == "p2"

@@ -31,7 +31,16 @@ r = APIRouter()
 @r.post("/api/couriers/{cid}/point")
 @flaskish
 def set_courier_point(cid):
-    """Перекинуть курьера на другое место выдачи."""
+    """Перекинуть курьера на другое место выдачи.
+
+    Только администратор — независимо от его «места работы»: диспетчер
+    точки чужих курьеров не двигает и своих тоже (балансировка точек —
+    прерогатива админа).
+    """
+    me = _me()
+    if not me or not me.get("is_admin"):
+        return jsonify({"error": "Переводить курьера между точками может "
+                                 "только администратор"}), 403
     data = _json()
     pid = (data.get("point_id") or "").strip()
     if not any(x["id"] == pid for x in STATE.get("points") or []):
