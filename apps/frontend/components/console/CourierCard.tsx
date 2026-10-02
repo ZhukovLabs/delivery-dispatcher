@@ -80,7 +80,7 @@ export function CourierCard({ c, n, st, dragOverCourier, setDragOverCourier, mut
           </span>
         )}
       </div>
-      {(st.points || []).length > 0 && !foreign && (
+      {(st.points || []).length > 0 && (!foreign || !!st.me?.is_admin) && (
         <div className="c-row2 pt-row" title="Место, откуда курьер забирает заказы (маршрут начинается отсюда). Переводить курьеров между точками может только администратор">
           <MapPin size={11} className="pp-ico" />
           {!!st.me?.is_admin ? (
