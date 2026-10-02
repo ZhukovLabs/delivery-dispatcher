@@ -20,8 +20,8 @@ html.dark .opt-tag{background:#232d3f;color:#9aa7bd}
 .dl-ql{font-size:11.5px;color:var(--mut)}
 .trip-head{display:flex;gap:6px;align-items:baseline;color:var(--mut);font-size:11.5px;font-weight:600;margin:7px 0 1px}
 .trip-head:first-child{margin-top:0}
-.late-chip{color:#b3261e;font-weight:700;font-size:11px;white-space:nowrap}
-.s-dl{color:#3b66c4;font-size:11.5px;white-space:nowrap}
+.late-chip{color:#b3261e;font-weight:700;font-size:11px;white-space:nowrap;margin-left:6px}
+.s-dl{color:#3b66c4;font-size:11.5px;white-space:nowrap;margin-left:6px}
 
 /* ручной перенос остановок */
 ol.stops li[draggable=true]{cursor:grab}
