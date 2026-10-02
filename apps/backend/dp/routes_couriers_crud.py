@@ -58,10 +58,13 @@ def add_courier():
         return jsonify({"error": "Введите имя курьера"}), 400
     color = PALETTE[STATE["color_seq"] % len(PALETTE)]
     STATE["color_seq"] += 1
+    # курьер садится на ТЕКУЩУЮ рабочую точку диспетчера (селектор
+    # «Место работы»), а не всегда на первую: иначе при создании из
+    # другой точки курьер «пропадает» — заказы своей точки недоступны
     STATE["couriers"].append({"id": uuid.uuid4().hex[:8], "name": name,
                               "status": "base", "color": color, "back_min": 15,
                               "tg_chat_id": "",
-                              "point_id": (STATE.get("points") or [{}])[0].get("id", "")})
+                              "point_id": _my_point()})
     _persist_couriers(), _persist_meta()
     _invalidate_plan()
     return _payload()
