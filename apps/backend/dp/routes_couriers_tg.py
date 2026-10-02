@@ -70,6 +70,9 @@ def bind_courier(cid):
 def unbind_courier(cid):
     for c in STATE["couriers"]:
         if c["id"] == cid:
+            if _home_point(c)["id"] != _my_point() and not _me()["is_admin"]:
+                return jsonify({"error": "Курьер другого депо — управлять может "
+                                         "только диспетчер его точки"}), 403
             STATE["tg_pos"].pop(c.get("tg_chat_id") or "", None)
             c["tg_chat_id"] = ""
             c["tg_login"] = ""

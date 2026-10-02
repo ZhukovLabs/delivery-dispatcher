@@ -52,6 +52,13 @@ def plan_move():
         if stop is None:
             return jsonify({"error": "Заказа нет в текущем плане"}), 400
 
+        # пустые заезды/маршруты источника убираем (как в plan_unassign):
+        # маршрут, отдавший последний заказ, не должен висеть пустым
+        for r in plan["routes"]:
+            r["trips"] = [tr for tr in r.get("trips", []) if tr["stops"]]
+        plan["routes"] = [r for r in plan["routes"]
+                          if r.get("trips") or r is dst]
+
         touched_routes = [r for r in plan["routes"]
                           if r["courier_id"] in {src_id, dst["courier_id"]}]
         matrix, node, appr_home, home_of = _retiming_matrix(plan, _my_point(),

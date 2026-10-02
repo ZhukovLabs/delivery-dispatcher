@@ -37,7 +37,10 @@ def _bot_close_delivered(oid, outcome="delivered", reason=""):
     STATE["orders"] = [o for o in STATE["orders"] if o["id"] != oid]
     _flip_return_route(cid)
     _persist_orders()
-    _invalidate_plan(drop_plan=True, pid=_obj_point(order))
+    # заказ уже был выдан (out) — его стопы из плана убраны при выдаче;
+    # помечаем план «устарел», как у ручного закрытия диспетчером
+    # (routes_orders): чужие маршруты должны остаться на экране
+    _invalidate_plan(pid=_obj_point(order))
     _bump()
     log.info("bot confirm: заказ %s (%s) закрыт курьером %s (%s)",
              oid, order.get("address"), c.get("name") if c else cid, outcome)

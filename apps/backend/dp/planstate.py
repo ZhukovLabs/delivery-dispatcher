@@ -40,21 +40,18 @@ def _points_ids():
 
 
 # ---------- инвалидация плана (используется и HTTP-ручками, и TG-ботом) ----------
-def _invalidate_plan(drop_plan=False, pid=None, courier_id=None, geo=False,
-                     stale_only=False):
+def _invalidate_plan(pid=None, courier_id=None, geo=False, stale_only=False):
     # под замком: параллельные выдачи/возвраты правят те же планы
     with _plans_lock:
-        return _invalidate_plan_u(drop_plan, pid, courier_id, geo, stale_only)
+        return _invalidate_plan_u(pid, courier_id, geo, stale_only)
 
 
-def _invalidate_plan_u(drop_plan=False, pid=None, courier_id=None, geo=False,
-                       stale_only=False):
+def _invalidate_plan_u(pid=None, courier_id=None, geo=False, stale_only=False):
     """План не пересчитываем в фоне — только помечаем/сбрасываем.
 
     pid — депо, чей план инвалидируем (None = все депо: правка точек/настроек).
-    drop_plan=True — старый план точно невалиден (удаление заказа/курьера,
-    смена депо): сбрасываем сразу. Иначе план показывается с пометкой
-    «устарел», пока администратор не нажмёт «Рассчитать».
+    План показывается с пометкой «устарел», пока администратор
+    не нажмёт «Рассчитать».
     courier_id — курьер-специфичная инвалидация (смена статуса, удаление,
     возврат на базу, перевод в другое депо): из всех планов убираются только
     маршруты этого курьера, маршруты остальных курьеров сохраняются
@@ -109,10 +106,7 @@ def _invalidate_plan_u(drop_plan=False, pid=None, courier_id=None, geo=False,
     for key, plan in list(plans.items()):
         if plan is None:
             continue
-        if drop_plan:
-            STATE["plans"].pop(key, None)
-        else:
-            plan["stale"] = True
+        plan["stale"] = True
     try:
         _persist_meta()
     except sqlite3.Error:
