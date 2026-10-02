@@ -101,9 +101,9 @@ def upd_courier(cid):
                     return jsonify({"error": "ID Telegram должен быть числом"}), 400
                 c["tg_chat_id"] = new_tg
             _persist_couriers()
-            # курьер может быть помощником в чужом плане — но его маршрут
-            # убираем точечно, чужие маршруты остаются с пометкой «устарел»
-            _invalidate_plan(courier_id=cid)
+            # off-курьер развозить не может — его маршруты вырезаем из
+            # планов; база/в пути и правка полей расчёт не рвут — «устарел»
+            _invalidate_plan(courier_id=cid, stale_only=c["status"] != "off")
             return _payload()
     return jsonify({"error": "Курьер не найден"}), 404
 

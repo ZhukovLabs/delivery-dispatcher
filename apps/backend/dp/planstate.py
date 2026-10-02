@@ -40,13 +40,15 @@ def _points_ids():
 
 
 # ---------- инвалидация плана (используется и HTTP-ручками, и TG-ботом) ----------
-def _invalidate_plan(drop_plan=False, pid=None, courier_id=None, geo=False):
+def _invalidate_plan(drop_plan=False, pid=None, courier_id=None, geo=False,
+                     stale_only=False):
     # под замком: параллельные выдачи/возвраты правят те же планы
     with _plans_lock:
-        return _invalidate_plan_u(drop_plan, pid, courier_id, geo)
+        return _invalidate_plan_u(drop_plan, pid, courier_id, geo, stale_only)
 
 
-def _invalidate_plan_u(drop_plan=False, pid=None, courier_id=None, geo=False):
+def _invalidate_plan_u(drop_plan=False, pid=None, courier_id=None, geo=False,
+                       stale_only=False):
     """План не пересчитываем в фоне — только помечаем/сбрасываем.
 
     pid — депо, чей план инвалидируем (None = все депо: правка точек/настроек).
@@ -57,8 +59,29 @@ def _invalidate_plan_u(drop_plan=False, pid=None, courier_id=None, geo=False):
     возврат на базу, перевод в другое депо): из всех планов убираются только
     маршруты этого курьера, маршруты остальных курьеров сохраняются
     с пометкой «устарел» — диспетчер может выдать их без пересчёта.
+    stale_only=True — маршруты НЕ вырезаем: смена статуса база<->в пути
+    не рвёт расчёт (рано или поздно курьер вернётся и поедет по нему) —
+    план целиком помечается «устарел». Инцидент: «вернулся на базу»
+    вырезал единственный маршрут, и расчёт пропадал из консоли.
     """
     if courier_id is not None:
+        if stale_only:
+            changed = False
+            for key, plan in list(STATE["plans"].items()):
+                if plan is None:
+                    continue
+                routes = plan.get("routes") or []
+                if any(r.get("courier_id") == courier_id for r in routes) \
+                        and not plan.get("stale"):
+                    plan["stale"] = True
+                    changed = True
+            if changed:
+                try:
+                    _persist_meta()
+                except sqlite3.Error:
+                    pass
+            _bump()
+            return
         changed = False
         for key, plan in list(STATE["plans"].items()):
             if plan is None:

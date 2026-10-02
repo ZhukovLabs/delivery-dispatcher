@@ -21,7 +21,9 @@ def _auto_status_apply(c, new_status):
     was = c.get("status")
     c["status"] = new_status
     _persist_couriers()
-    _invalidate_plan(courier_id=c["id"], geo=True)
+    # смена статуса база<->в пути не рвёт расчёт: маршруты остаются,
+    # план помечается «устарел» (вырезание — только off/удаление/перевод)
+    _invalidate_plan(courier_id=c["id"], geo=True, stale_only=True)
     if was != new_status:
         _ev("sys", f"{c['name']}: " + ("уехал в путь" if new_status == "away"
                                        else "вернулся на базу"))
