@@ -44,7 +44,12 @@ def _deadline_rel_min(hhmm, now_hm):
     m = re.match(r"^([01]?\d|2[0-3]):([0-5]\d)$", (hhmm or "").strip())
     if not m:
         return None
-    return (int(m.group(1)) * 60 + int(m.group(2))) - now_hm
+    rel = (int(m.group(1)) * 60 + int(m.group(2))) - now_hm
+    if rel < -12 * 60:
+        # «00:10», заданный до полуночи, — это ЗАВТРА: без переноса дедлайн
+        # считается провисшим сутки (решатель паникует, late_min ~1400)
+        rel += 24 * 60
+    return rel
 
 
 _APPROACH_RADIUS_KM = 2.5  # ближе к центру — плотная застройка, парковка дольше
