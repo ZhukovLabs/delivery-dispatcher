@@ -67,8 +67,26 @@ export function useWorkPoint(deps: {
     if (wpSynced.current || wpSwitchingRef.current) return; // ручная смена уже постит сама
     wpSynced.current = true;
     void api("/api/workpoint", "POST", { point_id: workPoint })
-      .catch(() => wpWipe());
-  }, [workPoint, st?.points]);
+      .catch(() => {
+        // сервер был недоступен (рестарт деплоя): сессия осталась в старом
+        // депо, а селектор показывает новое — «Рассчитать» уйдёт в чужую
+        // точку. Откатываемся к серверному значению, оно истина
+        wpWipe();
+        const sv = st.my_point;
+        if (sv && st.points!.some(p => p.id === sv) && sv !== workPoint) {
+          setWorkPoint(sv);
+        }
+      });
+  }, [workPoint, st?.points, st?.my_point]);
+  // страховка от расползания селектора и сессии (вторая вкладка, сеть):
+  // после успешной синхронизации серверное значение главнее локального
+  useEffect(() => {
+    if (!st?.points?.length || !wpSynced.current || wpSwitchingRef.current) return;
+    const sv = st.my_point;
+    if (sv && st.points!.some(p => p.id === sv) && sv !== workPoint) {
+      setWorkPoint(sv);
+    }
+  }, [st?.my_point, st?.points, workPoint]);
   const onWorkPoint = (pid: string) => {
     if (pid === workPoint || wpSwitchingRef.current) return;
     wpSwitchingRef.current = true;
