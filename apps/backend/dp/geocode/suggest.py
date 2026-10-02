@@ -1,10 +1,11 @@
 import json
+import re
 
 import requests
 
 from ..core import log
 from .base import UA, YANDEX_KEY
-from .parse import _suggest_normalize
+from .parse import _suggest_normalize, _tok, _word_like
 
 
 def _suggest_v1(q, ll, spn):
@@ -62,19 +63,47 @@ def _suggest_legacy(q, ll, spn):
     return res
 
 
-def suggest_yandex(q, lat, lng):
-    """Подсказки Геосаджеста при печати: только тексты, координат нет —
-    их добирает геокодер, когда пользователь выбрал подсказку.
-    Официальный /v1/suggest; при ошибке или пустом ответе (так ведёт себя
-    отклонённый ключ) — легаси suggest-geo. ll+spn держат подсказки в Гомеле."""
-    ll, spn = f"{lng},{lat}", "0.4,0.4"
-    raw = []
+def _fetch(q, ll, spn):
+    """Официальный /v1/suggest, за ним легаси suggest-geo."""
     try:
         if not YANDEX_KEY:
             raise RuntimeError("не задан YANDEX_GEOCODER_KEY")
         raw = _suggest_v1(q, ll, spn)
     except Exception as exc:  # noqa: BLE001
         log.warning("geosuggest /v1: %s — перехожу на легаси suggest-geo", exc)
+        raw = []
     if not raw:
         raw = _suggest_legacy(q, ll, spn)
+    return raw
+
+
+def _relevant(raw, q):
+    """Все слова запроса (с допуском опечаток) есть хоть в одной подсказке."""
+    toks = _tok(q)
+    if not toks:
+        return bool(raw)
+
+    def hit(lbl):
+        hay = set(_tok(lbl))
+        return all(any(_word_like(t, h) for h in hay) for t in toks)
+
+    return any(hit(lbl) for lbl in raw)
+
+
+def suggest_yandex(q, lat, lng):
+    """Подсказки Геосаджеста при печати: только тексты, координат нет —
+    их добирает геокодер, когда пользователь выбрал подсказку.
+    Официальный /v1/suggest; при ошибке или пустом ответе (так ведёт себя
+    отклонённый ключ) — легаси suggest-geo. ll+spn держат подсказки в Гомеле.
+    Саджест не понимает склонённое название пункта («Еремина, школьная 13»
+    даёт Турку и Мозырь): если ответ нерелевантен, повторяем запрос,
+    заменив окончание слов -а на -о (именительная форма: «Еремино»)."""
+    ll, spn = f"{lng},{lat}", "0.4,0.4"
+    raw = _fetch(q, ll, spn)
+    if not _relevant(raw, q):
+        variant = re.sub(r"\b([а-яё]{4,})а\b", r"\1о", q, flags=re.I)
+        if variant and variant != q:
+            raw2 = _fetch(variant, ll, spn)
+            if _relevant(raw2, q):
+                raw = raw2
     return [lbl for lbl in (_suggest_normalize(x) for x in raw) if lbl]

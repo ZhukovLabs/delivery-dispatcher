@@ -65,3 +65,33 @@ def test_v1_parses_results_field(monkeypatch):
     monkeypatch.setattr(suggest.requests, "get", lambda *a, **kw: _FakeResp(payload))
     out = suggest._suggest_v1("Телегина 15", "31.01,52.43", "0.4,0.4")
     assert out == ["Гомель, улица Телегина, 15", "без адреса, Гомель"]
+
+
+def test_irrelevant_answer_retries_nominative(monkeypatch):
+    """«Еремина, школьная 13» — саджест даёт Турку/Мозырь без слова запроса:
+    повторяем с именительной формой (-а -> -о) и берём её, если она релевантна."""
+    monkeypatch.setattr(suggest, "YANDEX_KEY", "k")
+
+    def fake_v1(q, ll, spn):
+        if "еремино" in q.lower():
+            return ["Гомельский район, агрогородок Ерёмино, Школьная улица, 13"]
+        return ["Мозырский район, Школьная улица, 13"]  # «еремина» тут нет
+
+    monkeypatch.setattr(suggest, "_suggest_v1", fake_v1)
+    out = suggest_yandex("Еремина, школьная 13", 52.4345, 31.0137)
+    assert out == ["агрогородок Ерёмино, Школьная улица, 13, Гомельский район"]
+
+
+def test_relevant_answer_no_rotation(monkeypatch):
+    """Релевантный ответ с первого раза — лишних запросов не делаем."""
+    monkeypatch.setattr(suggest, "YANDEX_KEY", "k")
+    calls = []
+
+    def fake_v1(q, ll, spn):
+        calls.append(q)
+        return ["Гомель, улица Телегина, 15"]
+
+    monkeypatch.setattr(suggest, "_suggest_v1", fake_v1)
+    out = suggest_yandex("Телегина 15", 52.4345, 31.0137)
+    assert out == ["ул. Телегина, Гомель, 15"]
+    assert calls == ["Телегина 15"]
