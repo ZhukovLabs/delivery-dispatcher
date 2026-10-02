@@ -80,10 +80,15 @@ def _solve_once(ctx, budget_ms):
         orders_dim.CumulVar(routing.End(vi)).SetMax(
             max_orders + 1 + pinned_n.get(cid, 0))
         if cid in helper_ids:
-            # размерность считает дуги: простой = 1, ровно один заказ = 2
-            orders_dim.CumulVar(routing.End(vi)).SetRange(2, 2)
-        elif vi == first and cid in force_ids:
+            # размерность считает дуги: простой = 1, один заказ = 2.
+            # НЕ БОЛЕЕ одного (не «ровно»): если все заказы точки
+            # закреплены за другими, пустой помощник не должен ломать
+            # модель («ровно один» при пустом allowed -> несовместимость
+            # -> «OR-Tools не нашёл решение» для всего расчёта)
+            orders_dim.CumulVar(routing.End(vi)).SetMax(2)
+        elif vi == first and cid in force_ids and v["allowed"]:
             # перетащен в план вручную: первый заезд обязан взять заказ
+            # (не применяем при пустом allowed — та же несовместимость)
             orders_dim.CumulVar(routing.End(vi)).SetMin(2)
 
     routing.AddDimensionWithVehicleTransits(cb_idxs, 0, 24 * 3600, False, "Time")
@@ -110,9 +115,10 @@ def _solve_once(ctx, budget_ms):
         else:
             start.SetMin(v["start_min_s"])
 
-    # Штрафы ожидания доставки: обычный заказ 1 мин, просрочка дедлайна 25 —
-    # на размерности Time; приоритет 60/мин «поскорее» — на отдельной
-    # размерности Urg, чтобы заказ с приоритетом И дедлайном давился ОБЕИМИ
+    # Штрафы ожидания доставки (кумуляторы в СЕКУНДАХ): обычный заказ
+    # 5/сек, просрочка дедлайна 25/сек — на размерности Time; приоритет
+    # 60/сек «поскорее» — на отдельной размерности Urg, чтобы заказ с
+    # приоритетом И дедлайном давился ОБЕИМИ
     # (раньше elif терял приоритет у заказов с дедлайном).
     has_prio = any(eff_prio.values())
     if has_prio:
