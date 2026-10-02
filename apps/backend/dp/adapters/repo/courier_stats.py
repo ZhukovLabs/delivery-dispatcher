@@ -13,8 +13,15 @@ def _courier_day_stats(point_id=None, day=None):
     отменён из очереди, не считается «взятым»). Километраж — из живого
     гео (speed_day), время на работе — от первой выдачи до последнего
     закрытия (или текущего момента, пока заказы ещё в развозке).
-    Оплаты — сколько закрытых заказов курьера оплачено наличными/картой.
+    Оплаты — сумма денег наличными/картой (сумма неизвестна — 0).
     """
+
+    def _amount(r):
+        try:
+            return float(r["pay_amount"] or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
     day = day or _now().strftime("%Y-%m-%d")
     now_s = _now().isoformat(timespec="seconds")
     where, args = "substr(closed_at, 1, 10) = ?", [day]
@@ -50,9 +57,9 @@ def _courier_day_stats(point_id=None, day=None):
         elif r["outcome"] == "cancelled":
             d["cancelled"] += 1
         if r["payment"] == "cash":
-            d["pay_cash"] += 1
+            d["pay_cash"] += _amount(r)
         elif r["payment"] == "card":
-            d["pay_card"] += 1
+            d["pay_card"] += _amount(r)
         if r["payment"] in ("cash", "card"):
             try:
                 d["revenue"] += float(r["pay_amount"] or 0)
@@ -91,7 +98,8 @@ def _courier_day_stats(point_id=None, day=None):
                     "km": round((km_by_cid.get(cid, 0)) / 1000, 1),
                     "taken": d["taken"], "delivered": d["delivered"],
                     "cancelled": d["cancelled"],
-                    "pay_cash": d["pay_cash"], "pay_card": d["pay_card"],
+                    "pay_cash": round(d["pay_cash"], 2),
+                    "pay_card": round(d["pay_card"], 2),
                     "revenue": round(d["revenue"], 2),
                     "work_min": work_min})
     out.sort(key=lambda x: (-x["delivered"], -x["taken"], x["courier"]))
