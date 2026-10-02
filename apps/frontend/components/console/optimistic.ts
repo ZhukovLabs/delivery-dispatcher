@@ -11,7 +11,7 @@ export function optimisticFor(method: string, path: string, body: Record<string,
     return patch(s => { s.orders.push({ id: tmpId, address: String(body.address || "Точка"), lat: body.lat, lng: body.lng, point_id: body.point_id ? String(body.point_id) : undefined, created_at: new Date().toISOString(), status: "ready" }); });
   }
   if (method === "POST" && path === "/api/orders/assign" && Array.isArray(body?.order_ids))
-    return patch(s => { const name = s.couriers.find(c => c.id === body.courier_id)?.name || ""; s.orders = s.orders.map(o => body.order_ids.includes(o.id) ? { ...o, status: "out" as const, assigned: name } : o); });
+    return patch(s => { s.orders = s.orders.map(o => body.order_ids.includes(o.id) ? { ...o, status: "out" as const, assigned: String(body.courier_id) } : o); });
   if (method === "POST" && /^\/api\/orders\/[^/]+\/return$/.test(path))
     return patch(s => { s.orders = s.orders.map(o => o.id === path.split("/")[3] ? { ...o, status: "ready" as const, assigned: "" } : o); });
   if (method === "DELETE" && path.startsWith("/api/orders/"))
@@ -35,9 +35,9 @@ export function optimisticFor(method: string, path: string, body: Record<string,
     return patch(s => { s.couriers.push({ id: tmpId, name: String(body.name), status: "base" }); });
   }
   if (method === "DELETE" && path.startsWith("/api/couriers/"))
-    return patch(s => { const cid = path.split("/")[3]; const name = s.couriers.find(c => c.id === cid)?.name; s.couriers = s.couriers.filter(c => c.id !== cid); if (name) s.orders = s.orders.map(o => o.assigned === name ? { ...o, status: "ready" as const, assigned: "" } : o); });
+    return patch(s => { const cid = path.split("/")[3]; const name = s.couriers.find(c => c.id === cid)?.name; s.couriers = s.couriers.filter(c => c.id !== cid); if (name) s.orders = s.orders.map(o => o.assigned === cid ? { ...o, status: "ready" as const, assigned: "" } : o); });
   if (method === "POST" && /^\/api\/couriers\/[^/]+\/returned$/.test(path))
-    return patch(s => { const cid = path.split("/")[3]; const name = s.couriers.find(c => c.id === cid)?.name; s.couriers = s.couriers.map(c => c.id === cid ? { ...c, status: "base" as const, back_min: 0 } : c); if (name) s.orders = s.orders.filter(o => o.assigned !== name); });
+    return patch(s => { const cid = path.split("/")[3]; const name = s.couriers.find(c => c.id === cid)?.name; s.couriers = s.couriers.map(c => c.id === cid ? { ...c, status: "base" as const, back_min: 0 } : c); if (name) s.orders = s.orders.filter(o => o.assigned !== cid); });
   if (method === "PATCH" && path.startsWith("/api/couriers/")) {
     const cid = path.split("/")[3];
     if (body?.status !== undefined) return patch(s => { s.couriers = s.couriers.map(c => c.id === cid ? { ...c, status: body.status } : c); });
