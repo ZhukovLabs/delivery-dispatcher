@@ -64,14 +64,16 @@ def _suggest_legacy(q, ll, spn):
 def suggest_yandex(q, lat, lng):
     """Подсказки Геосаджеста при печати: только тексты, координат нет —
     их добирает геокодер, когда пользователь выбрал подсказку.
-    Официальный /v1/suggest; при ошибке — легаси suggest-geo. ll+spn держат
-    подсказки в Гомеле."""
+    Официальный /v1/suggest; при ошибке или пустом ответе (так ведёт себя
+    отклонённый ключ) — легаси suggest-geo. ll+spn держат подсказки в Гомеле."""
     ll, spn = f"{lng},{lat}", "0.4,0.4"
+    raw = []
     try:
         if not YANDEX_KEY:
             raise RuntimeError("не задан YANDEX_GEOCODER_KEY")
         raw = _suggest_v1(q, ll, spn)
     except Exception as exc:  # noqa: BLE001
         log.warning("geosuggest /v1: %s — перехожу на легаси suggest-geo", exc)
+    if not raw:
         raw = _suggest_legacy(q, ll, spn)
     return [lbl for lbl in (_suggest_normalize(x) for x in raw) if lbl]
