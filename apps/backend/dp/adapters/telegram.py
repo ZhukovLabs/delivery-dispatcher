@@ -30,7 +30,6 @@ def _tg_out_chat(chat_id):
         pref = f"[{_esc(c['name'])}] " if c else "[тест] "
         return TG_TEST_REDIRECT, pref
     return cid, ""
-    return f"https://api.telegram.org/bot{CFG['tg_bot_token']}/{method}"
 def _tg_send(chat_id, text):
     """Исходящее сообщение курьеру (ошибки не критичны — молча в лог)."""
     chat_id, pref = _tg_out_chat(chat_id)
