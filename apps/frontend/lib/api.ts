@@ -98,7 +98,7 @@ export function fetchApi(path: string, init: RequestInit = {}): Promise<Response
 }
 
 export class NetworkError extends Error {
-  constructor() { super("Сеть недоступна — проверьте подключение к интернету"); }
+  constructor() { super("Сеть недоступна — проверьте подключение к интернету и разрешите доступ к локальной сети (Local Network), если браузер спросил"); }
 }
 export const isNetworkError = (e: unknown): e is NetworkError => e instanceof NetworkError;
 const networkError = () => new NetworkError();
