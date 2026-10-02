@@ -5,8 +5,9 @@ from collections import OrderedDict
 
 from fastapi import APIRouter
 
-from ..core import STATE, haversine_km, hedged_first, log
+from ..core import STATE, haversine_km, log
 from ..shims import flaskish, jsonify, request
+from .base import _hedged
 from .nominatim import search_nominatim
 from .parse import _extract_house, _tok, _word_like
 from .photon import search_photon
@@ -49,7 +50,7 @@ def geocode():
                           daemon=True)
     th.start()
     try:
-        items = hedged_first([lambda: search_yandex(q, lat, lng),
+        items = _hedged([lambda: search_yandex(q, lat, lng),
                               lambda: search_nominatim(q, lat, lng),
                               lambda: search_photon(q, lat, lng)]) or []
     except Exception as e:  # noqa: BLE001
