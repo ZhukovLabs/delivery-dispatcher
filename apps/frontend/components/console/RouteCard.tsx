@@ -99,11 +99,11 @@ export function RouteCard({ r, ri, st, clock, dragOverRoute, setDragOverRoute, o
                       <span className="s-prio" title={`Приоритетный${s.auto ? ", поднялся сам по возрасту" : ""}`}><Zap size={11} /></span>
                     )} {s.address}
                     {s.deadline && <span className="s-dl" title="Обещанное время доставки"><Timer size={11} />{s.deadline}</span>}
-                    {!!s.late_min && s.late_min > 0 && (
-                      <span className="late-chip" title="Успеть к обещанному времени не получится">
-                        опоздание ~{s.late_min} мин
-                      </span>
-                    )}
+                     {!!s.late_min && s.late_min > 0 && (
+                       <span className="late-chip" title="Успеть к обещанному времени не получится">
+                         опоздание ~{Math.round(s.late_min)} мин
+                       </span>
+                     )}
                   </span>
                   <span className="s-t">{s.eta_clock || "?"}</span>
                   <button className="s-x" title="Убрать заказ с маршрута — вернётся в очередь готовых (сам заказ не удаляется)"

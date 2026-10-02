@@ -68,7 +68,7 @@ export function ReadyOrderRows({ st, tick, orders, dupOids, autoP, nowMin, planL
             {nocour && <span className="nocour-chip" title="Не вошёл в расчёт: не хватило курьеров или лимита заказов. Перетащите на курьера вручную или пересчитайте план"><UserX size={11} /> без курьера</span>}
             {o.deadline && <span className="dl-chip" title="Обещали к этому времени"><Timer size={11} /> {o.deadline}</span>}
             {late > 0
-              ? <span className="burn-chip" title="По текущему плану к обещанному времени не успеваем"><Flame size={11} /> опоздание ~{late} мин</span>
+              ? <span className="burn-chip" title="По текущему плану к обещанному времени не успеваем"><Flame size={11} /> опоздание ~{Math.round(late)} мин</span>
               : (soon !== null && 0 <= soon && soon <= 15)
                 ? <span className="soon-chip" title="Дедлайн на подходе, а заказа ещё нет в маршруте"><Hourglass size={11} /> скоро {o.deadline}</span>
                 : null}

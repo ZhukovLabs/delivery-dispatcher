@@ -18,7 +18,7 @@ export const popupHtml = (p: PopupData) =>
   (p.eta ? `<br>Время прибытия ≈${esc(p.eta)}` +
     (p.inMin != null ? ` (через ${p.inMin} мин)` : "") : "") +
   (p.kmLeft != null ? `<br>осталось ${p.kmLeft.toFixed(2)} км` : "") +
-  (p.lateMin ? `<br><span style="color:#b3261e">опоздание ~${p.lateMin} мин</span>` : "") +
+  (p.lateMin ? `<br><span style="color:#b3261e">опоздание ~${Math.round(p.lateMin)} мин</span>` : "") +
   (p.prio ? "<br>⭐ приоритетный" : "") +
   (p.deadline ? `<br>⏰ до ${esc(p.deadline)}` : "") +
   (p.note ? `<br>${p.note}` : "");
