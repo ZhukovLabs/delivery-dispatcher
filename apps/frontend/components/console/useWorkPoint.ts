@@ -12,7 +12,28 @@ export function useWorkPoint(deps: {
 }) {
   const { st, refresh, clearHighlights, refit } = deps;
   /* ---------- место работы администратора ---------- */
-  const [workPoint, setWorkPoint] = useState(() => (typeof window !== "undefined" ? localStorage.getItem("workPoint") || "" : ""));
+  // выбор живёт один день: в 00:00 local storage очищается, утром точка
+  // не тянется со вчера (диспетчер утром осознанно выбирает смену)
+  const wpDay = () => {
+    const d = new Date();
+    return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
+  };
+  const wpWipe = () => {
+    try {
+      localStorage.removeItem("workPoint");
+      localStorage.removeItem("workPointDay");
+    } catch {}
+  };
+  const [workPoint, setWorkPoint] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      if (localStorage.getItem("workPointDay") !== wpDay()) {
+        wpWipe(); // вчерашняя смена (или нет даты) — начинаем день заново
+        return "";
+      }
+      return localStorage.getItem("workPoint") || "";
+    } catch { return ""; }
+  });
   const firstPid = st?.points?.[0]?.id || "";
   const wpSynced = useRef(false);
   const [wpSwitching, setWpSwitching] = useState(false);
@@ -24,7 +45,21 @@ export function useWorkPoint(deps: {
       return st.points![0].id;
     });
   }, [st?.points]);
-  useEffect(() => { if (workPoint) localStorage.setItem("workPoint", workPoint); }, [workPoint]);
+  useEffect(() => {
+    if (!workPoint) return;
+    try {
+      localStorage.setItem("workPoint", workPoint);
+      localStorage.setItem("workPointDay", wpDay());
+    } catch {}
+  }, [workPoint]);
+  // открытый через полночь таб: в 00:00 очищаем хранилище (текущая смена
+  // в сессии продолжает работать, утром выбор начнётся с чистого листа)
+  useEffect(() => {
+    const now = new Date();
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const id = window.setTimeout(wpWipe, midnight.getTime() - now.getTime());
+    return () => window.clearTimeout(id);
+  }, []);
   // сообщаем серверу, где мы работаем: при первом входе и при смене селектора
   useEffect(() => {
     if (!workPoint || !st?.points?.length) return;
@@ -32,7 +67,7 @@ export function useWorkPoint(deps: {
     if (wpSynced.current || wpSwitchingRef.current) return; // ручная смена уже постит сама
     wpSynced.current = true;
     void api("/api/workpoint", "POST", { point_id: workPoint })
-      .catch(() => { try { localStorage.removeItem("workPoint"); } catch {} });
+      .catch(() => wpWipe());
   }, [workPoint, st?.points]);
   const onWorkPoint = (pid: string) => {
     if (pid === workPoint || wpSwitchingRef.current) return;
