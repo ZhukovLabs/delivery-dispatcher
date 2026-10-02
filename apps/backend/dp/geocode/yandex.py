@@ -26,43 +26,8 @@ def _yandex_to_item(name, desc, kind, lat, lng):
             "kind": kind, "state": "Гомельская область"}
 
 
-def _yandex_v1(geocode, spn, results, kind=None):
-    """Официальный HTTP API Геокодера /v1 (требует ключ, координаты «lng lat»)."""
-    params = {"apikey": YANDEX_KEY, "geocode": geocode, "format": "json",
-              "results": results, "lang": "ru_RU"}
-    if spn:
-        params["ll"], params["spn"] = spn
-    if kind:
-        params["kind"] = kind
-    resp = requests.get("https://geocode-maps.yandex.ru/v1/", params=params,
-                        headers=UA, timeout=GEO_FINAL_S)
-    resp.raise_for_status()
-    feats = (resp.json() or {}).get("features") or []
-    out = []
-    for f in feats:
-        geo = f.get("geometry") or {}
-        pos = geo.get("coordinates") or []
-        if geo.get("type") != "Point" or len(pos) != 2:
-            continue
-        p = f.get("properties") or {}
-        out.append(_yandex_to_item(p.get("name"), p.get("description"),
-                                   p.get("kind"), float(pos[1]), float(pos[0])))
-    return out
-
-
-def _yandex_legacy(geocode, spn, results, kind=None):
-    """Легаси /1.x работает без ключа — страховка, пока /v1 молчит (403)."""
-    params = {"geocode": geocode, "format": "json",
-              "results": results, "lang": "ru_RU"}
-    if spn:
-        params["ll"], params["spn"] = spn
-    if kind:
-        params["kind"] = kind
-    resp = requests.get("https://geocode-maps.yandex.ru/1.x/",
-                        params=params, headers=UA, timeout=GEO_FINAL_S)
-    resp.raise_for_status()
-    members = ((resp.json().get("response") or {})
-               .get("GeoObjectCollection", {}).get("featureMember") or [])
+def _legacy_members(members):
+    """Легаси-конверт GeoObjectCollection -> наш формат."""
     out = []
     for m in members:
         g = m.get("GeoObject") or {}
@@ -73,6 +38,55 @@ def _yandex_legacy(geocode, spn, results, kind=None):
         out.append(_yandex_to_item(g.get("name"), g.get("description"),
                                    meta.get("kind"), float(pos[1]), float(pos[0])))
     return out
+
+
+def _yandex_v1(geocode, spn, results, kind=None):
+    """Официальный HTTP API Геокодера /v1 (требует ключ, координаты «lng lat»).
+    Отвечает либо GeoJSON features, либо — с ключом JS API и format=json —
+    легаси-конвертом response.GeoObjectCollection: читаем оба."""
+    params = {"apikey": YANDEX_KEY, "geocode": geocode, "format": "json",
+              "results": results, "lang": "ru_RU"}
+    if spn:
+        params["ll"], params["spn"] = spn
+    if kind:
+        params["kind"] = kind
+    resp = requests.get("https://geocode-maps.yandex.ru/v1/", params=params,
+                        headers=UA, timeout=GEO_FINAL_S)
+    resp.raise_for_status()
+    data = resp.json() or {}
+    feats = data.get("features") or []
+    if feats:
+        out = []
+        for f in feats:
+            geo = f.get("geometry") or {}
+            pos = geo.get("coordinates") or []
+            if geo.get("type") != "Point" or len(pos) != 2:
+                continue
+            p = f.get("properties") or {}
+            out.append(_yandex_to_item(p.get("name"), p.get("description"),
+                                       p.get("kind"), float(pos[1]), float(pos[0])))
+        return out
+    members = ((data.get("response") or {}).get("GeoObjectCollection")
+               or {}).get("featureMember") or []
+    return _legacy_members(members)
+
+
+def _yandex_legacy(geocode, spn, results, kind=None):
+    """Легаси /1.x — страховка, пока /v1 молчит. Без ключа теперь 400."""
+    params = {"geocode": geocode, "format": "json",
+              "results": results, "lang": "ru_RU"}
+    if YANDEX_KEY:
+        params["apikey"] = YANDEX_KEY
+    if spn:
+        params["ll"], params["spn"] = spn
+    if kind:
+        params["kind"] = kind
+    resp = requests.get("https://geocode-maps.yandex.ru/1.x/",
+                        params=params, headers=UA, timeout=GEO_FINAL_S)
+    resp.raise_for_status()
+    members = ((resp.json().get("response") or {})
+               .get("GeoObjectCollection", {}).get("featureMember") or [])
+    return _legacy_members(members)
 
 
 def _yandex(geocode, spn, results, kind=None):
