@@ -54,6 +54,11 @@ def dialog_state(monkeypatch):
                         captured["edits"].append(text))
     monkeypatch.setattr("dp.bot_updates._tg_send",
                         lambda chat, text: captured["sends"].append(text))
+    # гео-путь: побочные эффекты трекеров в тестах не нужны
+    monkeypatch.setattr("dp.bot_updates._speed_geo_sample", lambda *a: None)
+    monkeypatch.setattr("dp.bot_updates._load_track", lambda *a: None)
+    monkeypatch.setattr("dp.bot_updates._deliver_track", lambda *a: None)
+    monkeypatch.setattr("dp.bot_updates._auto_status_track", lambda *a: None)
     yield captured
     STATE.clear()
     STATE.update(snap)
@@ -94,3 +99,27 @@ def test_stale_button_says_not_actual(dialog_state):
     _tg_handle_update(_cb("o1", "pay:cash"))
     assert cap["answers"] == ["Уже неактуально"]
     assert cap["pays"] == []
+
+
+def test_pay_dialog_ignores_geo_ticks(dialog_state):
+    """Live-geo тик при открытом диалоге оплаты не спамит «не понял сумму»
+    и не роняет диалог (регрессия: спам «неверная сумма», 03.10)."""
+    import time as _time
+
+    cap = dialog_state
+    STATE["_tg_persist_ts"] = _time.time()  # не пишем БД из теста
+    _tg_handle_update(_cb("o1", "y"))
+    _tg_handle_update(_cb("o1", "ok"))
+    _tg_handle_update(_cb("o1", "pay:cash"))
+    assert STATE["tg_pay"]["777"]["oid"] == "o1"
+
+    _tg_handle_update({"edited_message": {
+        "chat": {"id": 777}, "from": {"username": "ivan"},
+        "location": {"latitude": 52.4, "longitude": 31.0,
+                     "live_period": 3600}}})
+    assert cap["sends"] == []                      # спама «не понял сумму» нет
+    assert STATE["tg_pay"]["777"]["oid"] == "o1"   # диалог жив
+    assert STATE["tg_pos"]["777"]["lat"] == 52.4   # гео обработано
+
+    _tg_handle_update({"message": {"chat": {"id": 777}, "text": "24.50"}})
+    assert ("o1", None, 24.5) in cap["pays"]       # сумма по-прежнему принята
