@@ -43,8 +43,8 @@ export function CouriersSection({ d, couriers }: { d: Data; couriers: string[] }
               <td><b>{c.delivered}</b></td>
               <td>{c.cancelled}</td>
               <td>{c.revenue ? c.revenue.toFixed(2) : "–"}</td>
-              <td>{c.pay_cash || "–"}</td>
-              <td>{c.pay_card || "–"}</td>
+              <td>{c.pay_cash ? c.pay_cash.toFixed(2) : "–"}</td>
+              <td>{c.pay_card ? c.pay_card.toFixed(2) : "–"}</td>
               <td>{c.work_min != null ? `${Math.floor(c.work_min / 60)} ч ${String(c.work_min % 60).padStart(2, "0")} мин` : "–"}</td>
             </tr>
           ))}

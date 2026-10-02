@@ -83,8 +83,8 @@ export default function HistTab({ api: h }: { api: ReturnType<typeof useHistStat
           <span><b>{c.delivered}</b></span>
           <span className={c.cancelled ? "cs-bad" : ""}>{c.cancelled}</span>
           <span>{c.revenue ? c.revenue.toFixed(2) : "–"}</span>
-          <span>{c.pay_cash || "–"}</span>
-          <span>{c.pay_card || "–"}</span>
+          <span>{c.pay_cash ? c.pay_cash.toFixed(2) : "–"}</span>
+          <span>{c.pay_card ? c.pay_card.toFixed(2) : "–"}</span>
           <span>{c.work_min != null ? `${Math.floor(c.work_min / 60)} ч ${String(c.work_min % 60).padStart(2, "0")} мин` : "–"}</span>
         </div>
       ))}
