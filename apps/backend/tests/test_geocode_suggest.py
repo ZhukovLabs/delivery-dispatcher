@@ -41,3 +41,27 @@ def test_no_key_uses_legacy(monkeypatch):
     monkeypatch.setattr(suggest, "_suggest_legacy", lambda q, ll, spn: ["Гомель, Ленина 1"])
     out = suggest_yandex("Ленина", 52.4345, 31.0137)
     assert out == ["Ленина 1, Гомель"]
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+def test_v1_parses_results_field(monkeypatch):
+    """/v1/suggest отвечает полем results — парсер обязан его читать."""
+    monkeypatch.setattr(suggest, "YANDEX_KEY", "k")
+    payload = {"suggest_reqid": "x", "results": [
+        {"title": {"text": "улица Телегина, 15"}, "subtitle": {"text": "Гомель"},
+         "address": {"formatted_address": "Гомель, улица Телегина, 15"}},
+        {"title": {"text": "без адреса"}, "subtitle": {"text": "Гомель"}},
+    ]}
+    monkeypatch.setattr(suggest.requests, "get", lambda *a, **kw: _FakeResp(payload))
+    out = suggest._suggest_v1("Телегина 15", "31.01,52.43", "0.4,0.4")
+    assert out == ["Гомель, улица Телегина, 15", "без адреса, Гомель"]

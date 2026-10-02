@@ -15,7 +15,8 @@ def _suggest_v1(q, ll, spn):
                         headers=UA, timeout=3.0)
     resp.raise_for_status()
     data = resp.json()
-    items = data.get("items") if isinstance(data, dict) else data
+    # API отвечает полем results (в старых версиях было items) — принимаем оба
+    items = (data.get("results") or data.get("items")) if isinstance(data, dict) else data
     res = []
     for it in items or []:
         if not isinstance(it, dict):
