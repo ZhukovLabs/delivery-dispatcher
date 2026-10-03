@@ -150,7 +150,8 @@ _CORS_ORIGINS = [o.strip() for o in os.environ.get(
 _CORS_RE = os.environ.get("CORS_ORIGIN_REGEX", r"^https://[a-z0-9-]+\.vercel\.app$")
 app.add_middleware(
     CORSMiddleware, allow_origins=_CORS_ORIGINS, allow_credentials=True,
-    allow_origin_regex=_CORS_RE, allow_methods=["*"], allow_headers=["*"])
+    allow_origin_regex=_CORS_RE, allow_methods=["*"], allow_headers=["*"],
+    expose_headers=["content-disposition"])
 
 
 def serve() -> None:

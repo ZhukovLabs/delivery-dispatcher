@@ -78,8 +78,16 @@ def api_profile():
     if not me:
         return jsonify({"error": "Требуется вход"}), 401
     data = _json()
+    # имя участнику меняет только администратор (себе — в профиле, другим —
+    # в «Команде»); участник правит лишь телефон подписи
+    if me["is_admin"]:
+        new_name = data.get("name")
+    elif not (me.get("name") or "").strip():
+        return jsonify({"error": "Имя вам устанавливает администратор — попросите его заполнить ваш профиль"}), 400
+    else:
+        new_name = me["name"]
     try:
-        name, phone = _check_user_contact(data.get("name"), data.get("phone"))
+        name, phone = _check_user_contact(new_name, data.get("phone"))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     with _db_lock, _db() as c:
