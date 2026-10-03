@@ -82,7 +82,7 @@ export default function LeftColumn({
 
       <div className="solvebox">
         <button className="solve" disabled={!!miss || solving || !!st?.solving} onClick={() => void onSolveEnter()}>
-          {(solving || st?.solving) ? "⏳ Считаю…" : "⚡ Рассчитать развозку"}
+          {(solving || st?.solving) ? "⏳ Считаю…" : "⚡ Оптимальный маршрут"}
         </button>
         <div className="solve-hint">{miss || ""}</div>
       </div>

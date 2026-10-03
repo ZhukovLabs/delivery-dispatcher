@@ -55,7 +55,7 @@ export default function PlanPanel({ st, clock, busyMode, onMode, onGive, dragOve
           </span>
           {plan.stale && (
             <span className="pm-chip warn" title="Данные менялись после расчёта">
-              <RefreshCw size={11} /> устарел — нажмите «Рассчитать»
+              <RefreshCw size={11} /> устарел — пересчитайте
             </span>
           )}
           {plan.moved && (

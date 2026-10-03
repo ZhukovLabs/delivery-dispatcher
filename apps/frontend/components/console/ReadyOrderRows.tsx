@@ -96,7 +96,7 @@ export function ReadyOrderRows({ st, tick, orders, dupOids, autoP, nowMin, planL
             <button className="ok" title="Выдать курьеру (из текущего плана)" aria-label="Выдать заказ"
               onClick={async () => {
                 const r = (st.plan?.routes || []).find(r => (r.stops || []).some(s => s.order_id === o.id));
-                if (!r) { showToast("Заказа нет в текущем плане: рассчитайте план или выдайте с маршрута", true); return; }
+                if (!r) { showToast("Заказа нет в плане — постройте маршрут или выдайте его с карточки маршрута", true); return; }
                 await mutate("POST", "/api/orders/assign", { order_ids: [o.id], courier_id: r.courier_id });
                 undoToast(`Выдан: ${r.courier_name}`, `выдача ${o.address || ""}`.slice(0, 60), "assign", { order_ids: [o.id] });
               }}><Check size={14} /></button>

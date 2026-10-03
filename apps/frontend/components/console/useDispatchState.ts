@@ -6,7 +6,7 @@ import { api, fetchApi, type AppState, type CourierPos, type CourierGeo } from "
 import { dropSocket, ensureWsToken, getSocket, subscribePolling } from "@/lib/ws";
 
 /* ---------- данные консоли: кэш + живые обновления + тикер возраста + тема ----------
-   План считается ТОЛЬКО по кнопке «Рассчитать». Живые обновления (несколько
+   План считается ТОЛЬКО по кнопке «Оптимальный маршрут». Живые обновления (несколько
    админов, геолокации курьеров) — socket.io: сервер при любом изменении
    состояния пушит "state" с payload'ом депо подписчика (см. lib/ws.ts). */
 
