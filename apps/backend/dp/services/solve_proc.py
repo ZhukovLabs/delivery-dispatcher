@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Изоляция решателя OR-Tools в отдельный процесс.
+"""Изоляция решателя OR-Tools в отдельном процессе.
 
 SWIG-биндинг pywrapcp держит GIL ВСЁ время SolveWithParameters: чистый
 C++-поиск на матрицах вообще не возвращается в Python, и четырёхсекундный
 проход полностью замораживает потоки сервера (замер: джиттер sleep(20мс)
 до 3.9с; прежние Python-колбэки дуги это только маскировали постоянной
 перекачкой GIL ценой миллионов вызовов). Поэтому считаем в отдельном
-процессе с ОДНИМ постоянным воркером: тяжёлые импорты платятся один раз,
-на два ядра ноутбука приходится ровно один поиск одновременно, а ctx и
-план — пикабельные словари/списки.
+процессе: тяжёлые импорты платятся один раз, а на два ядра ноутбука
+приходится максимум два поиска одновременно (сценарий «ждать/не ждать»
+считает оба плана параллельно). ctx и план — пикабельные словари/списки.
 """
 import os
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import TimeoutError as _FutureTimeout
 from concurrent.futures.process import BrokenProcessPool
 
 from ..config import log
@@ -84,11 +85,25 @@ def _get_pool():
     return _pool
 
 
-def solve_isolated(ctx, per_pass_ms, hourly_on, solved_dt):
-    """Прогон обоих проходов в дочернем процессе (с одним ретраем упавшего).
+def _reset_pool(reason: str) -> None:
+    """Пересоздать пул: умерший ИЛИ зависший воркер держит слот — без
+    пересоздания следующий расчёт встанет в очередь за ним навсегда."""
+    global _pool
+    log.warning("solve: пул решателя пересоздан (%s)", reason)
+    try:
+        if _pool is not None:
+            _pool.shutdown(wait=False, cancel_futures=True)
+    except Exception:  # noqa: BLE001 — повторное убийство пула не должно ронять вызов
+        pass
+    _pool = None
 
-    Окружение DP_SOLVE_INPROC=1 заставляет считать в текущем процессе
-    (отладка; сервер при этом замрёт на время поиска).
+
+def solve_isolated(ctx, per_pass_ms, hourly_on, solved_dt):
+    """Прогон обоих проходов в дочернем процессе (с одним ретраем).
+
+    Таймаут и смерть процесса решателя одинаково лечатся пересозданием
+    пула. Окружение DP_SOLVE_INPROC=1 заставляет считать в текущем
+    процессе (отладка; сервер при этом замрёт на время поиска).
     """
     if os.environ.get("DP_SOLVE_INPROC", "").strip() not in ("", "0", "no"):
         return _solve_in_proc(ctx, per_pass_ms, hourly_on, solved_dt)
@@ -98,16 +113,7 @@ def solve_isolated(ctx, per_pass_ms, hourly_on, solved_dt):
                                      hourly_on, solved_dt)
             # бюджет ×2 прохода + запас на старт/пиклинг/геометрию плана
             return fut.result(timeout=per_pass_ms / 1000 * 3 + 20)
-        except BrokenProcessPool:
-            log.warning("solve: процесс решателя умер, перезапускаю (попытка %d)",
-                        attempt)
-            global _pool
-            try:
-                _pool.shutdown(wait=False)
-            except Exception:
-                pass
-            _pool = None
+        except (BrokenProcessPool, _FutureTimeout):
+            _reset_pool(f"попытка %d не удалась" % attempt)
             if attempt == 2:
                 raise RuntimeError("Процесс решателя не отвечает, попробуйте ещё раз")
-        except TimeoutError:
-            raise RuntimeError("Решатель не уложился в бюджет, попробуйте ещё раз")
