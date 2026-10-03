@@ -91,6 +91,7 @@ def plan_pin():
         log.info("pin: %s -> %s", oid, courier["name"])
         # флаг снят до сборки ответа: он несёт solving=false (см. /api/solve)
         STATE["solving"][opid] = False
+        _bump()  # рассылка строго ПОСЛЕ снятия флага
         return _payload()
     finally:
         if STATE["solving"].get(opid):
@@ -130,6 +131,7 @@ def plan_help():
         log.info("plan help: %s -> точка %s", courier["name"], point["name"])
         # флаг снят до сборки ответа: он несёт solving=false (см. /api/solve)
         STATE["solving"][pid] = False
+        _bump()  # рассылка строго ПОСЛЕ снятия флага
         return _payload()
     finally:
         if STATE["solving"].get(pid):

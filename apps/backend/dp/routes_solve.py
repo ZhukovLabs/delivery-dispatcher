@@ -102,6 +102,7 @@ def solve():
         # снимаем флаг ДО сборки ответа: он несёт solving=false и сам
         # разблокирует UI запустившего расчёт (WS-бродкаст — резервный путь)
         STATE["solving"][myp] = False
+        _bump()  # рассылка строго ПОСЛЕ снятия: бамп из _ev мог уйти раньше
         return _payload()
     finally:
         if STATE["solving"].get(myp):
