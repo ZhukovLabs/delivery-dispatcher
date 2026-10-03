@@ -1,7 +1,7 @@
 "use client";
 
 import { Bike, MapPin, Package, PackageOpen, Plus } from "lucide-react";
-import { fmtCoords, type AppState } from "@/lib/api";
+import type { AppState } from "@/lib/api";
 import GeoInput from "../GeoInput";
 import { AccHead } from "./PointsPanel";
 import { OutOrderRows } from "./OutOrderRows";
@@ -34,7 +34,7 @@ export default function OrdersPanel({ st, tick, open, onToggle, mutate, showToas
   onSolveEnter: () => void;
 }) {
   const {
-    pendingOrder, orderNote, setOrderNote, orderLabel, orderInputRef, addOrder,
+    pendingOrder, cleared, orderLabel, orderInputRef, addOrder,
     autoP, nowMin, planLate, planExists, inPlan, readyOrders, outOrders, courName,
     dlEdit, setDlEdit,
   } = useOrdersState({ st, dupOids, mutate, showToast });
@@ -48,16 +48,12 @@ export default function OrdersPanel({ st, tick, open, onToggle, mutate, showToas
           <GeoInput
             inputRef={orderInputRef}
             placeholder="Адрес (Enter добавит)" ariaLabel="Адрес нового заказа"
+            clearOn={cleared}
+            onEnter={() => void addOrder()}
             onPicked={(it, label) => {
               orderLabel.current = label;
-              if (it) {
-                pendingOrder.current = it;
-                setOrderNote(`точка выбрана <b>(${fmtCoords(it)})</b>. Enter или «+» добавит заказ`);
-                showToast("Точка указана: " + it.label.slice(0, 70));
-              } else {
-                pendingOrder.current = null;
-                setOrderNote("");
-              }
+              pendingOrder.current = it;
+              if (it) showToast("Точка указана: " + it.label.slice(0, 70));
             }}
             onEnterEmpty={onSolveEnter}
           />
@@ -67,7 +63,6 @@ export default function OrdersPanel({ st, tick, open, onToggle, mutate, showToas
             onClick={() => setPickTarget(pickTarget === "order" ? null : "order")}><MapPin size={15} /></button>
           <button className="plus" title="Добавить заказ" aria-label="Добавить заказ" onClick={() => void addOrder()}><Plus size={15} /></button>
         </div>
-        <div className={"addnote" + (orderNote ? " show" : "")} dangerouslySetInnerHTML={{ __html: orderNote }} />
         <div id="orderList" className="ents" onMouseLeave={() => setHoverOid(null)}>
           {readyOrders.length === 0 && !outOrders.length && (
             <div className="empty-state">

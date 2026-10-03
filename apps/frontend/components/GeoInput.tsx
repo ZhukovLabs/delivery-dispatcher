@@ -10,14 +10,15 @@ interface GeoInputProps {
   placeholder: string;
   ariaLabel: string;
   onPicked: (it: GeoItem | null, label: string) => void;
-  enterKeyHint?: "add" | "solve";
+  onEnter?: () => void;
   onEnterEmpty?: () => void;
+  clearOn?: number;
   inputRef?: React.RefObject<HTMLInputElement | null>;
   initial?: string;
 }
 
 /** Поле адреса с подсказками геокодера: debounce 300 мс, кэш TanStack Query (повтор — без сети), стрелки/Enter/Esc. */
-export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpty, inputRef, initial }: GeoInputProps) {
+export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnter, onEnterEmpty, clearOn, inputRef, initial }: GeoInputProps) {
   const [val, setVal] = useState(initial || "");
   const [deb, setDeb] = useState("");
   const [open, setOpen] = useState(false);
@@ -31,6 +32,9 @@ export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpt
     const t = setTimeout(() => setDeb(val.trim()), 300);
     return () => clearTimeout(t);
   }, [val]);
+
+  // родитель добавил заказ (clearOn вырос) — вытираем поле под следующий адрес
+  useEffect(() => { if (clearOn) setVal(""); }, [clearOn]);
 
   // дропдаун шире поля и не обрезается скроллящимися панелями: fixed-позиция от input
   useEffect(() => {
@@ -101,6 +105,13 @@ export default function GeoInput({ placeholder, ariaLabel, onPicked, onEnterEmpt
       if (e.key === "ArrowUp") { e.preventDefault(); setActive(a => Math.max(a - 1, 0)); return; }
       if (e.key === "Enter" && activeRef.current >= 0) { e.preventDefault(); pick(its[activeRef.current]); return; }
       if (e.key === "Escape") { close(); return; }
+      // открытый список без подсветки: Enter берёт первую подсказку
+      if (e.key === "Enter") { e.preventDefault(); pick(its[0]); return; }
+    }
+    if (e.key === "Enter" && onEnter && val.trim()) {
+      e.preventDefault();
+      onEnter();
+      return;
     }
     if (e.key === "Enter" && onEnterEmpty && !val.trim()) {
       e.preventDefault();

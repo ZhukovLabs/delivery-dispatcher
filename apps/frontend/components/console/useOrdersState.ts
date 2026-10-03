@@ -15,7 +15,7 @@ export function useOrdersState({ st, dupOids, mutate, showToast }: {
   showToast: ShowToast;
 }) {
   const pendingOrder = useRef<GeoItem | null>(null);
-  const [orderNote, setOrderNote] = useState("");
+  const [cleared, setCleared] = useState(0); // растёт после каждого добавления — GeoInput стирает поле
   const orderLabel = useRef("");
   const orderInputRef = useRef<HTMLInputElement | null>(null);
   const [dlEdit, setDlEdit] = useState<string | null>(null);
@@ -26,7 +26,7 @@ export function useOrdersState({ st, dupOids, mutate, showToast }: {
     await mutate("POST", "/api/orders", { address: orderLabel.current || p.label, lat: p.lat, lng: p.lng });
     pendingOrder.current = null;
     orderLabel.current = "";
-    setOrderNote("");
+    setCleared(c => c + 1);
     orderInputRef.current?.focus();
   };
 
@@ -67,7 +67,7 @@ export function useOrdersState({ st, dupOids, mutate, showToast }: {
   const courName = (id: string) => st.couriers.find(c => c.id === id)?.name || "";
 
   return {
-    pendingOrder, orderNote, setOrderNote, orderLabel, orderInputRef, addOrder,
+    pendingOrder, cleared, orderLabel, orderInputRef, addOrder,
     autoP, nowMin, planLate, planExists, inPlan, readyOrders, outOrders, courName,
     dlEdit, setDlEdit,
   };
