@@ -56,6 +56,25 @@ html.dark .login-card input{background:#141c29;border-color:var(--line2);color:v
   .pp-hsel{position:static;transform:none;flex-shrink:0}
   .topbar .me{max-width:130px}
 }
+/* планшеты: прячем второстепенное — имя бренда, подпись и чипы дня */
+@media (max-width:960px){
+  .topbar{gap:8px;padding:0 10px}
+  .brand-name{display:none}
+  .pp-hsel{gap:5px;padding:4px 6px}
+  .pp-hsel-cap{display:none}
+  .pp-hsel select{max-width:110px}
+  .daystats{display:none}
+  .topbar .me{max-width:110px}
+}
+/* телефоны: марка, точка работы, точка связи и только действия */
+@media (max-width:620px){
+  .topbar{gap:5px;padding:0 8px}
+  .wsdot{font-size:0;gap:0;padding:4px 7px}
+  .pp-hsel select{max-width:90px}
+  .topbar .iconbtn,#logoutLink{padding:4px}
+  .topbar .vdiv{display:none}
+  .topbar .me{display:none}
+}
 .pp-hsel svg{color:#8b97ab;flex-shrink:0}
 .pp-hsel-cap{color:#8b97ab;font-weight:500}
 .pp-hsel select{border:none;background:transparent;color:#e6ecf5;font-size:12.5px;font-weight:600;font-family:inherit;padding:0 2px;cursor:pointer;max-width:150px}
