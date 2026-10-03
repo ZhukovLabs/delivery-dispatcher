@@ -10,8 +10,8 @@ def _courier_day_stats(point_id=None, day=None):
     """Статистика курьеров за день (по умолчанию сегодня, своё депо).
 
     Строки истории группируются по имени курьера (пустое имя — заказ
-    отменён из очереди, не считается «взятым»). Километраж — из живого
-    гео (speed_day), время на работе — от первой выдачи до последнего
+    отменён из очереди, не считается «взятым»). Километраж и часы гео —
+    из живого гео (speed_day), время на работе — от первой выдачи до последнего
     закрытия (или текущего момента, пока заказы ещё в развозке).
     Оплаты — сумма денег наличными/картой (сумма неизвестна — 0).
     """
@@ -34,9 +34,12 @@ def _courier_day_stats(point_id=None, day=None):
             rows = c.execute(
                 f"SELECT courier, outcome, closed_at, out_at, payment, pay_amount "
                 f"FROM history WHERE {where}", args).fetchall()
-            km_by_cid = {r["courier_id"]: r["geo_m"] or 0 for r in c.execute(
-                "SELECT courier_id, geo_m FROM speed_day WHERE day = ?",
-                (day,)).fetchall()}
+            km_rows = c.execute(
+                "SELECT courier_id, geo_m, geo_s FROM speed_day WHERE day = ?",
+                (day,)).fetchall()
+            km_by_cid = {r["courier_id"]: r["geo_m"] or 0 for r in km_rows}
+            geo_h_by_cid = {r["courier_id"]: (r["geo_s"] or 0) / 3600.0
+                            for r in km_rows}
     except sqlite3.Error:
         return {"day": day, "rows": []}
     st = {}
@@ -96,6 +99,7 @@ def _courier_day_stats(point_id=None, day=None):
                 pass
         out.append({"courier": name,
                     "km": round((km_by_cid.get(cid, 0)) / 1000, 1),
+                    "geo_h": round(geo_h_by_cid.get(cid, 0), 1),
                     "taken": d["taken"], "delivered": d["delivered"],
                     "cancelled": d["cancelled"],
                     "pay_cash": round(d["pay_cash"], 2),

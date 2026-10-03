@@ -78,7 +78,7 @@ export default function HistTab({ api: h }: { api: ReturnType<typeof useHistStat
       {courStats!.rows.map(c => (
         <div className="cs-row" role="row" key={c.courier}>
           <span className="cs-name">{c.courier}</span>
-          <span>{c.km ? c.km.toFixed(1) : "–"}</span>
+          <span>{c.km ? <>{c.km.toFixed(1)}{c.geo_h ? <i className="cs-geo"> гео {c.geo_h} ч</i> : null}</> : "–"}</span>
           <span>{c.taken}</span>
           <span><b>{c.delivered}</b></span>
           <span className={c.cancelled ? "cs-bad" : ""}>{c.cancelled}</span>
@@ -89,7 +89,7 @@ export default function HistTab({ api: h }: { api: ReturnType<typeof useHistStat
         </div>
       ))}
     </div>
-    <div className="cs-note">км — по живой геолокации; «на работе» — от первой выдачи до последнего закрытия (или сейчас, если развозка ещё идёт)</div>
+    <div className="cs-note">км — по живой геолокации («гео N ч» — сколько длился замер); «на работе» — от первой выдачи до последнего закрытия (или сейчас, если развозка ещё идёт)</div>
     </>)}
 
     <h4>История заказов</h4>

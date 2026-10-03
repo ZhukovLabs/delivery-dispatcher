@@ -27,6 +27,8 @@ def fake_db(monkeypatch):
 
     @contextlib.contextmanager
     def _db():
+        speed_rows = [{"courier_id": "c1", "geo_m": 18400.0, "geo_s": 18720.0}]
+
         class _Res:
             def __init__(self, items):
                 self._items = items
@@ -36,7 +38,9 @@ def fake_db(monkeypatch):
 
         class Cx:
             def execute(self, q, args=()):
-                return _Res(rows if "FROM history" in q else [])
+                rows_ = (rows if "FROM history" in q
+                         else speed_rows if "FROM speed_day" in q else [])
+                return _Res(rows_)
 
         yield Cx()
 
@@ -57,3 +61,5 @@ def test_pay_columns_are_money_sums(fake_db):
     assert r["pay_cash"] == 10.5   # 10.5 + 0 (сумма неизвестна)
     assert r["pay_card"] == 5.25
     assert r["revenue"] == 15.75
+    assert r["km"] == 18.4        # geo_m / 1000
+    assert r["geo_h"] == 5.2      # geo_s / 3600 — покрытие гео за смену
