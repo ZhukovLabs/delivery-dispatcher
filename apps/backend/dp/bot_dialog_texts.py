@@ -29,7 +29,7 @@ def _kb_reasons(oid):
 
 
 def _txt_cancelled(addr, reason):
-    return (f"🗑 Записано: <b>{addr}</b> — заказ отменён.\n"
+    return (f"❌ Записано: <b>{addr}</b> — заказ отменён.\n"
             f"Причина: <b>{_esc(reason)}</b>")
 
 
