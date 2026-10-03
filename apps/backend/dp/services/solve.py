@@ -9,21 +9,11 @@ solve_plan — точка входа: собирает контекст (solve_c
 import os
 from datetime import timedelta
 
-from ..config import log
-from ..domain.model import _HOURLY_TRAFFIC
 from ..planstate import _plans_lock
 from ..state import STATE
-from .solve_build import _make_plan
 from .solve_ctx import _build_context
-from .solve_run import _solve_once
 from .solve_geom import _attach_geometry
-
-
-def _quality(p):
-    """Честная метрика плана: (неразвезено, опоздания, средняя, последняя)."""
-    return (p["unassigned"],
-            sum(st["late_min"] for r in p["routes"] for st in r["stops"]),
-            p["avg_delivery_min"], p["last_delivery_min"])
+from .solve_proc import solve_isolated
 
 
 def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
@@ -65,43 +55,13 @@ def solve_plan(include_away=True, with_geometry=True, helpers=None, force=None,
     else:
         per_pass_ms = (_ov[0] if _ov else 0) or 1500
 
-    solution, routing, manager, time_dim = _solve_once(ctx, per_pass_ms)
-    plan, start_s = _make_plan(ctx, solution, routing, manager, time_dim)
+    # Оба прохода — в отдельном процессе: SWIG-биндинг OR-Tools держит
+    # GIL всё время C++-поиска и замораживает потоки сервера (детали в
+    # solve_proc). Второй проход (обновление почасовых коэффициентов)
+    # выполняется там же и принимается только по честной метрике.
+    plan, start_s = solve_isolated(ctx, per_pass_ms, hourly_on, solved_dt)
 
-    # Второй проход решателя: hour_f копии закреплён по нижней границе
-    # старта, а фактический старт (цепочка заездов, удлинение первых
-    # заездов) может попасть в другой час — дуги поздних копий оценены не
-    # тем часом (пик/межпик различаются до ×1.5). Обновляем hour_f по
-    # фактическим стартам и решаем ещё раз с вдвое меньшим бюджетом;
-    # принимаем только при лучшей ЧЕСТНОЙ метрике.
-    if hourly_on:
-        refreshed = {}
-        for vi, v in enumerate(ctx.veh):
-            s = start_s.get(vi)
-            if s is None:
-                continue
-            hour = (solved_dt + timedelta(seconds=round(s))).hour
-            f = _HOURLY_TRAFFIC.get(hour, 1.0)
-            if abs(f - v["hour_f"]) > 1e-6:
-                refreshed[vi] = f
-        if refreshed:
-            for vi, f in refreshed.items():
-                ctx.veh[vi]["hour_f"] = f
-            try:
-                sol2, rout2, man2, td2 = _solve_once(ctx, max(1, per_pass_ms // 2))
-                plan2, _ = _make_plan(ctx, sol2, rout2, man2, td2)
-                if _quality(plan2) < _quality(plan):
-                    log.debug("solve: второй проход принят "
-                              "(%d копий сменили почасовой коэффициент)",
-                              len(refreshed))
-                    plan = plan2
-                else:
-                    log.debug("solve: второй проход отклонён по честной метрике")
-            except RuntimeError:
-                log.warning("solve: второй проход не нашёл решение, "
-                            "оставлен первый")
-
-    warnings = []
+    warnings = list(ctx.pin_warnings)
     if plan["unassigned"]:
         warnings.append(f"Не поместились в маршруты: {plan['unassigned']} "
                         "заказ(ов) — лимит заездов на курьера исчерпан")

@@ -52,7 +52,14 @@ def set_courier_point(cid):
         return _payload()
     c["point_id"] = pid
     STATE["depot"] = _depot_view()
+    # закрепления за ним за заказами СТАРОЙ точки стали невыполнимыми
+    # (заказы другого депо этот курьер больше не возит) — снимаем, иначе
+    # заказ молча выпадает из расчётов старой точки
+    for o in STATE["orders"]:
+        if o.get("pin") == cid and _obj_point(o) != pid:
+            o["pin"] = ""
     _persist_couriers()
+    _persist_orders()
     # его маршруты убираем из планов точечно (мог быть помощником в чужом
     # депо), планы остальных курьеров сохраняются с пометкой «устарел»
     _invalidate_plan(courier_id=cid)

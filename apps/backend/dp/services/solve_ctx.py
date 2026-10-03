@@ -100,11 +100,30 @@ def _build_context(include_away=True, helpers=None, force=None, point_id=None):
     # Ручное закрепление (pin) — воля диспетчера: лимит max_orders для курьера
     # расширяется на число закреплённых за ним заказов. Решатель вправе
     # вытеснить обычный заказ в unassigned, но не закрепление.
-    pinned_n = {}
+    # Закрепление за курьером, которого в ЭТОМ расчёте нет (другое депо,
+    # выключен, сценарий «не ждать» без away-курьера), невыполнимо: раньше
+    # заказ молча выпадал из всех маршрутов. Считаем такое закрепление
+    # отсутствующим и предупреждаем диспетчера.
+    veh_ids = {c["id"] for c in couriers}
+    by_id = {c["id"]: c for c in STATE["couriers"]}
+    eff_pin, pin_bad = {}, []
     for o in orders:
         p = o.get("pin")
-        if p:
-            pinned_n[p] = pinned_n.get(p, 0) + 1
+        if not p:
+            continue
+        if p in veh_ids:
+            eff_pin[o["id"]] = p
+        else:
+            pin_bad.append(o)
+    pin_warnings = [
+        "«%s»: закреплён за «%s», которого нет в этом расчёте (другая точка "
+        "или недоступен) — закрепление пропущено" %
+        ((o.get("address") or "заказ")[:40],
+         (by_id.get(o.get("pin"), {}) or {}).get("name", "курьером"))
+        for o in pin_bad]
+    pinned_n = {}
+    for p in eff_pin.values():
+        pinned_n[p] = pinned_n.get(p, 0) + 1
 
     # Виртуальные машины: копия курьера = один его заезд. Реефицированные
     # цепочки «конец заезда k + перезагрузка <= старт заезда k+1» здесь
@@ -121,7 +140,7 @@ def _build_context(include_away=True, helpers=None, force=None, point_id=None):
         h = home_idx[home_pid[cid]]
         allowed = {K + i for i, o in enumerate(orders)
                    if order_pid[K + i] == home_pid[cid]
-                   and (not o.get("pin") or o["pin"] == cid)}
+                   and (o["id"] not in eff_pin or eff_pin[o["id"]] == cid)}
         min_loop_s = (min(matrix[h][g] + matrix[g][h] for g in allowed)
                       if allowed else 0)
         est_loop_s = int(min_loop_s * _LOOP_EST_FACTOR)
@@ -147,4 +166,5 @@ def _build_context(include_away=True, helpers=None, force=None, point_id=None):
         base_traffic=base_traffic, default_kmh=default_kmh, speeds=speeds,
         spd_factor=spd_factor, deadline_rel=deadline_rel, eff_prio=eff_prio,
         auto_flag=auto_flag, home_of=home_of, order_pid=order_pid,
-        home_pid=home_pid, pinned_n=pinned_n, veh=veh)
+        home_pid=home_pid, pinned_n=pinned_n, veh=veh,
+        pin_warnings=pin_warnings)
