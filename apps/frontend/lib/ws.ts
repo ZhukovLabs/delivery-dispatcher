@@ -63,10 +63,18 @@ export function setWsToken(t: string | null): void {
 export async function ensureWsToken(): Promise<string | null> {
   if (token) return token;
   try {
-    const r = await fetchApi("/api/ws-token", { headers: { Accept: "application/json" } });
-    if (r.status === 401) { window.location.assign("/login"); return null; }
-    const d = await r.json();
-    if (typeof d?.token === "string") { token = d.token; return token; }
+    // таймаут: на мёртвой/рваной сети fetch без abort висит до браузерного
+    // лимита (~300 с) — сокет так и не стартует, консоль «connecting»
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 10_000);
+    try {
+      const r = await fetchApi("/api/ws-token", { headers: { Accept: "application/json" }, signal: ctl.signal });
+      if (r.status === 401) { window.location.assign("/login"); return null; }
+      const d = await r.json();
+      if (typeof d?.token === "string") { token = d.token; return token; }
+    } finally {
+      clearTimeout(t);
+    }
   } catch { /* сеть — попробуем ещё раз при следующем эффекте */ }
   return null;
 }
@@ -82,6 +90,10 @@ export function getSocket(): Socket {
   socket = io(WS_URL, {
     auth: (cb) => cb(authPayload()),
     transports: ["websocket", "polling"],
+    // слабый интернет / каптивный портал может резать WebSocket, оставляя
+    // HTTP живым: без этой опции каждая попытка пробует только первый
+    // транспорт из списка и polling-фоллбэк недостижим
+    tryAllTransports: true,
     reconnection: true,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 30000,
@@ -98,7 +110,10 @@ export function getSocket(): Socket {
     if (/unauthorized|token|auth/i.test(err.message || "")) token = null;
   });
   const onAttempt = (attempt: number) => {
-    if (attempt >= 5 && typeof WebSocket === "undefined") setPolling(true);
+    // websocket не пробивается (слабая сеть режет WS, HTTP жив): после
+    // нескольких неудач включаем HTTP-компенсацию — состояние консоли
+    // дотягивается /api/state раз в 10 с, пока сокет переподключается
+    if (attempt >= 3) setPolling(true);
   };
   socket.io.on("reconnect_attempt", onAttempt);
   offReconnect = () => { socket?.io.off("reconnect_attempt", onAttempt); };

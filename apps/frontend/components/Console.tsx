@@ -26,7 +26,7 @@ export default function Console() {
      входящий WS-снимок, пока мутация в полёте — чужие события доходят,
      а снимки «до мутации» не откатывают локальный UI */
   const livePatches = useRef(new Map<string, (s: AppState) => AppState>());
-  const { st, stLoading, stateErr, setSt, refresh, tick, dark, applyTheme } = useDispatchState(livePatches);
+  const { st, stLoading, stateErr, setSt, refresh, tick, dark, applyTheme, bootClock } = useDispatchState(livePatches);
 
   const { toast, setToast, ask, setAsk, showToast, askConfirm } = useToastAsk();
 
@@ -110,6 +110,15 @@ export default function Console() {
       />
 
       {pickTarget && <PickBanner kind={pickTarget} onCancel={() => setPickTarget(null)} />}
+
+      {bootClock && (
+        <div style={{
+          padding: "6px 16px", background: "#b45309", color: "#fff",
+          font: "500 13px/1.2 var(--font-geist-sans, system-ui)", textAlign: "center",
+        }}>
+          Нет связи с сервером — показаны сохранённые данные от {bootClock}. Изменения могут не сохраниться.
+        </div>
+      )}
 
       <main className="console">
         <LeftColumn

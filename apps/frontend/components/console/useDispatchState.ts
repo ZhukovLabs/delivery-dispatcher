@@ -10,6 +10,31 @@ import { dropSocket, ensureWsToken, getSocket, subscribePolling } from "@/lib/ws
    админов, геолокации курьеров) — socket.io: сервер при любом изменении
    состояния пушит "state" с payload'ом депо подписчика (см. lib/ws.ts). */
 
+/* Последний успешный снимок в localStorage: при F5 в оффлайне (слабый
+   интернет, рваная связь) консоль стартует с сохранённых данных и плашкой
+   «нет связи», а не с пустого экрана «Нет данных». */
+const BOOT_CACHE_KEY = "stateBootCache";
+
+function _saveBootCache(s: AppState): void {
+  try {
+    localStorage.setItem(BOOT_CACHE_KEY, JSON.stringify({ saved_at: Date.now(), state: s }));
+  } catch { /* private mode / переполнение — кэш не критичен */ }
+}
+
+function _readBootCache(): (AppState & { _boot?: number }) | null {
+  try {
+    const raw = localStorage.getItem(BOOT_CACHE_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw) as { saved_at?: number; state?: AppState };
+    if (!d?.state || !Array.isArray(d.state.couriers)) return null;
+    return { ...d.state, _boot: d.saved_at ?? Date.now() };
+  } catch { return null; }
+}
+
+function _fmtBootClock(ts: number): string {
+  return new Date(ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+
 export function useDispatchState(
   /* оптимистичные патчи летящих мутаций: входящий WS-снимок прокатываем
      через них же — снимки «до мутации» не откатывают UI, а чужие события
@@ -21,9 +46,17 @@ export function useDispatchState(
   const { data: stData, error: stateErr, isPending: stLoading } = useQuery({
     queryKey: ["state"],
     // пока ответ летел, кэш мог уйти вперёд (WS-бродкаст): не откатываем —
-    // дотягиваемся до актуальной версии парой повторов, иначе отдаём кэш
+    // дотягиваемся до актуальной версии парой повторов, иначе отдаём кэш;
+    // на рваной сети показываем последний успешный снимок (см. _saveBootCache)
     queryFn: async () => {
-      let s = await api<AppState>("/api/state");
+      let s: AppState;
+      try {
+        s = await api<AppState>("/api/state");
+      } catch (e) {
+        const cached = _readBootCache();
+        if (cached && e instanceof Error) return cached; // лучше вчерашний depot, чем пустой экран
+        throw e;
+      }
       const cur = qc.getQueryData<AppState>(["state"]);
       if (cur?.rev != null && (s.rev ?? 0) < cur.rev) {
         for (let i = 0; i < 2 && (s.rev ?? 0) < cur.rev; i++) {
@@ -33,11 +66,14 @@ export function useDispatchState(
         if ((s.rev ?? 0) < (cur.rev ?? 0)) return cur;
       }
       lastRev.current = Math.max(lastRev.current, s.rev ?? 0);
+      _saveBootCache(s);
       return s;
     },
     staleTime: 10000,
     retry: 1,
     refetchOnWindowFocus: "always",
+    // показываем кэш из-за обрыва сети — сеть могла починиться: дотягиваемся
+    refetchInterval: (q) => (q.state.data && (q.state.data as AppState & { _boot?: number })._boot ? 15_000 : false),
   });
 
   // живые обновления: сервер пушит payload целиком. Рев сравниваем с
@@ -91,6 +127,9 @@ export function useDispatchState(
   }, [qc, live]);
 
   const st = stData ?? null;
+  const bootClock = st && (st as AppState & { _boot?: number })._boot
+    ? _fmtBootClock((st as AppState & { _boot?: number })._boot as number)
+    : null;
   const setSt = useCallback((s: AppState) => {
     // две быстрые мутации (например, выдача двум курьерам подряд) летят
     // параллельно: ответ первой может прийти ПОСЛЕ ответа второй —
@@ -132,5 +171,5 @@ export function useDispatchState(
     localStorage.setItem("theme", d ? "dark" : "light");
   }, []);
 
-  return { st, stLoading, stateErr, setSt, refresh, tick, dark, applyTheme };
+  return { st, stLoading, stateErr, setSt, refresh, tick, dark, applyTheme, bootClock };
 }
