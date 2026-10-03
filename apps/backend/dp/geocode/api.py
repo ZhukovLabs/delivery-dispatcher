@@ -31,14 +31,38 @@ def _suggest_safe(q, lat, lng):
         return []
 
 
+# «кв 12», «кв. 12», «квартира 12», «эт 3», «этаж 3», «под 2», «подъезд 2» —
+# детали квартиры, которых геокодеры не знают: срезаем из запроса до поиска
+# и дописываем хвостом к предложенным адресам с номером дома
+_DETAIL_RE = re.compile(
+    r"[,;\s]+(?P<kw>кв\.?|квартир[аыуе]|эт\.?|этаж[а-я]*|под\.?|подъезд[а-я]*)\s*"
+    r"(?P<num>\d+(?:\s*[-/]\s*\d+)?[а-яa-z]?)", re.I)
+
+
+def _split_detail(q):
+    details = []
+
+    def _cut(m):
+        head = m.group("kw").lower()
+        num = re.sub(r"\s+", "", m.group("num"))
+        kind = ("кв" if head.startswith("кв")
+                else "эт" if head.startswith("эт") else "под")
+        details.append(f"{kind} {num}")
+        return " "
+
+    base = _DETAIL_RE.sub(_cut, q)
+    return re.sub(r"\s{2,}", " ", base).strip(" ,;"), details
+
+
 @r.get("/api/geocode")
 @flaskish
 def geocode():
-    q = (request.args.get("q") or "").strip()
+    q_full = (request.args.get("q") or "").strip()
+    q, details = _split_detail(q_full)
     if len(q) < 2:
         return jsonify([])
     lat, lng = _geocode_center()
-    gkey = (q.lower(), round(lat, 3), round(lng, 3))
+    gkey = (q_full.lower(), round(lat, 3), round(lng, 3))
     hit = _GEO_CACHE.get(gkey)
     if hit and time.time() - hit[0] < _GEO_TTL:
         _GEO_CACHE.move_to_end(gkey)  # LRU: свежеиспользованный живёт дольше
@@ -101,6 +125,13 @@ def geocode():
             continue
         payload.append({"label": lbl})
     payload += scored[:7 - len(payload)]
+    # квартиру/этаж дописываем только к адресам с номером дома: улица без
+    # дома с «кв 12» — бессмыслица
+    if details:
+        tail = ", ".join(details)
+        for x in payload:
+            if re.search(r"\d", x["label"]):
+                x["label"] = f"{x['label']}, {tail}"
     if payload:  # пустой ответ не кэшируем
         _GEO_CACHE[gkey] = (time.time(), payload)
         _GEO_CACHE.move_to_end(gkey)

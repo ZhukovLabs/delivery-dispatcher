@@ -58,3 +58,39 @@ def test_geocode_suggest_first(monkeypatch):
     monkeypatch.setattr(api, "search_photon", lambda q, lat, lng: [])
     out = _call("Терегина")
     assert out and out[0] == {"label": "Гомель, улица Терегина"}
+
+
+def test_geocode_apartment_details(monkeypatch):
+    """«Телегина 15, кв 12, этаж 3»: провайдеры видят адрес без деталей,
+    а предложенные адреса с домом получают их хвостом."""
+    api._GEO_CACHE.clear()
+    got = {}
+
+    def sugg(q, lat, lng):
+        got["sugg"] = q
+        return ["Гомель, улица Терегина"]  # улица без дома — хвост не вешаем
+
+    def ya(q, lat, lng):
+        got["ya"] = q
+        return [_item(label="Гомель, ул. Терегина, 15")]
+
+    monkeypatch.setattr(api, "suggest_yandex", sugg)
+    monkeypatch.setattr(api, "search_yandex", ya)
+    monkeypatch.setattr(api, "search_nominatim", lambda q, lat, lng: [])
+    monkeypatch.setattr(api, "search_photon", lambda q, lat, lng: [])
+    out = _call("Терегина 15, кв 12, этаж 3")
+    assert got["ya"] == "Терегина 15"      # геокодер искал без кв/этажа
+    assert got["sugg"] == "Терегина 15"
+    labels = [x["label"] for x in out]
+    assert "Гомель, ул. Терегина, 15, кв 12, эт 3" in labels
+    assert "Гомель, улица Терегина" in labels  # без дома — как была
+
+
+def test_split_detail_variants():
+    assert api._split_detail("Школьная 13, кв. 4") == ("Школьная 13", ["кв 4"])
+    assert api._split_detail("Школьная 13 под 2 эт 5") == \
+        ("Школьная 13", ["под 2", "эт 5"])
+    assert api._split_detail("Школьная 13, квартира 12/3") == \
+        ("Школьная 13", ["кв 12/3"])
+    assert api._split_detail("Подгорная 12/1") == ("Подгорная 12/1", [])
+    assert api._split_detail("Школьная 13а") == ("Школьная 13а", [])
