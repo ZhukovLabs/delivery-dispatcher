@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, TriangleAlert } from "lucide-react";
 
 const SET_SECTIONS: { id: string; title: string }[] = [
   { id: "move", title: "Время в пути" },
@@ -51,6 +51,10 @@ export default function ParamsTab({ s, set }: {
   const hideTip = () => setTip(null);
 
   return (<>
+    <div className="palert" role="note">
+      <TriangleAlert size={15} />
+      <span><b>Лучше не стоит менять.</b> Значения выверены практикой и влияют сразу на все расчёты маршрутов. Крутите ручки, только если понимаете, что получится.</span>
+    </div>
     {SET_SECTIONS.map(sec => (
       <div className="psec" key={sec.id}>
         <h4>{sec.title}</h4>

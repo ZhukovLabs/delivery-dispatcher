@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { ChevronDown, Download, Pencil, Trash2 } from "lucide-react";
 import type { AppState } from "@/lib/api";
+import { fetchApi } from "@/lib/api";
 import { avaOf, initialsOf } from "../format";
 import type { TeamApi } from "./useTeamState";
 
@@ -27,6 +29,37 @@ export default function TeamTab({ st, team }: { st: AppState; team: TeamApi }) {
     eMail, setEMail, eName, setEName, ePhone, setEPhone, eAdmin, setEAdmin, ePwd, setEPwd,
     addUser, delUser, updUser, resetPwd,
   } = team;
+  const [backBusy, setBackBusy] = useState(false);
+  const [backErr, setBackErr] = useState("");
+  // ссылка <a href> не несёт токен авторизации — качаем через fetchApi и
+  // собираем файл из blob уже на клиенте
+  const backup = async () => {
+    if (backBusy) return;
+    setBackBusy(true);
+    setBackErr("");
+    try {
+      const res = await fetchApi("/api/backup", { headers: { Accept: "application/octet-stream" } });
+      if (!res.ok) {
+        let msg = "Ошибка " + res.status;
+        try { const j = await res.json(); if (j && j.error) msg = String(j.error); } catch { /* тело не JSON */ }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const m = /filename="?([^";]+)"?/.exec(res.headers.get("content-disposition") || "");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = (m && m[1]) || "dispatcher-backup.db";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (e) {
+      setBackErr((e as Error).message || String(e));
+    } finally {
+      setBackBusy(false);
+    }
+  };
 
   return (<>
     <div className="psec">
@@ -114,8 +147,10 @@ export default function TeamTab({ st, team }: { st: AppState; team: TeamApi }) {
       </div></div>
     </div>
 
-    <a href="/api/backup" className="t-back" title="Скачать снимок базы данных">
-      <Download size={14} />Бэкап базы
-    </a>
+    <button type="button" className="t-back" disabled={backBusy} onClick={() => void backup()}
+      title="Скачать снимок базы данных">
+      <Download size={14} />{backBusy ? "Готовим файл…" : "Бэкап базы"}
+    </button>
+    {backErr && <div className="t-back-err" role="alert">{backErr}</div>}
   </>);
 }

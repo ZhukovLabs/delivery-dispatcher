@@ -21,7 +21,9 @@ export default function ProfTab({ st, prof }: { st: AppState; prof: ProfApi }) {
         <div className="prof-grid">
           <label className="pf-l">Имя
             <input type="text" placeholder="Настя" aria-label="Ваше имя" value={profName}
-              onChange={e => setProfName(e.target.value)} /></label>
+              readOnly={!st.me?.is_admin} title={st.me?.is_admin ? undefined : "Имя меняет администратор"}
+              onChange={e => setProfName(e.target.value)} />
+            {!st.me?.is_admin && <small className="pf-hint">Имя вам устанавливает администратор</small>}</label>
           <label className="pf-l">Телефон
             <input type="tel" placeholder="+375 29 123-45-67" aria-label="Ваш телефон" value={profPhone}
               inputMode="tel" onChange={e => setProfPhone(e.target.value)} /></label>
