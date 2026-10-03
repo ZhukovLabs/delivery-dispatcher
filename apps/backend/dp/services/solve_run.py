@@ -13,22 +13,25 @@ from ..domain.model import (_ASAP_WEIGHT, _DROP_PENALTY, _LATE_WEIGHT,
 from ..state import _PRIO_WEIGHT
 
 
-def _solve_once(ctx, budget_ms):
-    veh, matrix, K = ctx.veh, ctx.matrix, ctx.K
-    handover_s, base_traffic = ctx.handover_s, ctx.base_traffic
-    reload_s, pinned_n = ctx.reload_s, ctx.pinned_n
-    max_orders, helper_ids, force_ids = ctx.max_orders, ctx.helper_ids, ctx.force_ids
-    deadline_rel, eff_prio, points = ctx.deadline_rel, ctx.eff_prio, ctx.points
-    manager = pywrapcp.RoutingIndexManager(len(points), len(veh),
-                                           [v["home"] for v in veh],
-                                           [v["home"] for v in veh])
-    routing = pywrapcp.RoutingModel(manager)
+def _veh_transit_matrix(ctx, v):
+    """Матрица транзитных времён для одной копии курьера (в СЕКУНДАХ).
 
-    def make_cb(v, start_index, with_trip_cost):
-        def cb(from_index, to_index):
-            i, j = (manager.IndexToNode(from_index),
-                    manager.IndexToNode(to_index))
-            arc = matrix[i][j]
+    Дублирует формулу стоимостей дуг 1:1 (см. докстринги веток ниже), но
+    выполняется ЦЕЛИКОМ на этапе сборки: поиск OR-Tools читает готовые
+    int-матрицы C++-стороне без единого захода в Python. Живой колбэк
+    дуги держал GIL миллионами вызовов и замораживал весь сервер на время
+    каждого прохода решателя (замер py-spy: активный поток — единственный,
+    остальные ручки стоят по 2-5с).
+    """
+    matrix, K = ctx.matrix, ctx.K
+    handover_s, base_traffic = ctx.handover_s, ctx.base_traffic
+    n = len(ctx.points)
+    m = [[0] * n for _ in range(n)]
+    for i in range(n):
+        row = matrix[i]
+        out = m[i]
+        for j in range(n):
+            arc = row[j]
             if j >= K and arc > handover_s:
                 # базовый трафик уже зашит в матрицу (traffic=1.3 к среднему);
                 # почасовой коэффициент ЗАМЕНЯЕТ его часовую часть, поэтому
@@ -49,24 +52,50 @@ def _solve_once(ctx, budget_ms):
                 cost += v["appr"].get(j, 0) * 60  # парковка/подъезд: мин -> сек
                 if j not in v["allowed"]:      # чужая точка/чужой pin — везти нельзя
                     cost += 1_000_000_000
-            if with_trip_cost and from_index == start_index and v["k"] > 0:
-                # фиксированная цена активации заезда k>0 (возврат + перезагрузка):
-                # без неё PCI не различает копии одного курьера и может посадить
-                # единственный заезд в k1/k2, завышая ETА на полчаса, а одиночные
-                # переносы не вытащат (промежуточное расщепление дороже).
-                # Только в ЦЕЛЕВУЮ функцию — в размерность времени надбавка
-                # не идёт (нижние границы стартов уже учитывают перезагрузку)
-                cost += reload_s
-            return cost
-        return cb
+            out[j] = cost
+    return m
 
+
+def _solve_once(ctx, budget_ms):
+    import time as _t
+    _t_start = _t.perf_counter()
+    veh = ctx.veh
+    reload_s = ctx.reload_s
+    K, pinned_n = ctx.K, ctx.pinned_n
+    max_orders, helper_ids, force_ids = ctx.max_orders, ctx.helper_ids, ctx.force_ids
+    deadline_rel, eff_prio, points = ctx.deadline_rel, ctx.eff_prio, ctx.points
+    manager = pywrapcp.RoutingIndexManager(len(points), len(veh),
+                                           [v["home"] for v in veh],
+                                           [v["home"] for v in veh])
+    routing = pywrapcp.RoutingModel(manager)
+
+    # Транзиты и целевые стоимости — готовыми матрицами на копию курьера:
+    # RegisterTransitMatrix оценивает дуги в C++ без Python-колбэков (GIL
+    # свободен, сервер отвечает во время расчёта). Матрица транзита —
+    # чистое время дуги; целевая добавляет цену активации заезда k>0
+    # (возврат + перезагрузка) на СТАРТОВУЮ дугу [home][*]: домашний узел
+    # не встречается посередине маршрута, так что строка home однозначно
+    # задаёт именно первый шаг копии.
     cb_idxs = []      # транзиты времени (без цены активации)
     for vi, v in enumerate(veh):
-        vi_start = routing.Start(vi)
-        cb_idx = routing.RegisterTransitCallback(make_cb(v, vi_start, False))
-        cb_idxs.append(cb_idx)
-        routing.SetArcCostEvaluatorOfVehicle(
-            routing.RegisterTransitCallback(make_cb(v, vi_start, True)), vi)
+        tm = _veh_transit_matrix(ctx, v)
+        cb_idxs.append(routing.RegisterTransitMatrix(tm))
+        if v["k"] > 0:
+            # фиксированная цена активации заезда k>0: без неё PCI не
+            # различает копии одного курьера и может посадить единственный
+            # заезд в k1/k2, завышая ETА на полчаса, а одиночные переносы
+            # не вытащат (промежуточное расщепление дороже). Только в
+            # ЦЕЛЕВУЮ функцию — в размерность времени надбавка не идёт
+            # (нижние границы стартов уже учитывают перезагрузку).
+            cm = [list(r) for r in tm]
+            hr = cm[v["home"]]
+            for j in range(len(hr)):
+                hr[j] += reload_s
+            routing.SetArcCostEvaluatorOfVehicle(
+                routing.RegisterTransitMatrix(cm), vi)
+        else:
+            routing.SetArcCostEvaluatorOfVehicle(
+                routing.RegisterTransitMatrix(tm), vi)
 
     # ёмкость размерности — с запасом под расширенные лимиты закреплений
     cap_extra = max(pinned_n.values()) if pinned_n else 0
@@ -153,7 +182,11 @@ def _solve_once(ctx, budget_ms):
     params.local_search_metaheuristic = (
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
     params.time_limit.FromMilliseconds(budget_ms)
+    _t0 = _t.perf_counter()
     solution = routing.SolveWithParameters(params)
+    log.info("solve phase: build=%.2fs search=%.2fs (budget=%dms, veh=%d, nodes=%d)",
+             _t0 - _t_start, _t.perf_counter() - _t0,
+             budget_ms, len(veh), len(points))
     if solution is None:
         log.warning("solve: no solution (status=%s, veh=%d, nodes=%d)",
                     routing.status(), len(veh), len(points))

@@ -58,7 +58,7 @@ def _compute_plan(mode="auto", advice=True, force=None, point_id=None):
     plan_now = None
     if (advice or mode == "now") and scenario:
         # сценарии независимы — считаем параллельно (замер на прод-ноуте:
-        # 22 заказа, 3.0с → 1.5с; OR-Tools отпускает GIL)
+        # 22 заказа, 3.0с → 1.5с; решатель живёт в пуле из двух процессов)
         with ThreadPoolExecutor(2) as ex:
             f_split = ex.submit(solve_plan, force=force, point_id=point_id)
             f_now = ex.submit(solve_plan, include_away=False,
