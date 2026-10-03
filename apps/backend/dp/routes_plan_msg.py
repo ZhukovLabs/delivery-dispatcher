@@ -46,9 +46,9 @@ def _tg_route_message(courier_name, stops, me, origin=None, pos=None):
         if ya and gg:
             lines.append(f"    Маршрут: <a href=\"{ya}\">Яндекс</a>"
                          f" | <a href=\"{gg}\">Google</a>")
-    lines.append("Время приблизительное, следите за сообщениями.")
+    lines.append("Время приблизительное. Если порядок меняется, напишу сюда же.")
     if (me or {}).get("name") and (me or {}).get("phone"):
-        lines.append(f"\nЕсть вопросы? - {_esc(me['name'])}, {me['phone']}")
+        lines.append(f"\nВопросы? Звоните: {_esc(me['name'])}, {me['phone']}")
     payload = {"text": "\n".join(lines), "parse_mode": "HTML"}
     pts = [f"{s['lat']},{s['lng']}" for s in stops
            if s.get("lat") is not None and s.get("lng") is not None]

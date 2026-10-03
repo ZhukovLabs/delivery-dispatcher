@@ -133,8 +133,7 @@ def del_order(oid):
     # курьер нёс этот заказ — предупредить и пересобрать его TG-маршрут
     if order and courier_id and (order.get("status") or "ready") == "out":
         _tg_sync_route(courier_id, warn=(
-            f"⚠️ Заказ <b>{_esc(order.get('address') or oid)}</b> "
-            + ("отменил диспетчер." if outcome == "cancelled"
-               else "отмечён доставленным диспетчером.")
-            + "\nМаршрут обновлён — откройте новый маршрут по той же кнопке."))
+            f"⚠️ Диспетчер {'отменил' if outcome == 'cancelled' else 'отметил доставленным'}"
+            f" заказ <b>{_esc(order.get('address') or oid)}</b>.\n"
+            "Маршрут обновился, откройте его по той же кнопке."))
     return _payload()

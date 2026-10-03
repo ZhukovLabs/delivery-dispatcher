@@ -39,8 +39,8 @@ def _tg_sync_route(cid, warn=None):
             payload = _tg_route_message(courier["name"], stops, me,
                                         origin=origin, pos=pos)
         else:
-            payload = {"text": f"🥡 {_esc(courier['name'])}: все заказы"
-                               " сняты с развозки", "parse_mode": "HTML"}
+            payload = {"text": f"🥡 {_esc(courier['name'])}: заказов в развозке"
+                               " больше нет", "parse_mode": "HTML"}
         payload.update({"chat_id": ref["chat"], "message_id": ref["mid"]})
         try:
             resp = requests.post(

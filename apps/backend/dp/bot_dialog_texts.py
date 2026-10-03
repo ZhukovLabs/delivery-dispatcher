@@ -3,11 +3,11 @@ from .domain.text import _esc
 
 
 def _txt_not_actual_closed():
-    return "Этот вопрос уже неактуален — заказ закрыт диспетчером."
+    return "Поздно: заказ уже закрыл диспетчер."
 
 
 def _txt_confirm_delivered(addr):
-    return f"Точно доставлен? Заказ: <b>{addr}</b>"
+    return f"Точно доставили? Заказ: <b>{addr}</b>"
 
 
 def _txt_confirm_cancel(addr):
@@ -15,11 +15,11 @@ def _txt_confirm_cancel(addr):
 
 
 def _txt_confirm_still(addr):
-    return f"Точно ещё нет? Заказ: <b>{addr}</b>"
+    return f"Точно ещё везёте? Заказ: <b>{addr}</b>"
 
 
 def _txt_reason(addr):
-    return f"Причина отмены: <b>{addr}</b>"
+    return f"Почему отменили? Заказ: <b>{addr}</b>"
 
 
 def _kb_reasons(oid):
@@ -29,17 +29,17 @@ def _kb_reasons(oid):
 
 
 def _txt_cancelled(addr, reason):
-    return (f"❌ Записано: <b>{addr}</b> — заказ отменён.\n"
+    return (f"❌ Записал: <b>{addr}</b> отменён.\n"
             f"Причина: <b>{_esc(reason)}</b>")
 
 
 def _txt_close_failed():
-    return "Не получилось закрыть — уже неактуален."
+    return "Не получилось: заказ уже закрыли без вас."
 
 
 def _txt_delivered_ask_pay(addr):
-    return (f"✅ Записано: <b>{addr}</b> доставлен.\n\n"
-            "Как оплатил клиент?")
+    return (f"✅ Записал: <b>{addr}</b> доставлен.\n\n"
+            "Как расплатился клиент?")
 
 
 def _kb_pay(oid):
@@ -52,9 +52,10 @@ def _kb_pay(oid):
 
 
 def _txt_pay_amount(addr, method):
-    return (f"✅ <b>{addr}</b> доставлен. Оплата: <b>"
+    return (f"✅ Записал: <b>{addr}</b> доставлен, оплата: <b>"
             f"{_pay_method_label(method)}</b>.\n\n"
-            "Напишите сумму числом в чат — например: <b>24.50</b>")
+            "Сколько взяли с клиента? Напишите числом, "
+            "например: <b>24.50</b>")
 
 
 def _kb_skip(oid):
@@ -63,7 +64,7 @@ def _kb_skip(oid):
 
 
 def _txt_delivered_thanks(addr):
-    return f"✅ Записано: <b>{addr}</b> доставлен. Спасибо!"
+    return f"✅ Записал: <b>{addr}</b> доставлен. Спасибо!"
 
 
 def _kb_confirm(oid):

@@ -32,7 +32,7 @@ def test_texts_non_empty():
 def test_confirm_texts_embed_address():
     assert "<b>ул. Ленина 1</b>" in _txt_confirm_delivered("ул. Ленина 1")
     assert "Точно отменяем" in _txt_confirm_cancel("A")
-    assert "Точно ещё нет" in _txt_confirm_still("A")
+    assert "Точно ещё везёте" in _txt_confirm_still("A")
 
 
 def test_cancelled_escapes_reason_only():

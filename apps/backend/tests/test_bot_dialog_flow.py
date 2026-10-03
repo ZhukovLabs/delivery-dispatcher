@@ -74,14 +74,14 @@ def test_full_delivery_pay_flow(dialog_state):
     _tg_handle_update(_cb("o1", "y"))    # «Доставил» -> подтверждение
     _tg_handle_update(_cb("o1", "ok"))   # подтверждение -> «Как оплатил?»
     assert STATE["orders"] == []
-    assert "Как оплатил клиент?" in cap["edits"][-1]
+    assert "Как расплатился клиент?" in cap["edits"][-1]
 
     # инцидент 03.10: здесь бот отвечал «Уже неактуально»
     _tg_handle_update(_cb("o1", "pay:cash"))
     assert cap["answers"][-1] != "Уже неактуально"
     assert STATE["tg_ask"]["777"]["o1"]["stage"] == "pay_amount"
     assert ("o1", "cash", None) in cap["pays"]
-    assert "Напишите сумму" in cap["edits"][-1]
+    assert "Напишите числом" in cap["edits"][-1]
 
     _tg_handle_update({"message": {"chat": {"id": 777}, "text": "24.50"}})
     # оплата пишется двумя частичными UPDATE в одну строку history:
@@ -148,7 +148,7 @@ def test_two_orders_full_flow(dialog_state):
     # первая сумма — старшему диалогу, бот подсказывает следующий
     _tg_handle_update({"message": {"chat": {"id": 777}, "text": "10"}})
     assert ("o1", None, 10.0) in cap["pays"]
-    assert any("Следующий" in s and "Телегина" in s for s in cap["sends"])
+    assert any("Теперь следующий" in s and "Телегина" in s for s in cap["sends"])
     assert [p["oid"] for p in STATE["tg_pay"]["777"]] == ["o2"]
 
     # вторая сумма — оставшемуся

@@ -64,8 +64,8 @@ _CANCEL_REASONS = [
 
 
 def _bot_ask_text(o):
-    return (f"🥡 Кажется, заказ по адресу <b>{_esc(o.get('address') or '')}</b> "
-            "доставлен. Это так?")
+    return (f"🥡 Кажется, доставили: <b>{_esc(o.get('address') or '')}</b>. "
+            "Так?")
 
 
 def _bot_ask_kb(oid):
@@ -85,8 +85,8 @@ def _bot_keep_rolling(chat, pend, oid, order, courier):
     addr = _esc(order.get("address") or "")
     STATE["tg_ask"].get(chat, {}).pop(oid, None)
     _tg_edit_msg(chat, pend["msg"],
-                 f"Понял: <b>{addr}</b> ещё в развозке. "
-                 "Закроет диспетчер или спрошу при следующем заезде.")
+                 f"Понял, <b>{addr}</b> ещё везёте. "
+                 "Закроет диспетчер или спрошу позже ещё раз.")
     _ev("cour", f"{courier['name']}: «{order.get('address') or oid}» ещё в развозке")
 
 

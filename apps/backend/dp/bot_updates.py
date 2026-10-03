@@ -73,7 +73,8 @@ def _tg_handle_update(u):
             return
         amount = round(float(m.group(0).replace(",", ".")), 2)
         if not 0 < amount <= 1_000_000:
-            _tg_send(chat_id, "Сумма странная — проверьте и напишите ещё раз")
+            _tg_send(chat_id, "Что-то не то с суммой. Проверьте и напишите "
+                              "ещё раз, просто числом.")
             return
         _pay_set(pay["oid"], amount=amount)
         pend = STATE.get("tg_ask", {}).get(pay_chat, {}).get(pay["oid"])
