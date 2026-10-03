@@ -21,7 +21,7 @@ function _saveBootCache(s: AppState): void {
   } catch { /* private mode / переполнение — кэш не критичен */ }
 }
 
-function _readBootCache(): (AppState & { _boot?: number }) | null {
+function _readBootCache(): AppState | null {
   try {
     const raw = localStorage.getItem(BOOT_CACHE_KEY);
     if (!raw) return null;
@@ -53,8 +53,10 @@ export function useDispatchState(
       try {
         s = await api<AppState>("/api/state");
       } catch (e) {
+        // любая ошибка загрузки при живом кэше: лучше последние известные
+        // данные (с плашкой и ретраем), чем пустой экран
         const cached = _readBootCache();
-        if (cached && e instanceof Error) return cached; // лучше вчерашний depot, чем пустой экран
+        if (cached) return cached;
         throw e;
       }
       const cur = qc.getQueryData<AppState>(["state"]);
@@ -73,7 +75,7 @@ export function useDispatchState(
     retry: 1,
     refetchOnWindowFocus: "always",
     // показываем кэш из-за обрыва сети — сеть могла починиться: дотягиваемся
-    refetchInterval: (q) => (q.state.data && (q.state.data as AppState & { _boot?: number })._boot ? 15_000 : false),
+    refetchInterval: (q) => (q.state.data?._boot ? 15_000 : false),
   });
 
   // живые обновления: сервер пушит payload целиком. Рев сравниваем с
@@ -127,9 +129,7 @@ export function useDispatchState(
   }, [qc, live]);
 
   const st = stData ?? null;
-  const bootClock = st && (st as AppState & { _boot?: number })._boot
-    ? _fmtBootClock((st as AppState & { _boot?: number })._boot as number)
-    : null;
+  const bootClock = st?._boot ? _fmtBootClock(st._boot) : null;
   const setSt = useCallback((s: AppState) => {
     // две быстрые мутации (например, выдача двум курьерам подряд) летят
     // параллельно: ответ первой может прийти ПОСЛЕ ответа второй —
