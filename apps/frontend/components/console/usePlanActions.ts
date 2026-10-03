@@ -21,10 +21,12 @@ export function usePlanActions(deps: {
    * Живой сервер с реальной ошибкой — обычный тост и снятие флага. */
   const connRef = useRef<WsConnState>("connecting");
   useEffect(() => { connRef.current = conn; }, [conn]);
+  const solvingInFlight = useRef(0);
   const runSolving = async (fn: () => Promise<void>) => {
     // блокируем и по серверному флагу: расчёт запустил другой диспетчер депо
     if (solving || !st || st.solving) return;
     setSolving(true);
+    solvingInFlight.current += 1;
     let keepOverlay = false;
     try {
       await fn();
@@ -32,9 +34,19 @@ export function usePlanActions(deps: {
       if (connRef.current !== "online" || isNetworkError(e)) keepOverlay = true;
       else showToast((e as Error).message, true);
     } finally {
+      solvingInFlight.current -= 1;
       if (!keepOverlay) setSolving(false);
     }
   };
+
+  /* сервер — истина: свежий снимок с solving=false гасит локальную
+   * блокировку. Иначе после обрыва HTTP (релей, таймаут) при живом WS
+   * «keepOverlay» зависал навсегда — плашка «Идёт расчёт» до F5.
+   * Пока наш запрос в полёте — не трогаем (ранний снимок «ещё не true»). */
+  const stSolving = st?.solving;
+  useEffect(() => {
+    if (solvingInFlight.current === 0 && stSolving === false) setSolving(false);
+  }, [stSolving, st?.rev]);
 
   const resetSolving = useCallback(() => { setSolving(false); setPinning(null); }, []);
 
