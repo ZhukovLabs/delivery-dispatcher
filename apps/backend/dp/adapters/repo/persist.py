@@ -29,10 +29,17 @@ def _persist_meta():
 
 def _persist_couriers():
     with _db_lock, _db() as c:
-        c.execute("DELETE FROM couriers")
+        ids = [x["id"] for x in STATE["couriers"]]
+        ph = ",".join("?" * len(ids)) or "NULL"
+        # курьеры, пропавшие из STATE, не стираются, а помечаются deleted:
+        # история хранит имя, а километраж speed_day — id; жёсткое удаление
+        # обнуляло бы статистику уволившихся курьеров
+        c.execute(f"UPDATE couriers SET deleted = 1, tg_chat_id = '' "
+                  f"WHERE id NOT IN ({ph})", ids)
+        c.execute(f"DELETE FROM couriers WHERE id IN ({ph})", ids)
         c.executemany(
-            "INSERT INTO couriers(id, name, status, color, back_min, tg_chat_id, tg_login, point_id) "
-            "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO couriers(id, name, status, color, back_min, tg_chat_id, "
+            "tg_login, point_id, deleted) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0)",
             [(x["id"], x["name"], x["status"], x.get("color") or "",
               int(x.get("back_min", 15)), x.get("tg_chat_id") or "",
               x.get("tg_login") or "", x.get("point_id") or "")

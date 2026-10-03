@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS points(
     id TEXT PRIMARY KEY, name TEXT NOT NULL, address TEXT NOT NULL,
     lat REAL NOT NULL, lng REAL NOT NULL, pos INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS couriers(
-    id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, color TEXT);
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, color TEXT,
+    deleted INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS orders(
     id TEXT PRIMARY KEY, address TEXT, lat REAL NOT NULL, lng REAL NOT NULL,
     created_at TEXT NOT NULL, prio INTEGER DEFAULT 0);
@@ -55,6 +56,7 @@ _DB_MIGRATIONS = [
     ("history", "payment", "ALTER TABLE history ADD COLUMN payment TEXT NOT NULL DEFAULT ''"),
     ("history", "pay_amount", "ALTER TABLE history ADD COLUMN pay_amount REAL"),
     ("history", "out_at", "ALTER TABLE history ADD COLUMN out_at TEXT NOT NULL DEFAULT ''"),
+    ("couriers", "deleted", "ALTER TABLE couriers ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

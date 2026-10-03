@@ -37,9 +37,15 @@ def _courier_day_stats(point_id=None, day=None):
             km_rows = c.execute(
                 "SELECT courier_id, geo_m, geo_s FROM speed_day WHERE day = ?",
                 (day,)).fetchall()
+            # имя → id ищем по всей таблице курьеров, включая помеченных
+            # deleted: у уволившихся история и километраж должны сойтись
+            c_rows = c.execute("SELECT id, name FROM couriers").fetchall()
             km_by_cid = {r["courier_id"]: r["geo_m"] or 0 for r in km_rows}
             geo_h_by_cid = {r["courier_id"]: (r["geo_s"] or 0) / 3600.0
                             for r in km_rows}
+            ids_by_name = {}
+            for r in c_rows:
+                ids_by_name.setdefault(r["name"], []).append(r["id"])
     except sqlite3.Error:
         return {"day": day, "rows": []}
     st = {}
@@ -88,7 +94,11 @@ def _courier_day_stats(point_id=None, day=None):
         d["last_close"] = max(d["last_close"], now_s)
     out = []
     for name, d in st.items():
-        cid = next((x["id"] for x in STATE["couriers"] if x["name"] == name), "")
+        # км/часы гео суммируем по всем id с этим именем — при повторном
+        # найме тёзки старые и новые записи сходятся в одну строку
+        cids = ids_by_name.get(name, [])
+        km = sum(km_by_cid.get(cid, 0) for cid in cids)
+        geo_h = sum(geo_h_by_cid.get(cid, 0) for cid in cids)
         work_min = None
         if d["first_out"] and d["last_close"] > d["first_out"]:
             try:
@@ -98,8 +108,8 @@ def _courier_day_stats(point_id=None, day=None):
             except ValueError:
                 pass
         out.append({"courier": name,
-                    "km": round((km_by_cid.get(cid, 0)) / 1000, 1),
-                    "geo_h": round(geo_h_by_cid.get(cid, 0), 1),
+                    "km": round(km / 1000, 1),
+                    "geo_h": round(geo_h, 1),
                     "taken": d["taken"], "delivered": d["delivered"],
                     "cancelled": d["cancelled"],
                     "pay_cash": round(d["pay_cash"], 2),

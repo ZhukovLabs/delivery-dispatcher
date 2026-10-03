@@ -28,6 +28,7 @@ def fake_db(monkeypatch):
     @contextlib.contextmanager
     def _db():
         speed_rows = [{"courier_id": "c1", "geo_m": 18400.0, "geo_s": 18720.0}]
+        courier_rows = [{"id": "c1", "name": "Иван"}]
 
         class _Res:
             def __init__(self, items):
@@ -39,7 +40,8 @@ def fake_db(monkeypatch):
         class Cx:
             def execute(self, q, args=()):
                 rows_ = (rows if "FROM history" in q
-                         else speed_rows if "FROM speed_day" in q else [])
+                         else speed_rows if "FROM speed_day" in q
+                         else courier_rows if "FROM couriers" in q else [])
                 return _Res(rows_)
 
         yield Cx()

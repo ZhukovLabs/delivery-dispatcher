@@ -17,7 +17,7 @@ def load_state():
         meta = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM meta")}
         couriers = [dict(r) for r in c.execute(
             "SELECT id, name, status, color, back_min, tg_chat_id, tg_login, point_id "
-            "FROM couriers ORDER BY rowid")]
+            "FROM couriers WHERE deleted = 0 ORDER BY rowid")]
         orders = [dict(r) for r in c.execute(
             "SELECT id, address, lat, lng, created_at, prio, deadline, "
             "status, assigned, out_at, point_id, pin FROM orders ORDER BY rowid")]
